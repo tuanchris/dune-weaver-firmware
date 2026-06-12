@@ -40,6 +40,10 @@ kinematics:
     # dune-weaver speed setting.  0 = use the modal F value instead.
     default_feed_mm_per_min: 100.0
 
+# Move to theta 0 / rho 0 (ball at center) after homing completes.
+macros:
+  after_homing: G90 G1 X0 Y0 F100
+
 stepping:
   engine: RMT
   idle_ms: 255
