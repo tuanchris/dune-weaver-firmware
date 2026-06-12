@@ -110,15 +110,26 @@ To port (in order):
 
 1. **Strip** → `env:sandtable` (this commit). Re-measure budget.
 2. **LED module** (this commit): rainbow + static colors + brightness.
-3. **Playlist runner** module: `playlists.json` on SD; modes
-   single/loop/indefinite, shuffle, `pause_time` + `pause_from_start`
-   cadence (`pattern_manager.py:1656`), skip-to-next, auto-home every N
-   patterns, auto-play on boot (startup line). FluidNC `Job` supports
-   nesting, which fits clear-pattern-then-pattern.
-4. **Clear patterns**: per-table clear files on SD; `adaptive` = read next
-   pattern's first non-preamble rho, `<0.5 → clear_from_out` else
-   `clear_from_in` (`pattern_manager.py:1146-1160`); `random`; separate
-   `clear_pattern_speed`.
+3. **Playlist runner** — DONE 2026-06-12 (`FluidNC/src/Playlist.{h,cpp}`,
+   `playlist:` config section). Plain-text playlists on SD
+   (`/playlists/<name>.txt`, one SD-relative path per line), commands
+   `$Playlist/Run|Stop|Skip|List`, NVS settings `$Playlist/Mode`
+   (single|loop), `Shuffle`, `PauseTime`, `PauseFromStart`,
+   `ClearPattern` (none|adaptive|in|out|sideway|random), `AutoHome`
+   (every N patterns). Auto-play on boot = `$Playlist/Run=<name>` as a
+   startup line. Design: Channel+ConfigurableModule ticked by the
+   polling task; starts work by *returning* `$SD/Run=...`/`$H` command
+   lines so the protocol task executes them with stock semantics;
+   `Job::abort()` for stop/skip runs in the polling task, which already
+   owns abort for EOF/alarm unwinding. Mid-pattern, serial `$` lines are
+   queued by FluidNC until the job ends, so instant mid-pattern
+   stop = realtime reset (cancels the playlist via the alarm path);
+   instant Stop/Skip work during pauses and from non-protocol channels.
+4. **Clear patterns** — DONE, folded into the runner (adaptive =
+   first non-preamble rho of next pattern, `<0.5 → clear_from_out`,
+   matching `pattern_manager.py:1146-1160`; missing clear files are
+   skipped with a warning). Separate `clear_pattern_speed` is NOT yet
+   ported — needs the speed-control phase.
 5. **Speed control**: map UI speed onto feed override or a `$` setting
    feeding `ThetaRho::_default_feed` so mid-pattern changes work.
 6. **NTP + Still Sands**: SNTP client (nothing in tree yet), then the

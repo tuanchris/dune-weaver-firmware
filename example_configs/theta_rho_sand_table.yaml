@@ -104,3 +104,19 @@ leds:
   num_leds: 60
   color_order: GRB
   frame_ms: 33
+
+# Playlist runner: sequences .thr patterns from SD card playlists
+# (text files in the folder below, one SD-relative pattern path per
+# line, # comments allowed).
+# Control:
+#   $Playlist/Run=<name>  $Playlist/Stop  $Playlist/Skip  $Playlist/List
+# Persistent settings:
+#   $Playlist/Mode=single|loop      $Playlist/Shuffle=ON|OFF
+#   $Playlist/PauseTime=<seconds>   $Playlist/PauseFromStart=ON|OFF
+#   $Playlist/ClearPattern=none|adaptive|in|out|sideway|random
+#   $Playlist/AutoHome=<n patterns, 0=off>
+playlist:
+  folder: /playlists
+  clear_from_in: /patterns/clear_from_in.thr
+  clear_from_out: /patterns/clear_from_out.thr
+  clear_sideway: /patterns/clear_sideway.thr
