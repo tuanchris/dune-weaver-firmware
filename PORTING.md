@@ -195,6 +195,27 @@ units that join that whitelist:
 New firmware logic should follow the same split: pure logic in a
 std-only file (testable), I/O and machine state in the module.
 
+### Hardware-in-the-loop tests
+
+```sh
+python3 -m pytest hil -v               # board attached over USB serial
+HIL_MOTION=1 python3 -m pytest hil -v  # also run tests that move the arm
+HIL_PORT=/dev/ttyUSB0 ...              # non-default port
+```
+
+`hil/` drives the real board over serial (pytest + pyserial, no other
+deps): restart via `$Bye` asserting a clean boot log, `$I`/status
+shape, settings round-trips, and crash regressions (file errors must
+produce `error:NN`, not a reboot — guards d44087f0). The whole session
+skips cleanly when no board is attached, so it is safe in any
+environment. Tests for the `leds:`/`playlist:` modules activate
+automatically once those sections are in the board's config. Close any
+serial monitor first — the port is exclusive. Motion tests are opt-in
+via `HIL_MOTION=1` and expect a homed, clear table.
+
+Suggested cadence: run the native tests on every change, and the HIL
+suite after every flash.
+
 Measured 2026-06-12 (both envs include the new Leds module):
 
 | env | Flash | RAM |

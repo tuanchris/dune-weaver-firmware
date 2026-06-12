@@ -36,3 +36,6 @@ data-wmb/
 *#
 /gcode_tests/venv
 release/
+# HIL test suite artifacts
+__pycache__/
+.pytest_cache/
