@@ -286,7 +286,13 @@ void protocol_main_loop() {
             }
 
             Channel* out_channel = Job::leader ? Job::leader : activeChannel;
-            Error    status_code = execute_line(activeLine, *out_channel, AuthenticationLevel::LEVEL_GUEST);
+            // Let the kinematic system translate raw lines from the source
+            // channel, such as sand-table .thr "theta rho" pairs, into
+            // G-code before parsing.  activeChannel, not out_channel, is
+            // the channel the line came from; for job lines it is the file.
+            Error status_code = config->_kinematics->translate_line(activeLine, Channel::maxLine, *activeChannel) ?
+                                    Error::Ok :
+                                    execute_line(activeLine, *out_channel, AuthenticationLevel::LEVEL_GUEST);
 
             // Tell the channel that the line has been processed.
             // If the line was aborted, the channel could be invalid

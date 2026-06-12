@@ -1170,11 +1170,6 @@ Error execute_line(char* line, Channel& channel, AuthenticationLevel auth_level)
     if (line[0] == 0) {
         return Error::Ok;
     }
-    // Give the kinematic system a chance to translate raw lines, such as
-    // sand-table .thr "theta rho" pairs, into G-code before parsing.
-    if (config->_kinematics->translate_line(line, Channel::maxLine, channel)) {
-        return Error::Ok;  // The line was fully consumed
-    }
     // Skip leading whitespace
     while (isspace(*line)) {
         ++line;
