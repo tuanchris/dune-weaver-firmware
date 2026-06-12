@@ -59,6 +59,11 @@ namespace Kinematics {
         return _system->transform_cartesian_to_motors(motors, cartesian);
     }
 
+    bool Kinematics::translate_line(char* line, size_t maxlen, Channel& channel) {
+        Assert(_system != nullptr, "No kinematics system.");
+        return _system->translate_line(line, maxlen, channel);
+    }
+
     void Kinematics::group(Configuration::HandlerBase& handler) {
         ::Kinematics::KinematicsFactory::factory(handler, _system);
     }

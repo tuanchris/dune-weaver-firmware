@@ -21,6 +21,8 @@ You will be able to add your kinematics using the config file.
 
 */
 
+class Channel;
+
 namespace Kinematics {
     class KinematicSystem;
 
@@ -49,6 +51,8 @@ namespace Kinematics {
         bool kinematics_homing(AxisMask axisMask);
         void releaseMotors(AxisMask axisMask, MotorMask motors);
         bool limitReached(AxisMask& axisMask, MotorMask& motors, MotorMask limited);
+
+        bool translate_line(char* line, size_t maxlen, Channel& channel);
 
     private:
         ::Kinematics::KinematicSystem* _system = nullptr;
@@ -85,6 +89,12 @@ namespace Kinematics {
         virtual void releaseMotors(AxisMask axisMask, MotorMask motors) {}
         virtual bool limitReached(AxisMask& axisMask, MotorMask& motors, MotorMask limited) { return false; }
         virtual bool kinematics_homing(AxisMask& axisMask) { return false; }
+
+        // Optional hook to translate a raw input line, such as a sand-table
+        // .thr "theta rho" pair, into G-code before parsing.  The line may be
+        // rewritten in place, up to maxlen bytes including the terminator.
+        // Return true if the line was fully consumed.
+        virtual bool translate_line(char* line, size_t maxlen, Channel& channel) { return false; }
 
         // Configuration interface.
         void afterParse() override {}

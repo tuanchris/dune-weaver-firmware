@@ -1,0 +1,90 @@
+# Example config for a polar sand table (e.g. Dune Weaver) using the
+# ThetaRho kinematic system.
+#
+# With this kinematic the G-code coordinate space is theta/rho:
+#   X = theta in radians (grows with every revolution)
+#   Y = rho, 0 (center) .. 1 (perimeter)
+#
+# Theta-rho pattern files can be run directly, with no host-side
+# conversion, e.g.:
+#   $LocalFS/Run=pattern.thr
+#   $SD/Run=/patterns/pattern.thr
+# Inside a .thr file, lines starting with '#' are comments and every
+# other line is a "<theta> <rho>" pair.  Each pair becomes a G1 move;
+# the first move of a job uses default_feed_mm_per_min unless it is 0,
+# in which case the modal F value is used (set one with e.g. "F200").
+#
+# Pin assignments below are placeholders - use the ones from your
+# board's existing config.
+
+name: ThetaRho Sand Table
+board: None
+
+kinematics:
+  ThetaRho:
+    # X-motor mm of travel per full theta revolution.
+    # dune-weaver default: 100 / x_scaling_factor(2) = 50
+    theta_mm_per_rev: 50.0
+    # Y-motor mm of travel for rho 0 -> 1.
+    # dune-weaver default: 100 / y_scaling_factor(5) = 20
+    # dune-weaver mini:    100 / 3.7 = 27.027
+    rho_mm: 20.0
+    # Mechanical theta:rho coupling ratio; the rho motor must turn
+    # 1/gear_ratio as fast as the theta motor to hold rho constant.
+    # 0 disables coupling compensation.
+    gear_ratio: 6.25
+    # Set true if rho drifts outward instead of inward while theta
+    # spins (dune-weaver mini and 546-steps/mm tables use this).
+    invert_coupling: false
+    # Feed for .thr jobs in motor-space mm/min, same meaning as the
+    # dune-weaver speed setting.  0 = use the modal F value instead.
+    default_feed_mm_per_min: 100.0
+
+stepping:
+  engine: RMT
+  idle_ms: 255
+  pulse_us: 4
+  dir_delay_us: 1
+  disable_delay_us: 0
+
+axes:
+  shared_stepper_disable_pin: NO_PIN
+  x:  # theta
+    steps_per_mm: 320.000
+    max_rate_mm_per_min: 5000.000
+    acceleration_mm_per_sec2: 200.000
+    max_travel_mm: 100000.000  # theta is unbounded; keep soft limits off
+    soft_limits: false
+    homing:
+      cycle: 2
+      # mpos is in cartesian (theta/rho) units: radians for X.
+      # e.g. a sensor 135 degrees from zero: 2.356
+      mpos_mm: 0.000
+      positive_direction: false
+    motor0:
+      limit_neg_pin: NO_PIN
+      limit_pos_pin: NO_PIN
+      limit_all_pin: NO_PIN
+      pulloff_mm: 1.000
+      stepstick:
+        step_pin: gpio.1
+        direction_pin: gpio.2
+  y:  # rho
+    steps_per_mm: 287.000
+    max_rate_mm_per_min: 5000.000
+    acceleration_mm_per_sec2: 200.000
+    max_travel_mm: 25.000
+    soft_limits: false
+    homing:
+      cycle: 1
+      # mpos is in cartesian (theta/rho) units: 0.0 = center, 1.0 = perimeter.
+      mpos_mm: 0.000
+      positive_direction: false
+    motor0:
+      limit_neg_pin: NO_PIN
+      limit_pos_pin: NO_PIN
+      limit_all_pin: NO_PIN
+      pulloff_mm: 1.000
+      stepstick:
+        step_pin: gpio.3
+        direction_pin: gpio.4
