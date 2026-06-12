@@ -702,7 +702,12 @@ static Error dump_config(const char* value, AuthenticationLevel auth_level, Chan
         try {
             //            ss = new FileStream(std::string(value), "", "w");
             ss = new FileStream(value, "w", "");
-        } catch (Error err) { return err; }
+        } catch (Error err) {
+            return err;
+        } catch (stdfs::filesystem_error const& ex) {
+            log_error_to(out, ex.what());
+            return Error::FsFailedMount;
+        }
     } else {
         ss = &out;
     }
@@ -1036,7 +1041,18 @@ Error do_command_or_setting(const char* key, const char* value, AuthenticationLe
             if (cp->synchronous()) {
                 protocol_buffer_synchronize();
             }
-            return cp->action(value, auth_level, out);
+            // A command that throws (e.g. filesystem_error from a failed
+            // SD mount) must report an error, not unwind through the
+            // protocol loop into std::terminate and reboot.
+            try {
+                return cp->action(value, auth_level, out);
+            } catch (stdfs::filesystem_error const& ex) {
+                log_error_to(out, ex.what());
+                return Error::FsFailedMount;
+            } catch (std::exception const& ex) {
+                log_error_to(out, "Command failed: " << ex.what());
+                return Error::InvalidStatement;
+            }
         }
     }
 

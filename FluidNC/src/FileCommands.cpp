@@ -50,7 +50,14 @@ static Error openFile(const char* fs, const char* parameter, Channel& out, Input
 
     try {
         theFile = new InputFile(fs, path.c_str());
-    } catch (Error err) { return err; }
+    } catch (Error err) {
+        return err;
+    } catch (std::filesystem::filesystem_error const& ex) {
+        // e.g. SD card failed to mount; without this the exception
+        // unwinds into std::terminate and reboots the controller
+        log_error_to(out, ex.what());
+        return Error::FsFailedMount;
+    }
     return Error::Ok;
 }
 
