@@ -107,13 +107,6 @@ private:
         Pausing,     // waiting out PauseTime between patterns
     };
 
-    static constexpr int CLEAR_NONE     = 0;
-    static constexpr int CLEAR_ADAPTIVE = 1;
-    static constexpr int CLEAR_IN       = 2;
-    static constexpr int CLEAR_OUT      = 3;
-    static constexpr int CLEAR_SIDEWAY  = 4;
-    static constexpr int CLEAR_RANDOM   = 5;
-
     static constexpr int MODE_SINGLE = 0;
     static constexpr int MODE_LOOP   = 1;
 

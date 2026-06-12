@@ -2,6 +2,7 @@
 // Use of this source code is governed by a GPLv3 license that can be found in the LICENSE file.
 
 #include "Playlist.h"
+#include "PlaylistParse.h"
 
 #include "Machine/MachineConfig.h"
 #include "Settings.h"
@@ -40,8 +41,11 @@ namespace {
         { "OFF", 0 },
         { "ON", 1 },
     };
+    // Values match PlaylistParse::CLEAR_*
     enum_opt_t clearOptions = {
-        { "none", 0 }, { "adaptive", 1 }, { "in", 2 }, { "out", 3 }, { "sideway", 4 }, { "random", 5 },
+        { "none", PlaylistParse::CLEAR_NONE },       { "adaptive", PlaylistParse::CLEAR_ADAPTIVE },
+        { "in", PlaylistParse::CLEAR_IN },           { "out", PlaylistParse::CLEAR_OUT },
+        { "sideway", PlaylistParse::CLEAR_SIDEWAY }, { "random", PlaylistParse::CLEAR_RANDOM },
     };
 
     Error cmd_run(const char* value, AuthenticationLevel auth_level, Channel& out) {
@@ -78,7 +82,7 @@ void Playlist::init() {
         _pause_time       = new IntSetting("Seconds between patterns", EXTENDED, WG, NULL, "Playlist/PauseTime", 0, 0, 86400);
         _pause_from_start = new EnumSetting(
             "Measure pause from pattern start", EXTENDED, WG, NULL, "Playlist/PauseFromStart", 0, &onOffOptions);
-        _clear_mode = new EnumSetting("Clear pattern mode", EXTENDED, WG, NULL, "Playlist/ClearPattern", CLEAR_NONE, &clearOptions);
+        _clear_mode = new EnumSetting("Clear pattern mode", EXTENDED, WG, NULL, "Playlist/ClearPattern", PlaylistParse::CLEAR_NONE, &clearOptions);
         _auto_home  = new IntSetting("Home every n patterns", EXTENDED, WG, NULL, "Playlist/AutoHome", 0, 0, 1000);
 
         // Handlers may run outside the protocol task and must not block
@@ -212,28 +216,7 @@ bool Playlist::loadPlaylist(const std::string& name) {
         return false;
     }
 
-    _items.clear();
-    size_t pos = 0;
-    while (pos < content.size() && _items.size() < MAX_ITEMS) {
-        size_t      eol  = content.find('\n', pos);
-        std::string line = content.substr(pos, eol == std::string::npos ? std::string::npos : eol - pos);
-        pos              = eol == std::string::npos ? content.size() : eol + 1;
-
-        size_t comment = line.find('#');
-        if (comment != std::string::npos) {
-            line.erase(comment);
-        }
-        size_t b = line.find_first_not_of(" \t\r");
-        if (b == std::string::npos) {
-            continue;
-        }
-        size_t e = line.find_last_not_of(" \t\r");
-        line     = line.substr(b, e - b + 1);
-        if (line[0] != '/') {
-            line = "/" + line;
-        }
-        _items.push_back(line);
-    }
+    _items = PlaylistParse::parse_playlist(content, MAX_ITEMS);
 
     if (_items.empty()) {
         log_error("Playlist " << path << " has no patterns");
@@ -257,75 +240,36 @@ bool Playlist::loadPlaylist(const std::string& name) {
     return true;
 }
 
-// First rho of the pattern, skipping the up-to-two "0 0" preamble
-// pairs that many community patterns start with (mirrors both the
-// ThetaRho kinematics preamble handling and dune-weaver's logic).
+// Read the head of the pattern file and extract its first rho; -1 on failure
 float Playlist::firstRho(const std::string& sdpath) {
-    float coords[3][2];
-    int   found = 0;
+    std::string content;
     try {
-        FileStream  f(sdpath.c_str(), "r", "sd");
-        std::string line;
-        int         c;
-        size_t      seen = 0;
-        while (found < 3 && (c = f.read()) >= 0 && ++seen < 4096) {
-            if (c != '\n') {
-                line += static_cast<char>(c);
-                continue;
-            }
-            if (!line.empty() && line[0] != '#') {
-                float t, r;
-                if (sscanf(line.c_str(), "%f %f", &t, &r) == 2) {
-                    coords[found][0] = t;
-                    coords[found][1] = r;
-                    found++;
-                }
-            }
-            line.clear();
+        FileStream f(sdpath.c_str(), "r", "sd");
+        int        c;
+        while ((c = f.read()) >= 0 && content.size() < 4096) {
+            content += static_cast<char>(c);
         }
     } catch (std::filesystem::filesystem_error const&) { return -1.0f; } catch (Error) {
         return -1.0f;
     }
-    if (found == 0) {
-        return -1.0f;
-    }
-    auto isZero = [](float* c) { return c[0] > -1e-9f && c[0] < 1e-9f && c[1] > -1e-9f && c[1] < 1e-9f; };
-    if (found >= 3 && isZero(coords[0]) && isZero(coords[1])) {
-        return coords[2][1];
-    }
-    return coords[0][1];
+    return PlaylistParse::first_rho(content);
 }
 
 std::string Playlist::clearFileFor(const std::string& patternPath) {
+    int   mode = _clear_mode->get();
+    float rho  = mode == PlaylistParse::CLEAR_ADAPTIVE ? firstRho(patternPath) : -1.0f;
+
     std::string chosen;
-    switch (_clear_mode->get()) {
-        case CLEAR_IN:
+    switch (PlaylistParse::choose_clear(mode, rho, esp_random())) {
+        case PlaylistParse::Clear::FromIn:
             chosen = _clear_in;
             break;
-        case CLEAR_OUT:
+        case PlaylistParse::Clear::FromOut:
             chosen = _clear_out;
             break;
-        case CLEAR_SIDEWAY:
+        case PlaylistParse::Clear::Sideway:
             chosen = _clear_side;
             break;
-        case CLEAR_RANDOM: {
-            const std::string* options[3] = { &_clear_in, &_clear_out, &_clear_side };
-            chosen                        = *options[esp_random() % 3];
-            break;
-        }
-        case CLEAR_ADAPTIVE: {
-            float rho = firstRho(patternPath);
-            if (rho < 0.0f) {
-                // Unknown start; match dune-weaver's fallback of picking randomly
-                const std::string* options[3] = { &_clear_in, &_clear_out, &_clear_side };
-                chosen                        = *options[esp_random() % 3];
-            } else {
-                // Pattern starting near center is preceded by a clear that
-                // ends at the center, and vice versa
-                chosen = rho < 0.5f ? _clear_out : _clear_in;
-            }
-            break;
-        }
         default:
             return "";
     }

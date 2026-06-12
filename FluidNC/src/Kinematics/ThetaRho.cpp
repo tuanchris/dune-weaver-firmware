@@ -18,7 +18,7 @@
 
 namespace Kinematics {
     namespace {
-        const float TWO_PI = 2.0f * float(M_PI);
+        constexpr float TWO_PI = 2.0f * float(M_PI);
     }
 
     void ThetaRho::group(Configuration::HandlerBase& handler) {
@@ -83,14 +83,6 @@ namespace Kinematics {
         return mc_move_motors(motors, pl_data);
     }
 
-    float ThetaRho::positive_mod_2pi(float angle) {
-        float m = fmodf(angle, TWO_PI);
-        if (m < 0.0f) {
-            m += TWO_PI;
-        }
-        return m;
-    }
-
     // Relabel the motor counters so the current theta reads in [0, 2pi),
     // without moving the machine and without changing rho.  Keeps theta from
     // accumulating revolutions across patterns.
@@ -115,12 +107,9 @@ namespace Kinematics {
     }
 
     void ThetaRho::start_job(const std::string& name, const Channel* channel) {
-        _job_name      = name;
-        _job_channel   = channel;
-        _in_preamble   = true;
-        _offset_locked = false;
-        _theta_offset  = 0.0f;
-        _first_line    = true;
+        _job_name    = name;
+        _job_channel = channel;
+        _translator.start(_default_feed);
         normalize_theta();
         log_info("ThetaRho: running theta-rho job " << name);
     }
@@ -153,72 +142,23 @@ namespace Kinematics {
             start_job(source, &channel);
         }
 
-        char* p = line;
-        while (*p == ' ' || *p == '\t') {
-            ++p;
-        }
-        // Blank lines and "# comment" lines
-        if (*p == '\0' || *p == '#') {
-            return true;
-        }
+        bool was_locked = _translator.offset_locked();
 
-        char* end   = p;
-        float theta = strtof(p, &end);
-        if (end == p) {
-            log_warn("ThetaRho: skipping invalid .thr line: " << line);
-            return true;
+        switch (_translator.translate(line, line, maxlen)) {
+            case ThrLine::Skip:
+                return true;
+            case ThrLine::Invalid:
+                log_warn("ThetaRho: skipping invalid .thr line: " << line);
+                return true;
+            case ThrLine::Oversize:
+                log_warn("ThetaRho: skipping oversized .thr line: " << line);
+                return true;
+            case ThrLine::Move:
+                break;
         }
-        p         = end;
-        float rho = strtof(p, &end);
-        if (end == p) {
-            log_warn("ThetaRho: skipping invalid .thr line: " << line);
-            return true;
+        if (!was_locked && _translator.offset_locked() && _translator.theta_offset() != 0.0f) {
+            log_info("ThetaRho: pattern theta normalized by " << _translator.theta_offset() << " rad");
         }
-
-        bool rho_only = false;
-        if (_in_preamble) {
-            if (theta == 0.0f && rho == 0.0f) {
-                // Leading "0 0" pairs mean "start from the center": move rho
-                // to 0 without spinning theta back to absolute zero.
-                rho_only = true;
-            } else {
-                _in_preamble = false;
-            }
-        }
-
-        if (!rho_only && !_offset_locked) {
-            // Remove the pattern's leading whole revolutions so its first
-            // real coordinate lands in [0, 2pi).
-            _theta_offset  = theta - positive_mod_2pi(theta);
-            _offset_locked = true;
-            if (_theta_offset != 0.0f) {
-                log_info("ThetaRho: pattern theta normalized by " << _theta_offset << " rad");
-            }
-        }
-
-        if (rho < 0.0f) {
-            rho = 0.0f;
-        } else if (rho > 1.0f) {
-            rho = 1.0f;
-        }
-
-        char buf[64];
-        int  n;
-        if (rho_only) {
-            n = snprintf(buf, sizeof(buf), "G90G1Y%.5f", rho);
-        } else {
-            n = snprintf(buf, sizeof(buf), "G90G1X%.5fY%.5f", theta - _theta_offset, rho);
-        }
-        if (n > 0 && size_t(n) < sizeof(buf) && _first_line && _default_feed > 0.0f) {
-            n += snprintf(buf + n, sizeof(buf) - n, "F%.1f", _default_feed);
-        }
-        if (n <= 0 || size_t(n) >= sizeof(buf) || size_t(n) >= maxlen) {
-            log_warn("ThetaRho: skipping oversized .thr line: " << line);
-            return true;
-        }
-
-        strcpy(line, buf);
-        _first_line = false;
         return false;
     }
 

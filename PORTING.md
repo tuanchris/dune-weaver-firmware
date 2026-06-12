@@ -173,6 +173,28 @@ pio run -e wifi               # stock-equivalent baseline
 
 Board flashes reliably only at 115200 (`upload_speed` already set).
 
+### Tests
+
+```sh
+pio test -e tests             # native googletest with ASan/UBSan, ~5s
+```
+
+Upstream's `[env:tests]` compiles a whitelist of dependency-free
+sources (see `tests_common` in platformio.ini) against tests in
+`FluidNC/tests/`. Sand-table logic is kept testable by extracting pure
+units that join that whitelist:
+
+- `src/Kinematics/ThrTranslator.{h,cpp}` — the `.thr` line translation
+  state machine (preamble pairs, whole-revolution offset, feed
+  injection). `ThetaRho` owns one and layers job/channel tracking on
+  top. Covered by `tests/ThrTranslatorTest.cpp`.
+- `src/PlaylistParse.{h,cpp}` — playlist file parsing, first-rho
+  extraction, clear-pattern policy. `Playlist` keeps the I/O and state
+  machine. Covered by `tests/PlaylistParseTest.cpp`.
+
+New firmware logic should follow the same split: pure logic in a
+std-only file (testable), I/O and machine state in the module.
+
 Measured 2026-06-12 (both envs include the new Leds module):
 
 | env | Flash | RAM |

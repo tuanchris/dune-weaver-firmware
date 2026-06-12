@@ -33,6 +33,7 @@
 */
 
 #include "Cartesian.h"
+#include "ThrTranslator.h"
 
 #include <string>
 
@@ -60,10 +61,9 @@ namespace Kinematics {
         ~ThetaRho() {}
 
     private:
-        void         start_job(const std::string& name, const Channel* channel);
-        void         end_job();
-        void         normalize_theta();
-        static float positive_mod_2pi(float angle);
+        void start_job(const std::string& name, const Channel* channel);
+        void end_job();
+        void normalize_theta();
 
         // Configuration
         float _theta_mm_per_rev = 50.0f;   // X motor mm per full theta revolution
@@ -78,10 +78,7 @@ namespace Kinematics {
 
         // Per-job translation state
         std::string    _job_name;                // channel name of the active .thr job
-        const Channel* _job_channel   = nullptr; // identity of the job's channel, never dereferenced
-        bool           _in_preamble   = false;   // still consuming leading "0 0" pairs
-        bool           _offset_locked = false;
-        float          _theta_offset  = 0.0f;    // whole revolutions removed from pattern thetas
-        bool           _first_line    = false;   // next translated move is the job's first
+        const Channel* _job_channel = nullptr;   // identity of the job's channel, never dereferenced
+        ThrTranslator  _translator;              // line translation (preamble, offset, feed injection)
     };
 }
