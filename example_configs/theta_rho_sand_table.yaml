@@ -92,3 +92,15 @@ axes:
       stepstick:
         step_pin: gpio.3
         direction_pin: gpio.4
+
+# WS2812/NeoPixel strip driven by the firmware (RMT). Must be a real
+# GPIO, not an I2SO expander pin. On MKS-DLC32 the laser TTL output
+# (gpio.32) is a convenient connector.
+# Runtime control, persisted across reboots:
+#   $LED/Effect=off|static|rainbow   $LED/Color=RRGGBB
+#   $LED/Brightness=0..255           $LED/Speed=1..255
+leds:
+  data_pin: gpio.32
+  num_leds: 60
+  color_order: GRB
+  frame_ms: 33
