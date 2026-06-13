@@ -136,6 +136,8 @@ namespace WebUI {
         _webserver->on("/cyclestart_reload", HTTP_ANY, handleCyclestartReload);
         _webserver->on("/restart_reload", HTTP_ANY, handleRestartReload);
         _webserver->on("/did_restart", HTTP_ANY, handleDidRestart);
+        _webserver->on("/sand_stop", HTTP_ANY, handleSandStop);
+        _webserver->on("/sand_feed", HTTP_ANY, handleSandFeed);
 
         //LocalFS
         _webserver->on("/files", HTTP_ANY, handleFileList, LocalFSFileupload);
@@ -718,6 +720,26 @@ namespace WebUI {
         // Go to the main page
         _webserver->sendHeader(LOCATION_HEADER, "/did_restart");
         _webserver->send(302);
+    }
+
+    // Sand-table UI: clean stop (keeps position, no re-home) - see Cmd::StopJob.
+    void Web_Server::handleSandStop() {
+        protocol_send_event(&stopJobEvent);
+        _webserver->send(200, "text/plain", "ok");
+    }
+
+    // Sand-table UI: live feed-rate override (works mid-pattern, no flash write).
+    //   /sand_feed?d=up | down | reset
+    void Web_Server::handleSandFeed() {
+        std::string d = _webserver->hasArg("d") ? _webserver->arg("d").c_str() : "";
+        if (d == "up") {
+            protocol_send_event(&feedOverrideEvent, FeedOverride::CoarseIncrement);
+        } else if (d == "down") {
+            protocol_send_event(&feedOverrideEvent, -FeedOverride::CoarseIncrement);
+        } else if (d == "reset") {
+            protocol_send_event(&feedOverrideEvent, FeedOverride::Default);
+        }
+        _webserver->send(200, "text/plain", "ok");
     }
 
     //push error code and message to websocket.  Used by upload code
