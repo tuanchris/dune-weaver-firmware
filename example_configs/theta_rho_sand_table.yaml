@@ -120,3 +120,14 @@ playlist:
   clear_from_in: /patterns/clear_from_in.thr
   clear_from_out: /patterns/clear_from_out.thr
   clear_sideway: /patterns/clear_sideway.thr
+
+# Wall-clock time for Still Sands quiet hours. With STA WiFi the clock
+# syncs via NTP; in AP mode set it manually with $Time/Set=<epoch>.
+# tz is a POSIX TZ string (ICT-7 = Vietnam, CET-1CEST,M3.5.0 = EU...).
+# Quiet hours pause the playlist between patterns:
+#   $Sands/Enabled=ON
+#   $Sands/Slots=21:00-08:00@daily   (also weekdays/weekends/mon+tue..)
+time:
+  ntp: true
+  server: pool.ntp.org
+  tz: UTC0

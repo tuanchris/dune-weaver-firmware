@@ -3,6 +3,7 @@
 
 #include "Playlist.h"
 #include "PlaylistParse.h"
+#include "QuietHours.h"
 
 #include "Machine/MachineConfig.h"
 #include "Settings.h"
@@ -18,6 +19,7 @@
 #include <esp_system.h>  // esp_random
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 
 namespace {
     Playlist* playlistInstance = nullptr;
@@ -84,6 +86,9 @@ void Playlist::init() {
             "Measure pause from pattern start", EXTENDED, WG, NULL, "Playlist/PauseFromStart", 0, &onOffOptions);
         _clear_mode = new EnumSetting("Clear pattern mode", EXTENDED, WG, NULL, "Playlist/ClearPattern", PlaylistParse::CLEAR_NONE, &clearOptions);
         _auto_home  = new IntSetting("Home every n patterns", EXTENDED, WG, NULL, "Playlist/AutoHome", 0, 0, 1000);
+        _sands_enabled = new EnumSetting("Still Sands quiet hours", EXTENDED, WG, NULL, "Sands/Enabled", 0, &onOffOptions);
+        _sands_slots   = new StringSetting(
+            "Quiet hour slots HH:MM-HH:MM@days,...", EXTENDED, WG, NULL, "Sands/Slots", "21:00-08:00@daily", 0, 100);
 
         // Handlers may run outside the protocol task and must not block
         // on motion, so synchronous=false and flag-setting only.
@@ -168,6 +173,47 @@ Error Playlist::showList(Channel& out) {
 }
 
 // --- Helpers: polling task only ---
+
+// True while Still Sands quiet hours apply.  Rechecked at most every
+// couple of seconds; requires a set clock (time: config section).
+bool Playlist::quietNow(uint32_t now) {
+    if (!_sands_enabled || !_sands_enabled->get()) {
+        return false;
+    }
+    if (_last_quiet_check != 0 && now - _last_quiet_check < 2000) {
+        return _quiet_cached;
+    }
+    _last_quiet_check = now;
+
+    time_t t = time(nullptr);
+    if (t < 1672531200) {  // clock still at the 1970 power-up default
+        if (!_warned_no_time) {
+            _warned_no_time = true;
+            log_warn("playlist: $Sands/Enabled is ON but the clock is not set;"
+                     " add a time: config section (NTP) or use $Time/Set");
+        }
+        _quiet_cached = false;
+        return false;
+    }
+    _warned_no_time = false;
+
+    std::string err;
+    auto        slots = QuietHours::parse(_sands_slots->get(), &err);
+    if (slots.empty()) {
+        if (!err.empty() && !_warned_bad_slots) {
+            _warned_bad_slots = true;
+            log_warn("playlist: bad $Sands/Slots: " << err);
+        }
+        _quiet_cached = false;
+        return false;
+    }
+    _warned_bad_slots = false;
+
+    struct tm lt;
+    localtime_r(&t, &lt);
+    _quiet_cached = QuietHours::match(slots, lt.tm_wday, lt.tm_hour * 60 + lt.tm_min);
+    return _quiet_cached;
+}
 
 void Playlist::finish(const char* why) {
     log_info("playlist: " << _playlist_name << " " << why);
@@ -329,6 +375,24 @@ Error Playlist::pollLine(char* line) {
                 finish("canceled by alarm");
                 break;
             }
+            if (quietNow(now)) {
+                if (!_in_quiet) {
+                    _in_quiet = true;
+                    log_info("playlist: Still Sands quiet hours, pausing ($Playlist/Skip overrides for one pattern)");
+                }
+                if (_req_skip) {
+                    _req_skip       = false;
+                    _quiet_override = true;
+                    log_info("playlist: quiet hours overridden for one pattern");
+                }
+                if (!_quiet_override) {
+                    break;
+                }
+            } else if (_in_quiet) {
+                _in_quiet       = false;
+                _quiet_override = false;
+                log_info("playlist: Still Sands ended, resuming");
+            }
             if (_req_skip) {
                 // Skip while deciding means skip this pattern entirely
                 _req_skip = false;
@@ -438,6 +502,7 @@ Error Playlist::pollLine(char* line) {
                 }
             pattern_done:
                 _since_home++;
+                _quiet_override = false;  // a Skip override is good for one pattern
                 uint32_t pause_ms = static_cast<uint32_t>(_pause_time->get()) * 1000;
                 if (_pause_from_start->get()) {
                     uint32_t elapsed = now - _pattern_start_ms;

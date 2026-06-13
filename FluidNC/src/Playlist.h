@@ -25,6 +25,12 @@
     $Playlist/Skip         abort current pattern / end pause, go to next
     $Playlist/List         show folder contents and current status
 
+  Still Sands quiet hours pause the playlist between patterns while
+  the local time (see the time: config section) is inside a slot:
+    $Sands/Enabled=ON|OFF
+    $Sands/Slots=21:00-08:00@daily   (see QuietHours.h for the syntax)
+  $Playlist/Skip during quiet hours overrides them for one pattern.
+
   Settings (NVS-persisted):
     $Playlist/Mode=single|loop
     $Playlist/Shuffle=ON|OFF       reshuffled on every loop pass
@@ -59,6 +65,7 @@
 
 class IntSetting;
 class EnumSetting;
+class StringSetting;
 
 class Playlist : public Channel, public ConfigurableModule {
 public:
@@ -111,6 +118,7 @@ private:
     static constexpr int MODE_LOOP   = 1;
 
     bool  loadPlaylist(const std::string& name);
+    bool  quietNow(uint32_t now);
     void  shuffleOrder();
     float firstRho(const std::string& sdpath);
     // chooses the clear file for the upcoming pattern; empty = none
@@ -132,6 +140,8 @@ private:
     EnumSetting* _pause_from_start = nullptr;
     EnumSetting* _clear_mode       = nullptr;
     IntSetting*  _auto_home        = nullptr;
+    EnumSetting*   _sands_enabled  = nullptr;
+    StringSetting* _sands_slots    = nullptr;
 
     // Cross-task requests.  Handlers may run in another task, so the
     // name goes through a fixed buffer (a std::string assignment racing
@@ -155,4 +165,12 @@ private:
     uint32_t                 _pause_until_ms   = 0;
     int                      _since_home       = 0;
     bool                     _registered       = false;
+
+    // Still Sands (polling task only)
+    uint32_t _last_quiet_check = 0;
+    bool     _quiet_cached     = false;
+    bool     _in_quiet         = false;  // currently inside quiet hours
+    bool     _quiet_override   = false;  // Skip pressed: run one pattern anyway
+    bool     _warned_no_time   = false;
+    bool     _warned_bad_slots = false;
 };

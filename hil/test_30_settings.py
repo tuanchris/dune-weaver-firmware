@@ -75,3 +75,29 @@ def test_led_state_hook_enums(board, leds_configured):
             assert _setting_value(board, "$LED/RunEffect") == value
     finally:
         board.cmd(f"$LED/RunEffect={orig}")
+
+
+def test_time_show_and_set(board):
+    # $Time/* exists when the time: config section is present
+    import pytest
+
+    text, status = board.cmd("$Time/Show")
+    if status != "ok":
+        pytest.skip("board config has no time: section")
+    # Setting a known epoch reflects in $Time/Show output (UTC default)
+    _, status = board.cmd("$Time/Set=1750000000")
+    assert status == "ok"
+    text, status = board.cmd("$Time/Show")
+    assert status == "ok"
+    assert "2025-06-" in text, f"unexpected time: {text}"
+    assert "NOT SET" not in text
+
+
+def test_sands_settings_roundtrip(board, playlist_configured):
+    orig = _setting_value(board, "$Sands/Slots")
+    try:
+        _, status = board.cmd("$Sands/Slots=21:00-08:00@weekdays")
+        assert status == "ok"
+        assert _setting_value(board, "$Sands/Slots") == "21:00-08:00@weekdays"
+    finally:
+        board.cmd(f"$Sands/Slots={orig}")

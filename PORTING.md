@@ -140,9 +140,18 @@ To port (in order):
    the playlist injecting `$THR/Feed=` lines around clear jobs, but
    that writes NVS twice per pattern (flash wear) — needs a RAM-only
    override first.
-6. **NTP + Still Sands**: SNTP client (nothing in tree yet), then the
-   scheduled-pause check (`pattern_manager.py:263-320` — slots, day
-   filters, midnight wrap, finish-pattern-first) between playlist items.
+6. **NTP + Still Sands** — DONE 2026-06-12. `time:` config section
+   (`TimeKeeper` module: SNTP via esp_sntp + POSIX `tz`, plus
+   `$Time/Show` and `$Time/Set=<epoch>` for AP-mode/manual operation).
+   Quiet hours gate the playlist between patterns: `$Sands/Enabled`,
+   `$Sands/Slots=21:00-08:00@daily,...` (syntax in `QuietHours.h`;
+   parsing/matching is a pure unit, `src/QuietHours.{h,cpp}`, with day
+   filters, inclusive bounds, and midnight wrap matching
+   `pattern_manager.py:263-320`). `$Playlist/Skip` during quiet hours
+   overrides them for one pattern, like the host. With `$Sands/Enabled`
+   on but no valid clock, the playlist warns once and keeps running.
+   Deferred: mid-pattern hold (finish-pattern-first is the only mode,
+   matching the user's host settings) and LED-off during quiet hours.
 7. **Status/control API for a UI**: small JSON REST + websocket status
    (~15 routes: patterns CRUD, playlists, run/stop/pause/skip/speed,
    status). Serve SPA (or future app) from SD.
