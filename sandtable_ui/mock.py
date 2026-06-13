@@ -17,7 +17,8 @@ sim={"state":"Idle","file":"","t0":0,"dur":80,"feed":800,
 settings={"Sands/Slots":"21:00-08:00@daily","Sands/Enabled":"0","Playlist/Mode":"loop",
   "Playlist/Shuffle":"0","Playlist/PauseTime":"30","Playlist/ClearPattern":"adaptive",
   "Playlist/AutoHome":"5","THR/Feed":"800","LED/Effect":"rainbow","LED/Brightness":"40",
-  "LED/Speed":"50","LED/RunEffect":"rainbow","LED/IdleEffect":"static"}
+  "LED/Speed":"50","LED/RunEffect":"rainbow","LED/IdleEffect":"static",
+  "Sta/SSID":"The Bears’ Wi-Fi Network","WiFi/Mode":"STA>AP","Sta/IPMode":"DHCP"}
 
 def progress():
     if sim["state"]!="Run" or not sim["file"]: return -1.0
@@ -44,6 +45,10 @@ def spiral_thr():
     return "\n".join(out)+"\n"
 
 def run_cmd(c):
+    if c=="[ESP410]": return json.dumps({"AP_LIST":[
+        {"SSID":"The Bears’ Wi-Fi Network","SIGNAL":34,"IS_PROTECTED":1},
+        {"SSID":"Neighbor 2.4","SIGNAL":58,"IS_PROTECTED":1},
+        {"SSID":"CoffeeShop","SIGNAL":22,"IS_PROTECTED":0}]})
     if c=="$Sand/Status": return json.dumps(status())
     if c=="$Sand/Patterns": return json.dumps(PATTERNS)
     if c=="$Sand/Playlists": return json.dumps(PLAYLISTS)

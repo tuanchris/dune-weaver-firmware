@@ -321,6 +321,20 @@
 
   <!-- SETTINGS -->
   <section id="settings">
+    <h2 class="sec">Network</h2>
+    <div class="card">
+      <div class="np-meta" id="wfStat" style="margin-bottom:11px">&mdash;</div>
+      <div class="row" style="flex-wrap:nowrap">
+        <select class="cfg" id="wfList" style="flex:1"><option value="">&mdash; scan for networks &mdash;</option></select>
+        <button class="btn icon" id="wfScan" onclick="scanWifi()" title="Scan">__SCAN__</button>
+      </div>
+      <label class="fld">Network (SSID)</label>
+      <input class="cfg" id="wfSsid" placeholder="pick from the scan above">
+      <label class="fld">Password</label>
+      <input class="cfg" id="wfPw" type="password" placeholder="WiFi password">
+      <button class="btn primary" style="width:100%;margin-top:16px" onclick="saveWifi()">__WIFI__ Save &amp; connect</button>
+      <div class="hint">Pick your <b>2.4 GHz</b> network from the scan (captures the exact name, incl. punctuation). The table reboots to join it and keeps the FluidNC AP as a fallback.</div>
+    </div>
     <h2 class="sec">Quiet hours (Still Sands)</h2>
     <div class="card">
       <div class="sw"><span style="font-weight:650;color:var(--dim)">Enabled</span><div class="toggle" id="sandsEn" onclick="tgl('sandsEn','Sands/Enabled')"></div></div>
@@ -392,6 +406,8 @@ const ICON={
   grid:'<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="7" r="3"/><circle cx="7" cy="17" r="3"/><circle cx="17" cy="17" r="3"/></svg>',
   table:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 12l5-5"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg>',
   gear:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9 4l-2-1.5.3-2.5-2.4-.9-1.2-2.2L13 4 12 2l-1 2-2.5-.5-1.2 2.2-2.4.9.3 2.5L3 12l2 1.5-.3 2.5 2.4.9 1.2 2.2L11 20l1 2 1-2 2.5.5 1.2-2.2 2.4-.9-.3-2.5z" opacity=".25"/><circle cx="12" cy="12" r="3.4"/></svg>',
+  scan:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.6-4.6"/></svg>',
+  wifi:'<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="18.6" r="1.7"/><path d="M5 11.4a10 10 0 0 1 14 0l-2.1 2.1a7 7 0 0 0-9.8 0zM8.2 14.6a5.4 5.4 0 0 1 7.6 0l-2.1 2.1a2.5 2.5 0 0 0-3.4 0z"/></svg>',
 };
 document.body.innerHTML=document.body.innerHTML
   .replace(/__LOGO__/g,ICON.logo).replace(/__FLOWER__/g,ICON.flower).replace(/__MOON__/g,ICON.moon)
@@ -399,7 +415,8 @@ document.body.innerHTML=document.body.innerHTML
   .replace(/__SKIP__/g,ICON.skip).replace(/__MINUS__/g,ICON.minus).replace(/__PLUS__/g,ICON.plus)
   .replace(/__UPLOAD__/g,ICON.upload).replace(/__HOME__/g,ICON.home).replace(/__RESET__/g,ICON.reset)
   .replace(/__CENTER__/g,ICON.center).replace(/__EDGE__/g,ICON.edge).replace(/__SIDE__/g,ICON.side)
-  .replace(/__LIST__/g,ICON.list).replace(/__BULB__/g,ICON.bulb).replace(/__POWER__/g,ICON.power).replace(/__THEME__/g,ICON.theme);
+  .replace(/__LIST__/g,ICON.list).replace(/__BULB__/g,ICON.bulb).replace(/__POWER__/g,ICON.power).replace(/__THEME__/g,ICON.theme)
+  .replace(/__SCAN__/g,ICON.scan).replace(/__WIFI__/g,ICON.wifi);
 
 const TABS=[['patterns','Patterns',ICON.grid],['playlists','Playlists',ICON.list],['table','Table',ICON.table],['lights','Lights',ICON.bulb],['settings','Settings',ICON.gear]];
 $('nav').innerHTML=TABS.map((t,i)=>'<button class="'+(i==0?'sel':'')+'" data-t="'+t[0]+'">'+t[2]+'<span>'+t[1]+'</span></button>').join('');
@@ -572,6 +589,7 @@ function tab(name,btn){
   document.querySelectorAll('section').forEach(s=>s.classList.toggle('sel',s.id==name));
   $('nav').querySelectorAll('button').forEach(b=>b.classList.remove('sel'));btn.classList.add('sel');
   if(name=='settings'||name=='playlists'||name=='lights')loadSettings();
+  if(name=='settings')refreshWifi();
   window.scrollTo({top:0,behavior:'smooth'});
 }
 function esc(s){return (s+'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
@@ -592,6 +610,36 @@ async function loadSettings(){
     const sp=await get('LED/Speed');if(sp!=null){$('ledSpeed').value=sp;lbl('ledSpeedVal',sp);}
   }catch(e){}
   cmd('$I').then(t=>{const m=t.match(/FluidNC (v[\d.]+[^\s)]*\)?)/)||t.match(/(v3\.[\d.]+)/);if(m)$('fwVer').textContent=m[1];});
+}
+
+// ---- wifi setup ----
+async function scanWifi(){
+  $('wfScan').disabled=true;$('wfStat').textContent='Scanning…';
+  let t='';try{t=await cmd('[ESP410]');}catch(e){}
+  let aps=[];try{const m=t.match(/\{[\s\S]*"AP_LIST"[\s\S]*\}/);if(m)aps=JSON.parse(m[0]).AP_LIST||[];}catch(e){}
+  const seen=new Set(),selEl=$('wfList');selEl.innerHTML='<option value="">— pick a network —</option>';
+  aps.sort((a,b)=>(parseInt(b.SIGNAL)||0)-(parseInt(a.SIGNAL)||0));
+  aps.forEach(ap=>{const n=ap.SSID;if(!n||seen.has(n))return;seen.add(n);const o=document.createElement('option');o.value=n;o.textContent=n+'  ('+(ap.SIGNAL||'?')+'%'+(ap.IS_PROTECTED==0?' open':'')+')';selEl.appendChild(o);});
+  selEl.onchange=()=>{if(selEl.value)$('wfSsid').value=selEl.value;};
+  $('wfScan').disabled=false;refreshWifi();toast(seen.size+' networks found');
+}
+async function saveWifi(){
+  const ssid=$('wfSsid').value.trim(),pw=$('wfPw').value;
+  if(!ssid){toast('Pick or enter a network');return;}
+  if(!confirm('Connect the table to “'+ssid+'”? It will reboot.'))return;
+  await cmd('$Sta/SSID='+ssid);
+  if(pw)await cmd('$Sta/Password='+pw);
+  await cmd('$WiFi/Mode=STA>AP');
+  toast('Saved — rebooting to connect');
+  cmd('$Bye');
+}
+async function refreshWifi(){
+  const g=async k=>{const t=await cmd('$'+k);const m=t.match(new RegExp(k.replace(/\//g,'\\/')+'=(.+)'));return m?m[1].trim():null;};
+  try{
+    const ss=await g('Sta/SSID'),md=await g('WiFi/Mode');
+    $('wfStat').textContent='Mode: '+(md||'?')+(ss?' · saved: “'+ss+'”':' · no network saved');
+    if(ss&&!$('wfSsid').value)$('wfSsid').value=ss;
+  }catch(e){}
 }
 
 try{if(localStorage.dwTheme)document.documentElement.className=localStorage.dwTheme;}catch(e){}
