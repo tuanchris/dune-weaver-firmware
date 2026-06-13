@@ -104,6 +104,20 @@ public:
     Error requestSkip(Channel& out);
     Error showList(Channel& out);
 
+    // Cross-task status snapshot for the JSON API.  Uses fixed buffers
+    // (not std::string) so a reader in another task never races a heap
+    // free.  Returns false if no playlist module is configured.
+    struct RuntimeStatus {
+        bool active   = false;
+        bool clearing = false;
+        bool quiet    = false;
+        int  index    = 0;
+        int  total    = 0;
+        char name[64]     = {};
+        char current[160] = {};
+    };
+    static bool runtimeStatus(RuntimeStatus& out);
+
 private:
     enum class Phase : uint8_t {
         Off,         // no playlist active
@@ -120,6 +134,7 @@ private:
     bool  loadPlaylist(const std::string& name);
     bool  quietNow(uint32_t now);
     void  shuffleOrder();
+    void  publish();  // copy current state into the cross-task snapshot
     float firstRho(const std::string& sdpath);
     // chooses the clear file for the upcoming pattern; empty = none
     std::string clearFileFor(const std::string& patternPath);
@@ -173,4 +188,14 @@ private:
     bool     _quiet_override   = false;  // Skip pressed: run one pattern anyway
     bool     _warned_no_time   = false;
     bool     _warned_bad_slots = false;
+
+    // Published snapshot (written by the polling task, read by the API
+    // command handler in another task).  POD only - no std::string.
+    volatile bool _pub_active   = false;
+    volatile bool _pub_clearing = false;
+    volatile bool _pub_quiet    = false;
+    volatile int  _pub_index    = 0;
+    volatile int  _pub_total    = 0;
+    char          _pub_name[64]     = {};
+    char          _pub_current[160] = {};
 };

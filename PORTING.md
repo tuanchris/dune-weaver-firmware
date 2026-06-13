@@ -152,9 +152,47 @@ To port (in order):
    on but no valid clock, the playlist warns once and keeps running.
    Deferred: mid-pattern hold (finish-pattern-first is the only mode,
    matching the user's host settings) and LED-off during quiet hours.
-7. **Status/control API for a UI**: small JSON REST + websocket status
-   (~15 routes: patterns CRUD, playlists, run/stop/pause/skip/speed,
-   status). Serve SPA (or future app) from SD.
+7. **Status/control API for a UI** — DONE 2026-06-12. Instead of REST
+   routes (which would mean editing the private/static upstream
+   `WebServer.cpp`, can't be unit-tested, and need STA WiFi to test),
+   the API rides the existing command dispatch — so it works
+   identically over serial, the websocket, and the `/command` HTTP
+   endpoint, and it's testable over serial in the HIL suite. Queries
+   emit JSON (`src/SandApi.cpp`); actions stay as existing commands:
+   - `$Sand/Status` → one JSON object: state, theta/rho (from the
+     active kinematics), feed, current file + progress, playlist
+     index/total/name/clearing, quiet, and an led block when `leds:`
+     is configured. The pure model (`src/SandStatus.{h,cpp}` — encode,
+     array encode, escaping, SD-percent parse) is unit-tested; the
+     command gathers live state. Cross-task safe: Playlist publishes a
+     POD snapshot (`Playlist::runtimeStatus`, fixed buffers not
+     std::string) for the handler in the protocol task to read.
+   - `$Sand/Patterns`, `$Sand/Playlists` → JSON arrays of `/patterns`
+     and `/playlists` (clean `error:60` without an SD card).
+   All three are asynchronous, so status polls fine mid-pattern. The UI
+   polls `$Sand/Status` at ~1 Hz (ample for a sand table; no custom
+   websocket push needed yet).
+
+   **UI<->firmware command map** (the "routes"):
+   | UI action | Command |
+   |---|---|
+   | live status | `$Sand/Status` (poll) |
+   | list patterns / playlists | `$Sand/Patterns` / `$Sand/Playlists` |
+   | run pattern | `$SD/Run=<path>` |
+   | run / stop / skip playlist | `$Playlist/Run=<name>` / `Stop` / `Skip` |
+   | pause / resume | `!` / `~` (realtime) |
+   | set speed | `$THR/Feed=<n>` |
+   | LED | `$LED/Effect|Color|Brightness|Speed`, `$LED/RunEffect|IdleEffect` |
+   | quiet hours | `$Sands/Enabled`, `$Sands/Slots` |
+   | home | `$H` |
+   | upload / delete files | `/files`, `/upload`, `$SD/Delete=` |
+   | playlist behavior | `$Playlist/Mode|Shuffle|PauseTime|ClearPattern|AutoHome` |
+
+   NOT yet done: serve a custom UI from SD (needs a ~20-line
+   `myStreamFile`/`handle_not_found` SD-fallback patch — the one small
+   upstream touch worth taking) and the lean SPA itself. Pattern list
+   is unpaginated (~1080 files → ~40 KB JSON, fine on the current heap;
+   paginate if it grows).
 8. **MQTT/Home Assistant**: esp-mqtt (plain, no TLS) + HA discovery,
    trimmed to ~10 entities (state, current pattern, progress, speed,
    pause/stop/skip, playlist select). Host version has 30+.

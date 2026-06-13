@@ -226,6 +226,39 @@ void Playlist::finish(const char* why) {
     _req_skip = false;
 }
 
+// Write the current state into the cross-task snapshot.  Runs in the
+// polling task only.
+void Playlist::publish() {
+    bool active     = _phase != Phase::Off;
+    _pub_active     = active;
+    _pub_clearing   = _phase == Phase::RunClear;
+    _pub_quiet      = _in_quiet;
+    _pub_index      = active ? static_cast<int>(_index) : 0;
+    _pub_total      = active ? static_cast<int>(_order.size()) : 0;
+    if (active) {
+        strlcpy(_pub_name, _playlist_name.c_str(), sizeof(_pub_name));
+        strlcpy(_pub_current, _index < _order.size() ? itemAt(_index).c_str() : "", sizeof(_pub_current));
+    } else {
+        _pub_name[0]    = '\0';
+        _pub_current[0] = '\0';
+    }
+}
+
+bool Playlist::runtimeStatus(RuntimeStatus& out) {
+    if (!playlistInstance) {
+        return false;
+    }
+    Playlist* p  = playlistInstance;
+    out.active   = p->_pub_active;
+    out.clearing = p->_pub_clearing;
+    out.quiet    = p->_pub_quiet;
+    out.index    = p->_pub_index;
+    out.total    = p->_pub_total;
+    strlcpy(out.name, p->_pub_name, sizeof(out.name));
+    strlcpy(out.current, p->_pub_current, sizeof(out.current));
+    return true;
+}
+
 void Playlist::shuffleOrder() {
     for (size_t i = _order.size() - 1; i > 0; i--) {
         size_t j = esp_random() % (i + 1);
@@ -544,6 +577,7 @@ Error Playlist::pollLine(char* line) {
             break;
         }
     }
+    publish();
     return Error::NoData;
 }
 
