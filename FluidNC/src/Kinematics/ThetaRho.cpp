@@ -126,6 +126,12 @@ namespace Kinematics {
         normalize_theta();
     }
 
+    // Called when a pattern is stopped (Cmd::StopJob) or finished: close out
+    // the job and relabel theta into [0, 2pi) so the next pattern starts clean.
+    void ThetaRho::stop() {
+        end_job();
+    }
+
     // Called for every command line before parsing.  Returns true when the
     // line was fully consumed.  For "theta rho" pairs the line is rewritten
     // in place (capacity maxlen) and false is returned so the G-code parser

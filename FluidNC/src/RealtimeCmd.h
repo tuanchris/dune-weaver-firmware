@@ -42,6 +42,7 @@ enum class Cmd : uint8_t {
     SpindleOvrFinePlus    = 0x9C,
     SpindleOvrFineMinus   = 0x9D,
     SpindleOvrStop        = 0x9E,
+    StopJob               = 0x9F,  // Sand table: stop the running pattern, keep position (no reset/re-home)
     CoolantFloodOvrToggle = 0xA0,
     CoolantMistOvrToggle  = 0xA1,
     // Channel Extender uses the Bx range; see Channel.h

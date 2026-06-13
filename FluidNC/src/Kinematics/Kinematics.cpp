@@ -64,6 +64,12 @@ namespace Kinematics {
         return _system->translate_line(line, maxlen, channel);
     }
 
+    void Kinematics::stop() {
+        if (_system) {
+            _system->stop();
+        }
+    }
+
     void Kinematics::group(Configuration::HandlerBase& handler) {
         ::Kinematics::KinematicsFactory::factory(handler, _system);
     }

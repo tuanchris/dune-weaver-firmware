@@ -56,6 +56,7 @@ namespace Kinematics {
         bool transform_cartesian_to_motors(float* motors, float* cartesian) override;
 
         bool translate_line(char* line, size_t maxlen, Channel& channel) override;
+        void stop() override;
 
         // Configuration handlers
         void group(Configuration::HandlerBase& handler) override;

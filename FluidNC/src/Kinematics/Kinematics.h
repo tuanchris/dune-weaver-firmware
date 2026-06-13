@@ -53,6 +53,7 @@ namespace Kinematics {
         bool limitReached(AxisMask& axisMask, MotorMask& motors, MotorMask limited);
 
         bool translate_line(char* line, size_t maxlen, Channel& channel);
+        void stop();
 
     private:
         ::Kinematics::KinematicSystem* _system = nullptr;
@@ -95,6 +96,11 @@ namespace Kinematics {
         // rewritten in place, up to maxlen bytes including the terminator.
         // Return true if the line was fully consumed.
         virtual bool translate_line(char* line, size_t maxlen, Channel& channel) { return false; }
+
+        // Optional hook called when a pattern job is stopped/finished, so a
+        // system like ThetaRho can normalize its accumulated coordinate
+        // (e.g. relabel theta into [0, 2pi)).  Runs in the protocol task at Idle.
+        virtual void stop() {}
 
         // Configuration interface.
         void afterParse() override {}

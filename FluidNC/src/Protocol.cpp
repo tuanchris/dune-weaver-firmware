@@ -52,6 +52,10 @@ const char* alarmString(ExecAlarm alarmNumber) {
 
 static volatile bool rtSafetyDoor;
 
+// Set by a clean pattern stop (Cmd::StopJob); the main loop normalizes
+// theta once the machine has settled at Idle.
+static volatile bool rtStopJob = false;
+
 volatile bool runLimitLoop;  // Interface to show_limits()
 
 static void protocol_exec_rt_suspend();
@@ -130,6 +134,13 @@ void polling_loop(void* unused) {
         if (pollingPaused) {
             vTaskDelay(100);
             continue;
+        }
+
+        // A clean pattern stop (Cmd::StopJob) flagged a theta normalize;
+        // do it once the machine has settled at Idle with the job aborted.
+        if (rtStopJob && !Job::active() && state_is(State::Idle)) {
+            rtStopJob = false;
+            config->_kinematics->stop();
         }
 
         // Polling without an argument checks for realtime characters
@@ -548,6 +559,40 @@ void protocol_do_motion_cancel() {
             break;
     }
     sys.suspend.bit.motionCancel = true;
+}
+
+// Cleanly stop a running pattern WITHOUT a reset: decelerate gracefully,
+// flush the planner, abort the file feed, and return to Idle with position
+// preserved (no Alarm, no re-home).  Theta is normalized once settled.
+// Unlike Cmd::Reset, this is safe to use as the everyday "stop" button.
+void protocol_do_stop_job() {
+    switch (sys.state) {
+        case State::Cycle:
+        case State::Jog:
+            // Jog-cancel mechanism: decelerate, then protocol_do_cycle_stop()
+            // flushes the planner and syncs position to Idle.
+            protocol_cancel_jogging();
+            break;
+        case State::Hold:
+            // Already decelerated and held; flush the remainder to Idle
+            // (mirrors the jog-cancel flush in protocol_do_cycle_stop).
+            sys.step_control = {};
+            plan_reset();
+            Stepper::reset();
+            gc_sync_position();
+            plan_sync_position();
+            sys.suspend.value = 0;
+            set_state(State::Idle);
+            break;
+        case State::Idle:
+            break;  // nothing moving; still abort the job and normalize below
+        default:
+            return;  // Alarm/ConfigAlarm/Critical/Homing/Sleep: use Reset instead
+    }
+    if (Job::active()) {
+        unwind_cause = "Stop";  // the main loop calls Job::abort()
+    }
+    rtStopJob = true;  // main loop normalizes theta once Idle
 }
 
 static void protocol_do_feedhold() {
@@ -1133,6 +1178,7 @@ const ArgEvent reportStatusEvent { (void (*)(void*))report_realtime_status };
 const NoArgEvent safetyDoorEvent { request_safety_door };
 const NoArgEvent feedHoldEvent { protocol_do_feedhold };
 const NoArgEvent cycleStartEvent { protocol_do_cycle_start };
+const NoArgEvent stopJobEvent { protocol_do_stop_job };
 const NoArgEvent cycleStopEvent { protocol_do_cycle_stop };
 const NoArgEvent motionCancelEvent { protocol_do_motion_cancel };
 const NoArgEvent sleepEvent { protocol_do_sleep };
