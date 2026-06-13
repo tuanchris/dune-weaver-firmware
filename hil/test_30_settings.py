@@ -48,3 +48,30 @@ def test_playlist_skip_without_playlist(board, playlist_configured):
     text, status = board.cmd("$Playlist/Skip")
     assert status == "ok"
     assert "No playlist active" in text
+
+
+def test_thr_feed_roundtrip(board):
+    # $THR/Feed exists whenever the ThetaRho kinematics is configured
+    import pytest
+
+    text, status = board.cmd("$THR/Feed")
+    if status != "ok":
+        pytest.skip("kinematics is not ThetaRho")
+    orig = _setting_value(board, "$THR/Feed")
+    try:
+        _, status = board.cmd("$THR/Feed=150")
+        assert status == "ok"
+        assert _setting_value(board, "$THR/Feed") == "150"
+    finally:
+        board.cmd(f"$THR/Feed={orig}")
+
+
+def test_led_state_hook_enums(board, leds_configured):
+    orig = _setting_value(board, "$LED/RunEffect")
+    try:
+        for value in ("off", "static", "rainbow", "none"):
+            _, status = board.cmd(f"$LED/RunEffect={value}")
+            assert status == "ok"
+            assert _setting_value(board, "$LED/RunEffect") == value
+    finally:
+        board.cmd(f"$LED/RunEffect={orig}")

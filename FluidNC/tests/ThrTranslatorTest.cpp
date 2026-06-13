@@ -186,6 +186,41 @@ TEST(ThrTranslator, TranslatesInPlace) {
     EXPECT_STREQ("G90G1X0.50000Y0.30000", buf);
 }
 
+TEST(ThrTranslator, FeedChangeMidJobEmitsFOnce) {
+    ThrTranslator t;
+    t.start(100.0f);
+    std::string out;
+    EXPECT_EQ(ThrLine::Move, tr(t, "0.5 0.3", out));
+    EXPECT_EQ("G90G1X0.50000Y0.30000F100.0", out);
+
+    t.set_feed(250.0f);
+    EXPECT_EQ(ThrLine::Move, tr(t, "0.6 0.3", out));
+    EXPECT_EQ("G90G1X0.60000Y0.30000F250.0", out);
+    // Unchanged feed afterwards: no F word
+    EXPECT_EQ(ThrLine::Move, tr(t, "0.7 0.3", out));
+    EXPECT_EQ("G90G1X0.70000Y0.30000", out);
+}
+
+TEST(ThrTranslator, FeedZeroKeepsModalFeed) {
+    ThrTranslator t;
+    t.start(100.0f);
+    std::string out;
+    EXPECT_EQ(ThrLine::Move, tr(t, "0.5 0.3", out));
+    EXPECT_EQ("G90G1X0.50000Y0.30000F100.0", out);
+    t.set_feed(0.0f);
+    EXPECT_EQ(ThrLine::Move, tr(t, "0.6 0.3", out));
+    EXPECT_EQ("G90G1X0.60000Y0.30000", out);
+}
+
+TEST(ThrTranslator, FeedChangedBeforeFirstMove) {
+    ThrTranslator t;
+    t.start(100.0f);
+    t.set_feed(60.0f);
+    std::string out;
+    EXPECT_EQ(ThrLine::Move, tr(t, "0.5 0.3", out));
+    EXPECT_EQ("G90G1X0.50000Y0.30000F60.0", out);
+}
+
 TEST(ThrTranslator, StartResetsAllJobState) {
     ThrTranslator t;
     t.start(100.0f);

@@ -37,6 +37,8 @@
 
 #include <string>
 
+class IntSetting;
+
 namespace Kinematics {
     class ThetaRho : public Cartesian {
     public:
@@ -70,11 +72,15 @@ namespace Kinematics {
         float _rho_mm           = 20.0f;   // Y motor mm for rho 0 -> 1
         float _gear_ratio       = 10.0f;   // theta:rho mechanical coupling ratio; 0 disables
         bool  _invert_coupling  = false;
-        float _default_feed     = 100.0f;  // feed for .thr jobs in motor mm/min; 0 = use modal F
+        float _default_feed     = 100.0f;  // initial value for the $THR/Feed setting; 0 = use modal F
 
         // Derived
         float _theta_scale = 0.0f;  // X motor mm per radian
         float _coupling    = 0.0f;  // Y motor mm per X motor mm, sign included
+
+        // $THR/Feed: live, NVS-persisted feed for .thr jobs (mm/min in
+        // motor space); read per line so changes apply mid-pattern
+        IntSetting* _feed_setting = nullptr;
 
         // Per-job translation state
         std::string    _job_name;                // channel name of the active .thr job

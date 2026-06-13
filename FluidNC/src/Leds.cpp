@@ -27,6 +27,12 @@ namespace {
         { "static", 1 },
         { "rainbow", 2 },
     };
+    enum_opt_t ledHookEffects = {
+        { "off", 0 },
+        { "static", 1 },
+        { "rainbow", 2 },
+        { "none", 3 },
+    };
 
     // RMT translator: expands pixel bytes into RMT items on demand
     void IRAM_ATTR ws2812_translate(
@@ -114,16 +120,19 @@ void Leds::init() {
     memset(_pixels, 0, _num_leds * 3);
 
     if (!_effect) {
-        _effect     = new EnumSetting("LED effect", EXTENDED, WG, NULL, "LED/Effect", EFFECT_RAINBOW, &ledEffects);
-        _color      = new StringSetting("LED static color RRGGBB", EXTENDED, WG, NULL, "LED/Color", "FFB060", 0, 7);
-        _brightness = new IntSetting("LED brightness", EXTENDED, WG, NULL, "LED/Brightness", 40, 0, 255);
-        _speed      = new IntSetting("LED effect speed", EXTENDED, WG, NULL, "LED/Speed", 50, 1, 255);
+        _effect      = new EnumSetting("LED effect", EXTENDED, WG, NULL, "LED/Effect", EFFECT_RAINBOW, &ledEffects);
+        _color       = new StringSetting("LED static color RRGGBB", EXTENDED, WG, NULL, "LED/Color", "FFB060", 0, 7);
+        _brightness  = new IntSetting("LED brightness", EXTENDED, WG, NULL, "LED/Brightness", 40, 0, 255);
+        _speed       = new IntSetting("LED effect speed", EXTENDED, WG, NULL, "LED/Speed", 50, 1, 255);
+        _run_effect  = new EnumSetting("LED effect while running", EXTENDED, WG, NULL, "LED/RunEffect", EFFECT_NONE, &ledHookEffects);
+        _idle_effect = new EnumSetting("LED effect while idle", EXTENDED, WG, NULL, "LED/IdleEffect", EFFECT_NONE, &ledHookEffects);
     }
 
     log_info("leds: " << _num_leds << " WS2812 on pin " << _data_pin.name() << " order " << _color_order);
 
     _ready = true;
     allChannels.registration(this);
+    setReportInterval(500);  // receive status reports for the state hooks
 }
 
 void Leds::deinit() {
@@ -171,7 +180,7 @@ void Leds::render() {
         return;
     }
 
-    int     effect     = _effect->get();
+    int     effect     = _auto_effect >= 0 ? _auto_effect : _effect->get();
     uint8_t brightness = static_cast<uint8_t>(_brightness->get());
 
     switch (effect) {
@@ -202,8 +211,48 @@ void Leds::render() {
     // The >= frame_ms gap to the next frame doubles as the WS2812 latch time.
 }
 
+// Reports arrive through our own autoReport; collect lines and track
+// the machine state, switching the effect when a hook is configured.
+size_t Leds::write(uint8_t data) {
+    char c = static_cast<char>(data);
+    if (c == '\r') {
+        return 1;
+    }
+    if (c == '\n') {
+        if (!_report.empty() && _report[0] == '<') {
+            parse_state_report();
+        }
+        _report.clear();
+        return 1;
+    }
+    if (_report.size() < 200) {
+        _report += c;
+    }
+    return 1;
+}
+
+void Leds::parse_state_report() {
+    // "<State|...>" -> first field
+    auto endpos = _report.find_first_of("|>");
+    if (endpos == std::string::npos || endpos < 2) {
+        return;
+    }
+    std::string state = _report.substr(1, endpos - 1);
+
+    int hook = -1;
+    if (state == "Run" || state == "Jog" || state == "Home") {
+        hook = _run_effect ? _run_effect->get() : EFFECT_NONE;
+    } else if (state == "Idle" || state.rfind("Hold", 0) == 0) {
+        hook = _idle_effect ? _idle_effect->get() : EFFECT_NONE;
+    } else {
+        return;  // Alarm/Door/etc: leave the strip as it is
+    }
+    _auto_effect = hook == EFFECT_NONE ? -1 : hook;
+}
+
 Error Leds::pollLine(char* line) {
     if (_ready) {
+        autoReport();
         uint32_t now = now_ms();
         if (now - _last_frame >= static_cast<uint32_t>(_frame_ms)) {
             _last_frame = now;

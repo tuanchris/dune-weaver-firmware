@@ -21,6 +21,12 @@
     $LED/Brightness=0..255
     $LED/Speed=1..255      (rainbow cycle speed)
 
+  Optional machine-state hooks override $LED/Effect automatically:
+    $LED/RunEffect=none|off|static|rainbow   while Run/Jog/Homing
+    $LED/IdleEffect=none|off|static|rainbow  while Idle/Hold
+  "none" (the default) leaves the strip fully manual.  The module
+  receives its own auto-reports (like Status_Outputs) to track state.
+
   Like Status_Outputs, this is a Channel + ConfigurableModule; the
   channel-polling task calls pollLine() continuously (even while a job
   is running), which is what paces the animation frames.
@@ -55,8 +61,8 @@ public:
     void init() override;
     void deinit() override;
 
-    // Channel interface; this channel produces no input and discards output
-    size_t write(uint8_t data) override { return 1; }
+    // Channel interface; receives status reports, produces no input
+    size_t write(uint8_t data) override;
     Error  pollLine(char* line) override;
     void   flushRx() override {}
     bool   lineComplete(char*, char) override { return false; }
@@ -76,8 +82,10 @@ private:
     static constexpr int EFFECT_OFF     = 0;
     static constexpr int EFFECT_STATIC  = 1;
     static constexpr int EFFECT_RAINBOW = 2;
+    static constexpr int EFFECT_NONE    = 3;  // RunEffect/IdleEffect: no override
 
     void render();
+    void parse_state_report();
     void setPixel(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness);
 
     static void wheel(uint8_t pos, uint8_t& r, uint8_t& g, uint8_t& b);
@@ -89,10 +97,17 @@ private:
     int         _frame_ms    = 33;
 
     // Runtime settings ($LED/...)
-    EnumSetting*   _effect     = nullptr;
-    StringSetting* _color      = nullptr;
-    IntSetting*    _brightness = nullptr;
-    IntSetting*    _speed      = nullptr;
+    EnumSetting*   _effect      = nullptr;
+    StringSetting* _color       = nullptr;
+    IntSetting*    _brightness  = nullptr;
+    IntSetting*    _speed       = nullptr;
+    EnumSetting*   _run_effect  = nullptr;
+    EnumSetting*   _idle_effect = nullptr;
+
+    // Machine-state tracking (poll task only: reports arrive via our
+    // own autoReport, which runs inside pollLine)
+    std::string _report;                 // partial report line being received
+    int         _auto_effect = -1;       // -1: no override; else EFFECT_*
 
     // Driver state
     bool     _ready = false;

@@ -72,8 +72,9 @@ namespace Kinematics {
         } else {
             n = snprintf(buf, sizeof(buf), "G90G1X%.5fY%.5f", theta - _theta_offset, rho);
         }
-        if (n > 0 && size_t(n) < sizeof(buf) && _first_line && _default_feed > 0.0f) {
-            n += snprintf(buf + n, sizeof(buf) - n, "F%.1f", _default_feed);
+        bool emit_feed = _feed > 0.0f && _feed != _emitted_feed;
+        if (n > 0 && size_t(n) < sizeof(buf) && emit_feed) {
+            n += snprintf(buf + n, sizeof(buf) - n, "F%.1f", _feed);
         }
         if (n <= 0 || size_t(n) >= sizeof(buf) || size_t(n) >= outlen) {
             return ThrLine::Oversize;
@@ -82,7 +83,9 @@ namespace Kinematics {
         for (int i = 0; i <= n; i++) {
             out[i] = buf[i];
         }
-        _first_line = false;
+        if (emit_feed) {
+            _emitted_feed = _feed;
+        }
         return ThrLine::Move;
     }
 }

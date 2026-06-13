@@ -130,8 +130,16 @@ To port (in order):
    matching `pattern_manager.py:1146-1160`; missing clear files are
    skipped with a warning). Separate `clear_pattern_speed` is NOT yet
    ported — needs the speed-control phase.
-5. **Speed control**: map UI speed onto feed override or a `$` setting
-   feeding `ThetaRho::_default_feed` so mid-pattern changes work.
+5. **Speed control** — DONE 2026-06-12. `$THR/Feed` (NVS, created by
+   ThetaRho; config `default_feed_mm_per_min` seeds the first-boot
+   default) is read per translated line, and the translator emits an F
+   word whenever the value changed — so an absolute speed change takes
+   effect mid-pattern within one move, exactly the dune-weaver slider
+   semantics. Realtime feed override (10-200%) still works on top.
+   `$Playlist/ClearSpeed` remains deferred: the clean implementation is
+   the playlist injecting `$THR/Feed=` lines around clear jobs, but
+   that writes NVS twice per pattern (flash wear) — needs a RAM-only
+   override first.
 6. **NTP + Still Sands**: SNTP client (nothing in tree yet), then the
    scheduled-pause check (`pattern_manager.py:263-320` — slots, day
    filters, midnight wrap, finish-pattern-first) between playlist items.
@@ -141,8 +149,13 @@ To port (in order):
 8. **MQTT/Home Assistant**: esp-mqtt (plain, no TLS) + HA discovery,
    trimmed to ~10 entities (state, current pattern, progress, speed,
    pause/stop/skip, playlist select). Host version has 30+.
-9. **LED event hooks**: playing/idle effects tied to job events; the Leds
-   module already receives status reports as a Channel, so this is small.
+9. **LED event hooks** — DONE 2026-06-12. `$LED/RunEffect` and
+   `$LED/IdleEffect` (`none|off|static|rainbow`, default `none` =
+   manual). The Leds module subscribes to its own auto-reports
+   (Status_Outputs pattern, 500 ms) and applies a RAM-only effect
+   override on Run/Jog/Home vs Idle/Hold transitions — no NVS wear,
+   `$LED/Effect` stays the manual base. Alarm/Door leave the strip
+   untouched.
 
 Dropped (not ported): preview rendering (pre-render at upload), Pi wifi
 manager, Pi updater, multi-table `known_tables` (UI concern),

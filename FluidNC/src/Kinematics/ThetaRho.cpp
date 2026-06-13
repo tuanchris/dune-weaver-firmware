@@ -10,6 +10,7 @@
 #include "src/Protocol.h"  // protocol_buffer_synchronize
 #include "src/Channel.h"
 #include "src/Job.h"
+#include "src/Settings.h"
 
 #include <cmath>
 #include <cstdio>
@@ -48,6 +49,11 @@ namespace Kinematics {
         }
 
         log_info("  theta " << _theta_mm_per_rev << " mm/rev, rho " << _rho_mm << " mm, coupling " << _coupling);
+
+        if (!_feed_setting) {
+            _feed_setting = new IntSetting(
+                "Feed for .thr jobs, motor mm/min", EXTENDED, WG, NULL, "THR/Feed", static_cast<int>(_default_feed), 0, 100000);
+        }
 
         init_position();
     }
@@ -109,7 +115,7 @@ namespace Kinematics {
     void ThetaRho::start_job(const std::string& name, const Channel* channel) {
         _job_name    = name;
         _job_channel = channel;
-        _translator.start(_default_feed);
+        _translator.start(_feed_setting ? static_cast<float>(_feed_setting->get()) : _default_feed);
         normalize_theta();
         log_info("ThetaRho: running theta-rho job " << name);
     }
@@ -144,6 +150,10 @@ namespace Kinematics {
 
         bool was_locked = _translator.offset_locked();
 
+        if (_feed_setting) {
+            // Live feed: a changed $THR/Feed takes effect on the next move
+            _translator.set_feed(static_cast<float>(_feed_setting->get()));
+        }
         switch (_translator.translate(line, line, maxlen)) {
             case ThrLine::Skip:
                 return true;
