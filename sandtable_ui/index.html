@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<!--
+  Dune Weaver / FluidNC sand-table UI.
+  Self-contained single file (no build step) served gzipped from littlefs
+  as index.html.gz. Talks to the firmware over the existing command
+  dispatch and realtime routes — see PORTING.md "JSON API".
+    $Sand/Status | $Sand/Patterns | $Sand/Playlists   (queries, JSON)
+    $SD/Run, $Playlist/*, $THR/Feed, $LED/*, $Sands/*, $H  (actions)
+    /feedhold_reload (pause)  /cyclestart_reload (resume)  /restart_reload (stop)
+  Thumbnails are static files on SD: /sd/thumbs/<pattern-filename>.png
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16130f">
+<title>Sand Table</title>
+<style>
+  :root{
+    --bg:#16130f; --bg2:#1f1b15; --card:#241f18; --card2:#2c261d;
+    --line:#3a3225; --txt:#efe7d8; --dim:#a99e88; --faint:#6f6553;
+    --sand:#e0aa4e; --sand2:#caa05a; --hot:#d8743c; --ok:#79a86b; --bad:#c8553d;
+    --r:14px; --rs:9px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(120% 100% at 50% -10%, #221d16 0%, var(--bg) 60%);
+    color:var(--txt); font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased; padding-bottom:env(safe-area-inset-bottom);
+    overflow-x:hidden;
+  }
+  a{color:var(--sand)}
+  .wrap{max-width:920px;margin:0 auto;padding:0 16px 120px}
+  header{position:sticky;top:0;z-index:30;background:linear-gradient(var(--bg),rgba(22,19,15,.86));
+    backdrop-filter:blur(8px);padding:14px 0 10px;margin-bottom:8px;border-bottom:1px solid var(--line)}
+  .top{display:flex;align-items:center;gap:12px;max-width:920px;margin:0 auto;padding:0 16px}
+  .title{font-weight:650;font-size:18px;letter-spacing:.2px;flex:1}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--faint);box-shadow:0 0 0 0 transparent;transition:.3s}
+  .dot.on{background:var(--ok)} .dot.off{background:var(--bad)}
+  .badge{font-size:12px;font-weight:650;text-transform:uppercase;letter-spacing:.6px;
+    padding:4px 10px;border-radius:999px;background:var(--card2);color:var(--dim);border:1px solid var(--line)}
+  .badge.run{background:rgba(224,170,78,.16);color:var(--sand);border-color:transparent}
+  .badge.hold{background:rgba(216,116,60,.18);color:var(--hot);border-color:transparent}
+  .badge.alarm{background:rgba(200,85,61,.2);color:#eb8b76;border-color:transparent}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin:12px 0}
+  .np-file{font-weight:600;font-size:16px;word-break:break-word}
+  .np-sub{color:var(--dim);font-size:13px;margin-top:2px;min-height:18px}
+  .bar{height:8px;border-radius:6px;background:#181410;overflow:hidden;margin:14px 0 6px}
+  .bar > i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--sand2),var(--sand));
+    border-radius:6px;transition:width .6s ease}
+  .meta{display:flex;justify-content:space-between;color:var(--faint);font-size:12px;font-variant-numeric:tabular-nums}
+
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .btn{appearance:none;border:1px solid var(--line);background:var(--card2);color:var(--txt);
+    font:inherit;font-weight:600;padding:11px 16px;border-radius:var(--rs);cursor:pointer;
+    display:inline-flex;align-items:center;gap:7px;transition:.12s;user-select:none}
+  .btn:active{transform:translateY(1px)}
+  .btn:hover{border-color:#4c4230}
+  .btn.primary{background:linear-gradient(180deg,var(--sand),var(--sand2));color:#241a08;border-color:transparent}
+  .btn.warn{color:#eb8b76}
+  .btn.grow{flex:1;justify-content:center}
+  .btn[disabled]{opacity:.4;pointer-events:none}
+  .btn svg{width:16px;height:16px;fill:currentColor;display:block}
+
+  nav{display:flex;gap:4px;background:var(--bg2);border:1px solid var(--line);border-radius:var(--rs);padding:4px;margin:14px 0}
+  nav button{flex:1;appearance:none;border:0;background:transparent;color:var(--dim);font:inherit;font-weight:600;
+    padding:9px;border-radius:7px;cursor:pointer;transition:.12s}
+  nav button.sel{background:var(--card2);color:var(--txt)}
+  section{display:none} section.sel{display:block}
+
+  .tools{display:flex;gap:10px;margin:4px 0 12px}
+  .search{flex:1;background:var(--card);border:1px solid var(--line);color:var(--txt);
+    padding:11px 13px;border-radius:var(--rs);font:inherit}
+  .search::placeholder{color:var(--faint)}
+  .count{color:var(--faint);font-size:12px;align-self:center;white-space:nowrap}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:12px}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:9px;cursor:pointer;
+    transition:.12s;text-align:center}
+  .tile:hover{border-color:var(--sand2);transform:translateY(-2px)}
+  .thumb{aspect-ratio:1;border-radius:10px;background:#15110c;display:flex;align-items:center;justify-content:center;
+    overflow:hidden;margin-bottom:8px;position:relative}
+  .thumb img{width:100%;height:100%;object-fit:contain;display:none}
+  .thumb img.ok{display:block}
+  .thumb .ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--faint)}
+  .thumb .ph svg{width:46%;height:46%;opacity:.5}
+  .tname{font-size:12px;color:var(--dim);line-height:1.3;overflow:hidden;display:-webkit-box;
+    -webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word;min-height:31px}
+
+  .list-item{display:flex;align-items:center;gap:12px;padding:13px 14px;background:var(--card);
+    border:1px solid var(--line);border-radius:var(--rs);margin-bottom:8px;cursor:pointer}
+  .list-item:hover{border-color:var(--sand2)}
+  .list-item .nm{flex:1;font-weight:600}
+  .list-item .pl{font-size:12px;color:var(--faint)}
+
+  label.fld{display:block;margin:14px 0 6px;font-size:13px;color:var(--dim);font-weight:600}
+  .seg{display:flex;gap:0;border:1px solid var(--line);border-radius:var(--rs);overflow:hidden;width:fit-content}
+  .seg button{appearance:none;border:0;background:var(--card2);color:var(--dim);font:inherit;font-weight:600;
+    padding:9px 16px;cursor:pointer;border-right:1px solid var(--line)}
+  .seg button:last-child{border-right:0}
+  .seg button.sel{background:var(--sand);color:#241a08}
+  input[type=range]{width:100%;accent-color:var(--sand);height:26px}
+  input[type=color]{width:54px;height:38px;border:1px solid var(--line);border-radius:8px;background:var(--card2);padding:3px;cursor:pointer}
+  input[type=text].cfg,select.cfg{width:100%;background:var(--card2);border:1px solid var(--line);color:var(--txt);
+    padding:10px 12px;border-radius:var(--rs);font:inherit}
+  .val{float:right;color:var(--sand);font-variant-numeric:tabular-nums;font-weight:600}
+  .hint{color:var(--faint);font-size:12px;margin-top:6px}
+  .switch{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:6px 0}
+
+  .empty{text-align:center;color:var(--faint);padding:48px 12px}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);background:var(--card2);
+    border:1px solid var(--line);color:var(--txt);padding:11px 18px;border-radius:999px;opacity:0;transition:.25s;
+    z-index:50;pointer-events:none;box-shadow:0 8px 30px rgba(0,0,0,.4);max-width:90vw}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .quiet{display:inline-flex;align-items:center;gap:6px;color:var(--sand2);font-size:12px;font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <span id="dot" class="dot"></span>
+    <span class="title">Sand Table</span>
+    <span id="quiet" class="quiet" hidden>&#9790; quiet hours</span>
+    <span id="state" class="badge">—</span>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- Now playing -->
+  <div class="card" id="np">
+    <div class="np-file" id="npFile">Idle</div>
+    <div class="np-sub" id="npSub"></div>
+    <div class="bar"><i id="npBar"></i></div>
+    <div class="meta"><span id="npPct">—</span><span id="npPos"></span></div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn grow" id="bPause" onclick="pauseResume()"></button>
+      <button class="btn grow warn" id="bStop" onclick="stop()">Stop</button>
+      <button class="btn" id="bSkip" onclick="act('$Playlist/Skip','Skipped')" title="Skip">Skip &#9197;</button>
+    </div>
+    <label class="fld">Speed <span class="val" id="spdVal"></span></label>
+    <input type="range" id="spd" min="20" max="2000" step="10" oninput="spdLabel(this.value)" onchange="setSpeed(this.value)">
+  </div>
+
+  <nav>
+    <button class="sel" onclick="tab('patterns',this)">Patterns</button>
+    <button onclick="tab('playlists',this)">Playlists</button>
+    <button onclick="tab('lights',this)">Lights</button>
+    <button onclick="tab('settings',this)">Settings</button>
+  </nav>
+
+  <!-- Patterns -->
+  <section id="patterns" class="sel">
+    <div class="tools">
+      <input class="search" id="search" placeholder="Search patterns…" oninput="renderPatterns()">
+      <span class="count" id="patCount"></span>
+    </div>
+    <div class="grid" id="patGrid"></div>
+    <div class="empty" id="patEmpty" hidden>No patterns found.<br><span class="hint">Add .thr files to /patterns on the SD card.</span></div>
+  </section>
+
+  <!-- Playlists -->
+  <section id="playlists">
+    <div id="plList"></div>
+    <div class="empty" id="plEmpty" hidden>No playlists.<br><span class="hint">Add text files to /playlists on the SD card, one pattern path per line.</span></div>
+    <div class="card">
+      <label class="fld">Run mode</label>
+      <div class="seg" id="plMode" data-setting="Playlist/Mode">
+        <button data-v="single">Once</button><button data-v="loop">Loop</button>
+      </div>
+      <div class="switch"><label class="fld" style="margin:0">Shuffle</label>
+        <div class="seg" id="plShuf" data-setting="Playlist/Shuffle">
+          <button data-v="OFF">Off</button><button data-v="ON">On</button></div></div>
+      <label class="fld">Pause between patterns <span class="val" id="plPauseVal"></span></label>
+      <input type="range" id="plPause" min="0" max="600" step="5" oninput="lbl('plPauseVal',this.value+'s')" onchange="setIt('Playlist/PauseTime',this.value)">
+      <label class="fld">Clear pattern</label>
+      <select class="cfg" id="plClear" onchange="setIt('Playlist/ClearPattern',this.value)">
+        <option value="none">None</option><option value="adaptive">Adaptive</option>
+        <option value="in">From edge</option><option value="out">From center</option>
+        <option value="sideway">Sideways</option><option value="random">Random</option>
+      </select>
+    </div>
+  </section>
+
+  <!-- Lights -->
+  <section id="lights">
+    <div class="card" id="ledCard">
+      <label class="fld">Effect</label>
+      <div class="seg" id="ledEffect" data-setting="LED/Effect">
+        <button data-v="off">Off</button><button data-v="static">Solid</button><button data-v="rainbow">Rainbow</button>
+      </div>
+      <div class="switch" style="margin-top:14px"><label class="fld" style="margin:0">Colour</label>
+        <input type="color" id="ledColor" value="#ffb060" onchange="setColor(this.value)"></div>
+      <label class="fld">Brightness <span class="val" id="ledBrightVal"></span></label>
+      <input type="range" id="ledBright" min="0" max="255" oninput="lbl('ledBrightVal',this.value)" onchange="setIt('LED/Brightness',this.value)">
+      <label class="fld">Animation speed <span class="val" id="ledSpeedVal"></span></label>
+      <input type="range" id="ledSpeed" min="1" max="255" oninput="lbl('ledSpeedVal',this.value)" onchange="setIt('LED/Speed',this.value)">
+      <label class="fld">While running</label>
+      <select class="cfg" id="ledRun" onchange="setIt('LED/RunEffect',this.value)">
+        <option value="none">Leave as-is</option><option value="rainbow">Rainbow</option>
+        <option value="static">Solid</option><option value="off">Off</option></select>
+      <label class="fld">While idle</label>
+      <select class="cfg" id="ledIdle" onchange="setIt('LED/IdleEffect',this.value)">
+        <option value="none">Leave as-is</option><option value="static">Solid</option>
+        <option value="rainbow">Rainbow</option><option value="off">Off</option></select>
+    </div>
+    <div class="empty" id="ledNone" hidden>No LED strip configured.<br><span class="hint">Add a <code>leds:</code> section to the config.</span></div>
+  </section>
+
+  <!-- Settings -->
+  <section id="settings">
+    <div class="card">
+      <div class="switch"><label class="fld" style="margin:0">Quiet hours (Still Sands)</label>
+        <div class="seg" id="sandsEn" data-setting="Sands/Enabled">
+          <button data-v="OFF">Off</button><button data-v="ON">On</button></div></div>
+      <label class="fld">Schedule</label>
+      <input type="text" class="cfg" id="sandsSlots" placeholder="21:00-08:00@daily" onchange="setStr('Sands/Slots',this.value)">
+      <div class="hint">e.g. <code>21:00-08:00@daily</code> or <code>22:00-07:00@weekdays</code>. The playlist pauses between patterns during these times.</div>
+    </div>
+    <div class="card">
+      <label class="fld">Auto-home every <span class="val" id="ahVal"></span> patterns</label>
+      <input type="range" id="ah" min="0" max="50" oninput="lbl('ahVal',this.value=='0'?'off':this.value)" onchange="setIt('Playlist/AutoHome',this.value)">
+      <div class="row" style="margin-top:14px">
+        <button class="btn grow" onclick="act('$H','Homing…')">&#127968; Home</button>
+        <button class="btn grow warn" onclick="confirmReboot()">Reboot</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="meta"><span>Firmware</span><span id="fwState">—</span></div>
+      <div class="meta" style="margin-top:6px"><span>θ / ρ</span><span id="thr">—</span></div>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const ICON_FLOWER='<svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm0-6c1.6 0 2.7 1.6 2.3 3.1A4 4 0 0 1 18.9 9.7C20.4 9.3 22 10.4 22 12s-1.6 2.7-3.1 2.3a4 4 0 0 1-4.6 4.6C14.7 20.4 13.6 22 12 22s-2.7-1.6-2.3-3.1A4 4 0 0 1 5.1 14.3C3.6 14.7 2 13.6 2 12s1.6-2.7 3.1-2.3A4 4 0 0 1 9.7 5.1C9.3 3.6 10.4 2 12 2z"/></svg>';
+const ICON_PAUSE='<svg viewBox="0 0 24 24"><path d="M7 5h3v14H7zM14 5h3v14h-3z"/></svg>';
+const ICON_PLAY='<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
+
+let patterns=[], playlists=[], last=null, busy=false, pollTimer=null;
+
+// --- command transport -------------------------------------------------
+async function cmd(c){
+  const r=await fetch('/command?plain='+encodeURIComponent(c),{cache:'no-store'});
+  return await r.text();
+}
+function parseJSON(text){
+  for(const line of text.split('\n')){
+    const s=line.trim();
+    if(s && (s[0]==='{'||s[0]==='[')){ try{return JSON.parse(s);}catch(e){} }
+  }
+  return null;
+}
+async function query(c){ return parseJSON(await cmd(c)); }
+async function act(c,msg){ try{ await cmd(c); if(msg) toast(msg); }catch(e){ toast('Failed'); } poll(); }
+function rt(path,msg){ fetch(path,{redirect:'manual',cache:'no-store'}).then(()=>{if(msg)toast(msg);poll();}).catch(()=>toast('Failed')); }
+
+let toastT=null;
+function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),1800); }
+
+// --- status poll -------------------------------------------------------
+async function poll(){
+  let s;
+  try{ s=await query('$Sand/Status'); }
+  catch(e){ setConn(false); return; }
+  if(!s){ setConn(false); return; }
+  setConn(true); render(s); last=s;
+}
+function setConn(ok){
+  $('dot').className='dot '+(ok?'on':'off');
+  if(!ok){ $('state').textContent='offline'; $('state').className='badge'; }
+}
+function render(s){
+  const st=s.state||'—';
+  const b=$('state'); b.textContent=st;
+  b.className='badge'+(st==='Run'?' run':st.startsWith('Hold')?' hold':st==='Alarm'?' alarm':'');
+  $('quiet').hidden=!(s.playlist&&s.playlist.quiet);
+
+  const running=s.running, pl=s.playlist||{};
+  $('npFile').textContent = running? niceName(baseName(s.file)) : (pl.active?'Playlist ready':'Idle');
+  let sub='';
+  if(pl.active && pl.name) sub=(pl.clearing?'Clearing · ':'')+'Playlist "'+pl.name+'"';
+  $('npSub').textContent=sub;
+  const pct = running && s.progress>=0 ? s.progress : (running?null:0);
+  $('npBar').style.width=(pct==null?0:pct)+'%';
+  $('npPct').textContent = running ? (s.progress>=0? s.progress.toFixed(1)+'%':'running') : 'idle';
+  $('npPos').textContent = pl.active && pl.total ? ('#'+(pl.index+1)+' of '+pl.total) : '';
+
+  const hold=st.startsWith('Hold');
+  $('bPause').innerHTML=(hold?ICON_PLAY+'Resume':ICON_PAUSE+'Pause');
+  const idle=(st==='Idle'||st==='—');
+  $('bPause').disabled=idle; $('bStop').disabled=idle; $('bSkip').disabled=!pl.active;
+
+  if(document.activeElement!==$('spd')){ const f=Math.round(s.feed||0); $('spd').value=f; spdLabel(f); }
+  $('fwState').textContent=st;
+  $('thr').textContent=(s.theta!=null?s.theta.toFixed(3):'—')+' / '+(s.rho!=null?s.rho.toFixed(3):'—');
+
+  // LED block presence
+  const hasLed=!!s.led; $('ledCard').hidden=!hasLed; $('ledNone').hidden=hasLed;
+  if(hasLed && !ledTouched){
+    sel('ledEffect',s.led.effect);
+    if(document.activeElement!==$('ledBright')){ $('ledBright').value=s.led.brightness; lbl('ledBrightVal',s.led.brightness); }
+  }
+}
+
+// --- patterns ----------------------------------------------------------
+function baseName(p){ return (p||'').split('/').pop(); }
+function niceName(f){ return f.replace(/\.thr$/i,'').replace(/[_-]+/g,' ').replace(/\s+/g,' ').trim(); }
+function thumbURL(name){ return '/sd/thumbs/'+encodeURIComponent(name)+'.png'; }
+
+async function loadPatterns(){
+  const a=await query('$Sand/Patterns');
+  patterns=Array.isArray(a)?a.filter(n=>/\.thr$/i.test(n)).sort((x,y)=>x.localeCompare(y)):[];
+  renderPatterns();
+}
+function renderPatterns(){
+  const q=$('search').value.trim().toLowerCase();
+  const list=patterns.filter(n=>!q||n.toLowerCase().includes(q));
+  $('patCount').textContent=list.length+(q?' / '+patterns.length:'')+' patterns';
+  $('patEmpty').hidden=patterns.length>0;
+  const g=$('patGrid'); g.innerHTML='';
+  const frag=document.createDocumentFragment();
+  for(const name of list){
+    const t=document.createElement('div'); t.className='tile'; t.onclick=()=>runPattern(name);
+    const th=document.createElement('div'); th.className='thumb';
+    const img=document.createElement('img'); img.loading='lazy'; img.alt='';
+    img.onload=()=>img.classList.add('ok');
+    img.onerror=()=>{img.remove();};
+    img.src=thumbURL(name);
+    const ph=document.createElement('div'); ph.className='ph'; ph.innerHTML=ICON_FLOWER;
+    th.appendChild(ph); th.appendChild(img);
+    const nm=document.createElement('div'); nm.className='tname'; nm.textContent=niceName(name);
+    t.appendChild(th); t.appendChild(nm); frag.appendChild(t);
+  }
+  g.appendChild(frag);
+}
+function runPattern(name){
+  if(last && (last.running||(last.state&&last.state!=='Idle'&&last.state!=='—'))){
+    if(!confirm('Replace the current pattern with "'+niceName(name)+'"?')) return;
+  }
+  act('$SD/Run=/patterns/'+name,'Running '+niceName(name));
+}
+
+// --- playlists ---------------------------------------------------------
+async function loadPlaylists(){
+  const a=await query('$Sand/Playlists');
+  playlists=Array.isArray(a)?a.sort((x,y)=>x.localeCompare(y)):[];
+  const c=$('plList'); c.innerHTML=''; $('plEmpty').hidden=playlists.length>0;
+  for(const f of playlists){
+    const nm=f.replace(/\.(txt|thrl|playlist)$/i,'');
+    const it=document.createElement('div'); it.className='list-item'; it.onclick=()=>runPlaylist(nm);
+    it.innerHTML='<span class="nm">'+esc(nm)+'</span><span class="pl">&#9654; play</span>';
+    c.appendChild(it);
+  }
+}
+function runPlaylist(nm){ act('$Playlist/Run='+nm,'Starting playlist'); }
+
+// --- controls ----------------------------------------------------------
+function pauseResume(){ const st=last&&last.state||''; if(st.startsWith('Hold')) rt('/cyclestart_reload','Resumed'); else rt('/feedhold_reload','Paused'); }
+function stop(){ if(confirm('Stop the table?')) rt('/restart_reload','Stopped'); }
+let spdT=null;
+function spdLabel(v){ $('spdVal').textContent=v+' mm/min'; }
+function setSpeed(v){ clearTimeout(spdT); spdT=setTimeout(()=>act('$THR/Feed='+v),250); }
+function lbl(id,v){ $(id).textContent=v; }
+function setIt(k,v){ act('$'+k+'='+v); }
+function setStr(k,v){ act('$'+k+'='+v,'Saved'); }
+let ledTouched=false;
+function setColor(hex){ ledTouched=true; act('$LED/Color='+hex.replace('#','').toUpperCase()); setTimeout(()=>ledTouched=false,1500); }
+
+// segmented control wiring (setting-backed)
+function sel(groupId,val){
+  const g=$(groupId); if(!g) return;
+  [...g.children].forEach(b=>b.classList.toggle('sel',b.dataset.v===val));
+}
+document.querySelectorAll('.seg[data-setting]').forEach(g=>{
+  g.querySelectorAll('button').forEach(btn=>btn.onclick=()=>{
+    sel(g.id,btn.dataset.v); ledTouched=true;
+    act('$'+g.dataset.setting+'='+btn.dataset.v); setTimeout(()=>ledTouched=false,1500);
+  });
+});
+
+function tab(name,btn){
+  document.querySelectorAll('section').forEach(s=>s.classList.toggle('sel',s.id===name));
+  document.querySelectorAll('nav button').forEach(b=>b.classList.remove('sel'));
+  btn.classList.add('sel');
+  if(name==='settings') loadSettings();
+}
+function confirmReboot(){ if(confirm('Reboot the controller?')) rt('/restart_reload','Rebooting…'); }
+
+// load current setting values into the Settings/Lights/Playlist controls
+async function loadSettings(){
+  const get=async k=>{ const t=await cmd('$'+k); const m=t.match(new RegExp(k.replace(/\//g,'\\/')+'=(\\S+)')); return m?m[1]:null; };
+  try{
+    const slots=await get('Sands/Slots'); if(slots) $('sandsSlots').value=slots;
+    sel('sandsEn', await get('Sands/Enabled')==='1'?'ON':'OFF');
+    const md=await get('Playlist/Mode'); if(md) sel('plMode',md);
+    sel('plShuf', await get('Playlist/Shuffle')==='1'?'ON':'OFF');
+    const pt=await get('Playlist/PauseTime'); if(pt!=null){ $('plPause').value=pt; lbl('plPauseVal',pt+'s'); }
+    const cl=await get('Playlist/ClearPattern'); if(cl) $('plClear').value=cl;
+    const ah=await get('Playlist/AutoHome'); if(ah!=null){ $('ah').value=ah; lbl('ahVal',ah=='0'?'off':ah); }
+    const re=await get('LED/RunEffect'); if(re) $('ledRun').value=re;
+    const ie=await get('LED/IdleEffect'); if(ie) $('ledIdle').value=ie;
+    const sp=await get('LED/Speed'); if(sp!=null){ $('ledSpeed').value=sp; lbl('ledSpeedVal',sp); }
+  }catch(e){}
+}
+function esc(s){ return (s+'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+// --- boot --------------------------------------------------------------
+function startPoll(){ poll(); clearInterval(pollTimer); pollTimer=setInterval(()=>{ if(!document.hidden) poll(); },1000); }
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) poll(); });
+loadPatterns(); loadPlaylists(); loadSettings(); startPoll();
+</script>
+</body>
+</html>

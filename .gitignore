@@ -39,3 +39,7 @@ release/
 # HIL test suite artifacts
 __pycache__/
 .pytest_cache/
+
+# sand-table UI: regenerable mock thumbnails (derived from dune-weaver patterns)
+sandtable_ui/mock_thumbs/
+sandtable_ui/_*.png

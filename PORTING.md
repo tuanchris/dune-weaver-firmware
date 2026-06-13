@@ -27,11 +27,25 @@ Already in firmware (branch `thr-kinematics`):
   excluding source files from the build is the only way to reclaim that
   flash — and the Module system is explicitly designed for it (see
   `FluidNC/src/Module.h`).
-- The React SPA build is ~3.6 MB → can never live in 192 KB littlefs;
-  serve any rich UI **from the SD card**.
-- Previews are pre-rendered WebP (host renders 512×512 with Pillow today).
-  **Never render previews on the ESP32** — generate at upload time
-  (browser/app) and store sidecars on SD.
+- The dune-weaver **React SPA build is ~3.6 MB** → can't live in 192 KB
+  littlefs. But that bundle was the problem, not flash-hosting: FluidNC's
+  own WebUI is `index.html.gz` (117 KB) in littlefs, and our purpose-built
+  SPA is **7.5 KB gzipped** (`sandtable_ui/`, served as
+  `FluidNC/data/index.html.gz`). So **the UI lives in flash**, like the
+  stock one — no SD dependency for the UI itself.
+- **Thumbnails (~38 MB) and patterns (~542 MB) live on SD**, fetched as
+  `/sd/...` over HTTP — FluidNC's catch-all (`handle_not_found` →
+  `myStreamFile`) already resolves the `sd` mount (`FluidPath.cpp:15`),
+  so **no firmware patch is needed** to serve them.
+- Previews are pre-rendered (host renders 512×512 with Pillow today; the
+  existing `cached_images/` holds 1083 PNGs, one per pattern, ~34 KB
+  median — directly reusable). **Never render previews on the ESP32 at
+  display time** — pattern files run up to **5.74 MB / 330k points**, and
+  a 400-pt polyline is an unrecognizable scribble on dense art (verified).
+  Decision: **raster thumbnails** (reuse the existing PNGs; new uploads
+  rendered client-side). Open: a streaming 1-bit firmware rasterizer
+  (`$Sand/Reindex`) so SD-drop-in patterns get thumbnails with no client
+  — the only piece needed for *fully* standalone preview generation.
 
 ## `env:sandtable` (the strip)
 
@@ -188,11 +202,23 @@ To port (in order):
    | upload / delete files | `/files`, `/upload`, `$SD/Delete=` |
    | playlist behavior | `$Playlist/Mode|Shuffle|PauseTime|ClearPattern|AutoHome` |
 
-   NOT yet done: serve a custom UI from SD (needs a ~20-line
-   `myStreamFile`/`handle_not_found` SD-fallback patch — the one small
-   upstream touch worth taking) and the lean SPA itself. Pattern list
-   is unpaginated (~1080 files → ~40 KB JSON, fine on the current heap;
-   paginate if it grows).
+   Pattern list is unpaginated (~1080 files → ~40 KB JSON, fine on the
+   current heap; paginate if it grows).
+8. **Web UI** — DONE 2026-06-13 (`sandtable_ui/`). Self-contained
+   single-file SPA (vanilla HTML/CSS/JS, no build step), gzipped to
+   `FluidNC/data/index.html.gz` (**7.5 KB**, 6 % of littlefs) and served
+   from flash like the stock WebUI — no SD dependency for the UI, no
+   upstream patch (the `/sd/...` serving I'd thought needed a patch is
+   already handled by `FluidPath`). Phone-first dark UI: now-playing with
+   progress + pause/resume/stop/skip + speed, pattern grid with SD
+   thumbnails (`/sd/thumbs/<file>.png`) and graceful placeholders,
+   playlists, lights, quiet-hours/auto-home settings. Polls `$Sand/Status`
+   at 1 Hz; actions via the command map above. `sandtable_ui/mock.py`
+   simulates the firmware for hardware-free preview; `build.py` rebuilds
+   the gz. Verified end-to-end against the mock (idle + running, see
+   `preview_*.png`); **not yet flashed to the board** (USB was
+   disconnected overnight) — flash with
+   `python3 dwg_configs/upload_config.py FluidNC/data/index.html.gz /dev/cu.usbserial-8310 /littlefs/index.html.gz`.
 8. **MQTT/Home Assistant**: esp-mqtt (plain, no TLS) + HA discovery,
    trimmed to ~10 entities (state, current pattern, progress, speed,
    pause/stop/skip, playlist select). Host version has 30+.
