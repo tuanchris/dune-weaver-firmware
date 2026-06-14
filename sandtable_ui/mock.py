@@ -90,11 +90,14 @@ class H(http.server.BaseHTTPRequestHandler):
         if u.path=="/command":
             c=(q.get("plain") or q.get("cmd") or [""])[0]
             return self._send(200,run_cmd(c)+"\nok\n")
-        if u.path in("/feedhold_reload","/cyclestart_reload","/restart_reload","/sand_stop","/sand_feed"):
+        if u.path=="/sand_status":           # multi-client status poll (HTTP body)
+            return self._send(200,json.dumps(status()),"application/json")
+        if u.path in("/feedhold_reload","/cyclestart_reload","/restart_reload","/sand_stop","/sand_home","/sand_feed"):
             if u.path=="/feedhold_reload": sim["state"]="Hold" if sim["file"] else "Idle"
             elif u.path=="/cyclestart_reload":
                 if sim["file"]: sim["state"]="Run"
             elif u.path in("/restart_reload","/sand_stop"): sim.update(state="Idle",file="");sim["pl"]["active"]=False
+            elif u.path=="/sand_home": sim.update(state="Idle")
             return self._send(200,"ok")
         if u.path.startswith("/sd/thumbs/"):
             fp=os.path.join(THUMBS,urllib.parse.unquote(u.path[len("/sd/thumbs/"):]))

@@ -56,6 +56,16 @@ static volatile bool rtSafetyDoor;
 // theta once the machine has settled at Idle.
 static volatile bool rtStopJob = false;
 
+// Set by a web-requested home (/sand_home -> startHomeEvent); the main loop
+// runs the actual $H.  Homing MUST run in protocol_main_loop (the main task):
+// the $H handler blocks in a "while (Homing) protocol_execute_realtime()" loop
+// that pumps Stepper::prep_buffer().  Run inline from Web_Server::poll() (the
+// polling_loop task) it would pump prep_buffer concurrently with the main
+// loop's own prep_buffer call, racing the segment buffer and starving homing
+// to a crawl - which is why UI homing was extremely slow while serial $H
+// (main task only) ran at full speed.
+static volatile bool rtStartHome = false;
+
 volatile bool runLimitLoop;  // Interface to show_limits()
 
 static void protocol_exec_rt_suspend();
@@ -321,6 +331,14 @@ void protocol_main_loop() {
         protocol_execute_realtime();  // Runtime command check point.
         if (sys.abort) {
             sys.abort = false;
+        }
+
+        // Run a web-requested home (/sand_home) here in the main task so its
+        // blocking homing loop is the only thing pumping segment prep.
+        if (rtStartHome && (state_is(State::Idle) || state_is(State::Alarm))) {
+            rtStartHome = false;
+            char line[] = "$H";
+            execute_line(line, allChannels, AuthenticationLevel::LEVEL_GUEST);
         }
 
         // check to see if we should disable the stepper drivers
@@ -593,6 +611,13 @@ void protocol_do_stop_job() {
         unwind_cause = "Stop";  // the main loop calls Job::abort()
     }
     rtStopJob = true;  // main loop normalizes theta once Idle
+}
+
+// Sand-table UI home request.  Just flags it; protocol_main_loop runs the
+// blocking $H in the main task so it doesn't fight the main loop's segment
+// prep (see rtStartHome above).
+void protocol_do_start_home() {
+    rtStartHome = true;
 }
 
 static void protocol_do_feedhold() {
@@ -1179,6 +1204,7 @@ const NoArgEvent safetyDoorEvent { request_safety_door };
 const NoArgEvent feedHoldEvent { protocol_do_feedhold };
 const NoArgEvent cycleStartEvent { protocol_do_cycle_start };
 const NoArgEvent stopJobEvent { protocol_do_stop_job };
+const NoArgEvent startHomeEvent { protocol_do_start_home };
 const NoArgEvent cycleStopEvent { protocol_do_cycle_stop };
 const NoArgEvent motionCancelEvent { protocol_do_motion_cancel };
 const NoArgEvent sleepEvent { protocol_do_sleep };

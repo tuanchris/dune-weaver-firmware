@@ -33,6 +33,11 @@ namespace WebUI {
             mdns_service_add(NULL, service, proto, port, NULL, 0);
         }
     }
+    void Mdns::addTxt(const char* service, const char* proto, const char* key, const char* value) {
+        if (WiFi.getMode() == WIFI_STA && _enable->get()) {
+            mdns_service_txt_item_set(service, proto, key, value);
+        }
+    }
     void Mdns::remove(const char* service, const char* proto) {
         if (WiFi.getMode() == WIFI_STA && _enable->get()) {
             mdns_service_remove(service, proto);

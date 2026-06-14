@@ -19,6 +19,7 @@
   See PORTING.md "JSON API" for the full UI<->firmware command map.
 */
 
+#include "SandApi.h"
 #include "SandStatus.h"
 #include "Playlist.h"
 
@@ -50,46 +51,7 @@ namespace {
     }
 
     Error sandStatus(const char* value, AuthenticationLevel auth_level, Channel& out) {
-        SandStatus::Data d;
-        d.state = state_name();
-
-        if (config && config->_kinematics) {
-            float cartesian[MAX_N_AXIS] = {};
-            config->_kinematics->motors_to_cartesian(cartesian, get_mpos(), Axes::_numberAxis);
-            d.theta = cartesian[X_AXIS];
-            d.rho   = cartesian[Y_AXIS];
-        }
-
-        if (const char* feed = settingValue("THR/Feed")) {
-            d.feed = strtof(feed, nullptr);
-        }
-
-        if (Job::active()) {
-            Channel* job = Job::channel();
-            d.running    = true;
-            d.file       = job->name();
-            d.progress   = SandStatus::parse_sd_percent(job->_progress);
-        }
-
-        Playlist::RuntimeStatus rs;
-        if (Playlist::runtimeStatus(rs)) {
-            d.playlist_active   = rs.active;
-            d.playlist_index    = rs.index;
-            d.playlist_total    = rs.total;
-            d.playlist_name     = rs.name;
-            d.playlist_clearing = rs.clearing;
-            d.quiet             = rs.quiet;
-        }
-
-        if (const char* effect = settingValue("LED/Effect")) {
-            d.has_led    = true;
-            d.led_effect = effect;
-            if (const char* b = settingValue("LED/Brightness")) {
-                d.led_brightness = atoi(b);
-            }
-        }
-
-        writeJson(out, SandStatus::encode(d));
+        writeJson(out, SandApi::statusJson());
         return Error::Ok;
     }
 
@@ -124,4 +86,50 @@ namespace {
     UserCommand sandStatusCmd(NULL, "Sand/Status", sandStatus, nullptr, WG, false);
     UserCommand sandPatternsCmd(NULL, "Sand/Patterns", sandPatterns, nullptr, WG, false);
     UserCommand sandPlaylistsCmd(NULL, "Sand/Playlists", sandPlaylists, nullptr, WG, false);
+}
+
+// Shared status builder.  Defined outside the anonymous namespace so the web
+// server's /sand_status route can reuse it; it still sees the file-local
+// settingValue() helper above (internal linkage, visible for the rest of the TU).
+std::string SandApi::statusJson() {
+    SandStatus::Data d;
+    d.state = state_name();
+
+    if (config && config->_kinematics) {
+        float cartesian[MAX_N_AXIS] = {};
+        config->_kinematics->motors_to_cartesian(cartesian, get_mpos(), Axes::_numberAxis);
+        d.theta = cartesian[X_AXIS];
+        d.rho   = cartesian[Y_AXIS];
+    }
+
+    if (const char* feed = settingValue("THR/Feed")) {
+        d.feed = strtof(feed, nullptr);
+    }
+
+    if (Job::active()) {
+        Channel* job = Job::channel();
+        d.running    = true;
+        d.file       = job->name();
+        d.progress   = SandStatus::parse_sd_percent(job->_progress);
+    }
+
+    Playlist::RuntimeStatus rs;
+    if (Playlist::runtimeStatus(rs)) {
+        d.playlist_active   = rs.active;
+        d.playlist_index    = rs.index;
+        d.playlist_total    = rs.total;
+        d.playlist_name     = rs.name;
+        d.playlist_clearing = rs.clearing;
+        d.quiet             = rs.quiet;
+    }
+
+    if (const char* effect = settingValue("LED/Effect")) {
+        d.has_led    = true;
+        d.led_effect = effect;
+        if (const char* b = settingValue("LED/Brightness")) {
+            d.led_brightness = atoi(b);
+        }
+    }
+
+    return SandStatus::encode(d);
 }

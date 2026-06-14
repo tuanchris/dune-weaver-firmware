@@ -99,6 +99,7 @@ extern const NoArgEvent cycleStartEvent;
 extern const NoArgEvent cycleStopEvent;
 extern const NoArgEvent motionCancelEvent;
 extern const NoArgEvent stopJobEvent;
+extern const NoArgEvent startHomeEvent;
 extern const NoArgEvent sleepEvent;
 extern const NoArgEvent rtResetEvent;
 extern const NoArgEvent debugEvent;

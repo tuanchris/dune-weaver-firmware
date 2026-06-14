@@ -91,6 +91,8 @@ namespace WebUI {
         static void handleRestartReload();
         static void handleDidRestart();
         static void handleSandStop();
+        static void handleSandHome();
+        static void handleSandStatus();
         static void handleSandFeed();
         static void LocalFSFileupload();
         static void handleFileList();

@@ -23,6 +23,7 @@
 #include "WebClient.h"
 
 #include "src/Protocol.h"  // protocol_send_event
+#include "src/SandApi.h"   // SandApi::statusJson() for /sand_status
 #include "src/FluidPath.h"
 #include "src/JSONEncoder.h"
 
@@ -137,6 +138,8 @@ namespace WebUI {
         _webserver->on("/restart_reload", HTTP_ANY, handleRestartReload);
         _webserver->on("/did_restart", HTTP_ANY, handleDidRestart);
         _webserver->on("/sand_stop", HTTP_ANY, handleSandStop);
+        _webserver->on("/sand_home", HTTP_ANY, handleSandHome);
+        _webserver->on("/sand_status", HTTP_ANY, handleSandStatus);
         _webserver->on("/sand_feed", HTTP_ANY, handleSandFeed);
 
         //LocalFS
@@ -189,6 +192,12 @@ namespace WebUI {
         _webserver->begin();
 
         Mdns::add("_http", "_tcp", _port);
+        // Tag this service so a native app can identify a sand table among the
+        // _http._tcp services and learn the webui-v3 WebSocket port (http+2),
+        // which is the app's primary command/status transport.
+        Mdns::addTxt("_http", "_tcp", "model", "dune-weaver");
+        Mdns::addTxt("_http", "_tcp", "api", "sandtable/1");
+        Mdns::addTxt("_http", "_tcp", "ws", std::to_string(_port + 2).c_str());
 
         HashFS::hash_all();
 
@@ -726,6 +735,24 @@ namespace WebUI {
     void Web_Server::handleSandStop() {
         protocol_send_event(&stopJobEvent);
         _webserver->send(200, "text/plain", "ok");
+    }
+
+    // Sand-table UI: home.  Flags the main loop to run $H in the main task -
+    // running $H here (the polling_loop task, via handleClient) makes homing
+    // crawl, because two tasks then pump Stepper::prep_buffer().
+    void Web_Server::handleSandHome() {
+        protocol_send_event(&startHomeEvent);
+        _webserver->send(200, "text/plain", "ok");
+    }
+
+    // Sand-table UI: status snapshot returned directly in the HTTP body.  Unlike
+    // $Sand/Status over /command (whose output goes to the WebSocket channel),
+    // this lets any number of app clients poll status over plain HTTP - the
+    // webui-v3 WebSocket is single-client.  Read-only and fast, and it skips the
+    // block-during-motion gate so status is available while a pattern runs.
+    void Web_Server::handleSandStatus() {
+        _webserver->sendHeader("Cache-Control", "no-store");
+        _webserver->send(200, "application/json", SandApi::statusJson().c_str());
     }
 
     // Sand-table UI: live feed-rate override (works mid-pattern, no flash write).
