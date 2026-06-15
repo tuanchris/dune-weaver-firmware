@@ -55,31 +55,14 @@ namespace {
         return Error::Ok;
     }
 
-    Error listDir(const char* folder, Channel& out) {
-        std::vector<std::string> names;
-        try {
-            FluidPath dir { folder, "sd" };
-            for (auto const& entry : stdfs::directory_iterator { dir }) {
-                if (!entry.is_directory()) {
-                    names.push_back(entry.path().filename().c_str());
-                }
-            }
-        } catch (std::filesystem::filesystem_error const& ex) {
-            log_error_to(out, ex.what());
-            return Error::FsFailedMount;
-        } catch (const Error err) {
-            return err;
-        }
-        writeJson(out, SandStatus::encode_array(names));
+    Error sandPatterns(const char* value, AuthenticationLevel auth_level, Channel& out) {
+        writeJson(out, SandApi::listDirJson("/patterns"));
         return Error::Ok;
     }
 
-    Error sandPatterns(const char* value, AuthenticationLevel auth_level, Channel& out) {
-        return listDir("/patterns", out);
-    }
-
     Error sandPlaylists(const char* value, AuthenticationLevel auth_level, Channel& out) {
-        return listDir("/playlists", out);
+        writeJson(out, SandApi::listDirJson("/playlists"));
+        return Error::Ok;
     }
 
     // Asynchronous so $Sand/Status reports while a pattern is running.
@@ -132,4 +115,38 @@ std::string SandApi::statusJson() {
     }
 
     return SandStatus::encode(d);
+}
+
+std::string SandApi::listDirJson(const char* folder) {
+    std::vector<std::string> names;
+    try {
+        FluidPath dir { folder, "sd" };
+        for (auto const& entry : stdfs::directory_iterator { dir }) {
+            if (!entry.is_directory()) {
+                names.push_back(entry.path().filename().c_str());
+            }
+        }
+    } catch (...) {
+        // Folder missing or SD not mounted -> empty list (HTTP route stays 200).
+    }
+    return SandStatus::encode_array(names);
+}
+
+std::string SandApi::settingsJson() {
+    // App-relevant settings, returned as strings (the app casts numeric ones).
+    static const char* const keys[] = {
+        "THR/Feed",
+        "LED/Effect",      "LED/Color",        "LED/Brightness",        "LED/Speed",
+        "LED/RunEffect",   "LED/IdleEffect",
+        "Playlist/Mode",   "Playlist/Shuffle", "Playlist/PauseTime",    "Playlist/PauseFromStart",
+        "Playlist/ClearPattern", "Playlist/AutoHome",
+        "Sands/Enabled",   "Sands/Slots",
+    };
+    std::vector<std::pair<std::string, std::string>> kv;
+    for (const char* k : keys) {
+        if (const char* v = settingValue(k)) {
+            kv.emplace_back(k, v);
+        }
+    }
+    return SandStatus::encode_object(kv);
 }

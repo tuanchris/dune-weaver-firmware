@@ -47,39 +47,41 @@ port, connect WebSocket to `ws://<host>:<ws>/`. Manual-IP entry is the fallback.
 Commands can be sent on any transport, **but command output routing differs** (verified live against the
 board, 2026-06):
 
-- **HTTP `GET/POST /command?plain=<urlencoded cmd>`** returns the output in the HTTP body reliably **only
-  for `$/` settings reads** (e.g. `$/axes/x/steps_per_mm` → `…=200.000`). Plain `$` commands and `[ESP…]`
-  emit their output **asynchronously to the channel**, so over `/command` the body is **racy** — often
-  empty, sometimes the data, and never safe for concurrent clients. So HTTP `/command` is fine for
-  fire-and-forget actions (`$SD/Run=`, `$THR/Feed=`, `$LED/*`) and `$/` reads, but **do not** rely on it
-  to retrieve `$Sand/Status` / `$Sand/Patterns` JSON — use the dedicated **`GET /sand_status`** route.
+- **HTTP `GET/POST /command?plain=<urlencoded cmd>`** runs the command (the *action* always takes effect),
+  but its **text response is racy** except for `$/` settings reads — plain `$` / `[ESP…]` output is emitted
+  asynchronously and may not reach the request. So use `/command` for **fire-and-forget actions**
+  (`$SD/Run=`, `$THR/Feed=`, `$LED/*`, `$Playlist/*`, settings writes) and confirm via a status poll; for
+  *reads*, use the dedicated `/sand_*` JSON routes below. This fork ships **`HTTP/BlockDuringMotion`
+  defaulted OFF**, so `/command` and `/sd/...` file serving work **while a pattern is playing** (the
+  block-during-motion gate is a CNC-safety default that doesn't apply to a slow sand table); the `/sand_*`
+  routes bypass the gate regardless.
 - **WebSocket (port 82, `webui-v3`)** is the channel for **commands + their responses + live status**.
   Hold **one persistent connection** (it is single-client — a new connect drops/rejects the old one).
   Send commands as text frames terminated with `\n`; responses and `<…>` status frames come back on the
   same socket. Verified: `$RI=200` → `[MSG:INFO: websocket auto report interval set to 200 ms]` + `ok`.
 
-→ **App rule of thumb (multi-client):** poll **`GET /sand_status`** over HTTP for live status, and send
-actions over the HTTP routes / `/command`. All of that is **stateless and multi-client** — any number of
-app instances can do it at once. Reserve the WebSocket for a *single* "active controller" that wants
-smooth high-rate live animation (it's single-client — a new WS connection drops the previous one).
+→ **App rule of thumb (multi-client):** *read* via the `/sand_*` JSON routes (status / patterns / playlists
+/ settings), *act* via `/command` + the `/sand_*` action routes, *fetch files* via `/sd/...`. All of that
+is stateless and multi-client — any number of app instances at once, including during playback. Reserve
+the WebSocket for a *single* "active controller" that wants smooth high-rate live animation (single-client).
 
 > Coordination note: the table is one machine and commands are **last-writer-wins** (a second `$SD/Run`
 > preempts the first — they are not queued). Multi-user works mechanically; any "who's driving" UX is the
 > app's job. Scale assumption is household (a handful of pollers), not crowds — the ESP32 serves HTTP
 > serially and has a small socket pool.
 
-### Status & listing
-| Endpoint | Returns | Transport |
-|----------|---------|-----------|
-| **`GET /sand_status`** | one JSON object (schema below), in the **HTTP body** | HTTP, **multi-client** — preferred for polling |
-| `$Sand/Status` | same JSON | WebSocket (output goes to the WS channel, not the HTTP body) |
-| `$Sand/Patterns` | JSON array of `.thr` filenames in `/patterns` | WebSocket |
-| `$Sand/Playlists` | JSON array of playlist filenames in `/playlists` | WebSocket |
+### Status & listing — multi-client HTTP routes (JSON body, work during motion)
+| Endpoint | Returns |
+|----------|---------|
+| `GET /sand_status` | status object (schema below) |
+| `GET /sand_patterns` | JSON array of `.thr` filenames in `/patterns` |
+| `GET /sand_playlists` | JSON array of playlist filenames in `/playlists` |
+| `GET /sand_settings` | JSON object of app settings (speed, LED, playlist, quiet hours), values as strings |
 
-`GET /sand_status` is read-only, fast, and works **during motion** (it skips the block-during-motion gate),
-so clients keep getting progress while a pattern runs. (`$Sand/Patterns` / `$Sand/Playlists` are still
-WS-only today; they're fetched rarely. Add `/sand_patterns` + `/sand_playlists` HTTP routes the same way if
-the app needs fully WS-free listing — or list via the SD file-list route.)
+These are read-only, fast, and skip the block-during-motion gate, so clients keep reading while a pattern
+runs. The `$Sand/Status` / `$Sand/Patterns` / `$Sand/Playlists` **commands** return the same data but only
+reliably over the (single-client) WebSocket. Pattern/playlist **contents** are fetched as files:
+`GET /sd/patterns/<name>.thr`, `GET /sd/playlists/<name>.txt`.
 
 ### Playback (asynchronous — poll `$Sand/Status` for progress)
 | Command | Action |

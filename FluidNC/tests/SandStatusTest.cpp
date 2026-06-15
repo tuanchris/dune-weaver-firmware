@@ -108,6 +108,16 @@ TEST(SandStatusArray, EscapesEntries) {
     EXPECT_EQ("[\"a\\\"b.thr\"]", encode_array({ "a\"b.thr" }));
 }
 
+TEST(SandStatusObject, EmptyAndPopulated) {
+    EXPECT_EQ("{}", encode_object({}));
+    EXPECT_EQ("{\"THR/Feed\":\"100\"}", encode_object({ { "THR/Feed", "100" } }));
+    EXPECT_EQ("{\"a\":\"1\",\"b\":\"2\"}", encode_object({ { "a", "1" }, { "b", "2" } }));
+}
+
+TEST(SandStatusObject, EscapesKeysAndValues) {
+    EXPECT_EQ("{\"k\\\"\":\"v\\\\\"}", encode_object({ { "k\"", "v\\" } }));
+}
+
 TEST(ParseSdPercent, RealReports) {
     EXPECT_FLOAT_EQ(42.50f, parse_sd_percent("SD:42.50,/sd/star.thr"));
     EXPECT_FLOAT_EQ(0.0f, parse_sd_percent("SD:0.00,/sd/x.thr"));

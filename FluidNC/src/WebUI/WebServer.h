@@ -14,8 +14,12 @@ class WebSocketsServer;
 class WebServer;
 
 namespace WebUI {
-    static const int DEFAULT_HTTP_STATE                 = 1;
-    static const int DEFAULT_HTTP_BLOCKED_DURING_MOTION = 1;
+    static const int DEFAULT_HTTP_STATE = 1;
+    // Sand-table fork: default OFF.  The CNC-safety reason for blocking HTTP
+    // during motion (don't disturb a cut) doesn't apply to a slow sand table,
+    // and blocking it stops the app from controlling / browsing while a pattern
+    // plays.  The dedicated /sand_* routes bypass the gate regardless.
+    static const int DEFAULT_HTTP_BLOCKED_DURING_MOTION = 0;
     static const int DEFAULT_HTTP_PORT                  = 80;
 
     static const int MIN_HTTP_PORT = 1;
@@ -93,6 +97,9 @@ namespace WebUI {
         static void handleSandStop();
         static void handleSandHome();
         static void handleSandStatus();
+        static void handleSandPatterns();
+        static void handleSandPlaylists();
+        static void handleSandSettings();
         static void handleSandFeed();
         static void LocalFSFileupload();
         static void handleFileList();

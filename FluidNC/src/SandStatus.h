@@ -21,6 +21,7 @@
 
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace SandStatus {
 
@@ -55,6 +56,9 @@ namespace SandStatus {
 
     // JSON array of strings, e.g. ["/a.thr","/b.thr"].
     std::string encode_array(const std::vector<std::string>& items);
+
+    // JSON object of string key/value pairs, e.g. {"THR/Feed":"100"}.
+    std::string encode_object(const std::vector<std::pair<std::string, std::string>>& items);
 
     // Percent from an InputFile progress string ("SD:<pct>,<path>");
     // returns -1 when the string is empty or not a percent report.

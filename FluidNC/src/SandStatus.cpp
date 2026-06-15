@@ -122,6 +122,21 @@ namespace SandStatus {
         return o;
     }
 
+    std::string encode_object(const std::vector<std::pair<std::string, std::string>>& items) {
+        std::string o;
+        o += '{';
+        for (size_t i = 0; i < items.size(); i++) {
+            if (i) {
+                o += ',';
+            }
+            append_escaped(o, items[i].first.c_str());
+            o += ':';
+            append_escaped(o, items[i].second.c_str());
+        }
+        o += '}';
+        return o;
+    }
+
     float parse_sd_percent(const std::string& progress) {
         // "SD:<percent>,<path>"; anything else (e.g. "SD: name: Sent" or
         // "") has no parseable percent.

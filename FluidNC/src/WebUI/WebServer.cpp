@@ -140,6 +140,9 @@ namespace WebUI {
         _webserver->on("/sand_stop", HTTP_ANY, handleSandStop);
         _webserver->on("/sand_home", HTTP_ANY, handleSandHome);
         _webserver->on("/sand_status", HTTP_ANY, handleSandStatus);
+        _webserver->on("/sand_patterns", HTTP_ANY, handleSandPatterns);
+        _webserver->on("/sand_playlists", HTTP_ANY, handleSandPlaylists);
+        _webserver->on("/sand_settings", HTTP_ANY, handleSandSettings);
         _webserver->on("/sand_feed", HTTP_ANY, handleSandFeed);
 
         //LocalFS
@@ -753,6 +756,21 @@ namespace WebUI {
     void Web_Server::handleSandStatus() {
         _webserver->sendHeader("Cache-Control", "no-store");
         _webserver->send(200, "application/json", SandApi::statusJson().c_str());
+    }
+
+    // Multi-client HTTP reads (the $Sand/* command equivalents emit asynchronously
+    // and only reach the single-client WebSocket).  All read-only and motion-safe.
+    void Web_Server::handleSandPatterns() {
+        _webserver->sendHeader("Cache-Control", "no-store");
+        _webserver->send(200, "application/json", SandApi::listDirJson("/patterns").c_str());
+    }
+    void Web_Server::handleSandPlaylists() {
+        _webserver->sendHeader("Cache-Control", "no-store");
+        _webserver->send(200, "application/json", SandApi::listDirJson("/playlists").c_str());
+    }
+    void Web_Server::handleSandSettings() {
+        _webserver->sendHeader("Cache-Control", "no-store");
+        _webserver->send(200, "application/json", SandApi::settingsJson().c_str());
     }
 
     // Sand-table UI: live feed-rate override (works mid-pattern, no flash write).

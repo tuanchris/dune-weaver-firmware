@@ -92,6 +92,16 @@ class H(http.server.BaseHTTPRequestHandler):
             return self._send(200,run_cmd(c)+"\nok\n")
         if u.path=="/sand_status":           # multi-client status poll (HTTP body)
             return self._send(200,json.dumps(status()),"application/json")
+        if u.path=="/sand_patterns":
+            return self._send(200,json.dumps(PATTERNS),"application/json")
+        if u.path=="/sand_playlists":
+            return self._send(200,json.dumps(PLAYLISTS),"application/json")
+        if u.path=="/sand_settings":
+            keys=["THR/Feed","LED/Effect","LED/Color","LED/Brightness","LED/Speed",
+                  "LED/RunEffect","LED/IdleEffect","Playlist/Mode","Playlist/Shuffle",
+                  "Playlist/PauseTime","Playlist/PauseFromStart","Playlist/ClearPattern",
+                  "Playlist/AutoHome","Sands/Enabled","Sands/Slots"]
+            return self._send(200,json.dumps({k:str(settings[k]) for k in keys if k in settings}),"application/json")
         if u.path in("/feedhold_reload","/cyclestart_reload","/restart_reload","/sand_stop","/sand_home","/sand_feed"):
             if u.path=="/feedhold_reload": sim["state"]="Hold" if sim["file"] else "Idle"
             elif u.path=="/cyclestart_reload":
