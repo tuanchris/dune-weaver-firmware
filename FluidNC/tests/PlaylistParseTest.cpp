@@ -106,3 +106,35 @@ TEST(ChooseClear, AdaptiveUnknownRhoFallsBackToRandom) {
     EXPECT_EQ(Clear::FromOut, choose_clear(CLEAR_ADAPTIVE, -1.0f, 1));
     EXPECT_EQ(Clear::Sideway, choose_clear(CLEAR_ADAPTIVE, -1.0f, 2));
 }
+
+TEST(ParseClearMode, KnownNamesCaseInsensitive) {
+    int m = -99;
+    EXPECT_TRUE(parse_clear_mode("none", m));
+    EXPECT_EQ(CLEAR_NONE, m);
+    EXPECT_TRUE(parse_clear_mode("Adaptive", m));
+    EXPECT_EQ(CLEAR_ADAPTIVE, m);
+    EXPECT_TRUE(parse_clear_mode("IN", m));
+    EXPECT_EQ(CLEAR_IN, m);
+    EXPECT_TRUE(parse_clear_mode("out", m));
+    EXPECT_EQ(CLEAR_OUT, m);
+    EXPECT_TRUE(parse_clear_mode("sideway", m));
+    EXPECT_EQ(CLEAR_SIDEWAY, m);
+    EXPECT_TRUE(parse_clear_mode("random", m));
+    EXPECT_EQ(CLEAR_RANDOM, m);
+}
+
+TEST(ParseClearMode, SideIsAliasForSideway) {
+    int m = -99;
+    EXPECT_TRUE(parse_clear_mode("side", m));
+    EXPECT_EQ(CLEAR_SIDEWAY, m);
+}
+
+TEST(ParseClearMode, UnknownOrEmptyLeavesModeUntouched) {
+    int m = 42;
+    EXPECT_FALSE(parse_clear_mode("bogus", m));
+    EXPECT_EQ(42, m);
+    EXPECT_FALSE(parse_clear_mode("", m));
+    EXPECT_EQ(42, m);
+    EXPECT_FALSE(parse_clear_mode(nullptr, m));
+    EXPECT_EQ(42, m);
+}

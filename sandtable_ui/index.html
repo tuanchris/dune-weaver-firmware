@@ -544,23 +544,20 @@ async function waitJobIdle(startMs=8000,runMs=900000){
   while(Date.now()-t1<runMs){if(!await jobBusy())return true;await sleep(500);}
   return false;
 }
-// Run a pattern, optionally preceded by a clear.  Each $SD/Run is issued only
-// when the machine is Idle so jobs are never nested on top of one another (the
-// old fixed-400ms timeout fired the pattern while the clear was still running).
+// Run a pattern, optionally preceded by a clear ("pre-execution").  When a clear
+// is requested the firmware sequences clear -> pattern itself via $Sand/Run, so
+// adaptive/random are resolved server-side and the clear+pattern is one safe,
+// fire-and-forget action.  A plain run (no clear) uses $SD/Run after a clean
+// stop, so it still works on tables without a playlist: config section.
 async function runPattern(name,clear){
   if(await jobBusy()){
     if(!confirm('Replace the current pattern?'))return;
-    rt('/sand_stop','Stopped');      // clean stop, keeps position
-    await waitJobIdle(8000);
   }
   if(clear&&clear!='none'){
-    const cf=CLEARFILE[clear];
-    if(cf){
-      await act('$SD/Run='+cf,'Clearing…');
-      toast('Clear then '+nice(name));
-      await waitJobIdle();           // wait for the clear to actually finish
-    }
+    act('$Sand/Run=/patterns/'+name+' clear='+clear,'Running '+nice(name));
+    return;
   }
+  if(await jobBusy()){rt('/sand_stop','Stopped');await waitJobIdle(8000);}
   act('$SD/Run=/patterns/'+name,'Running '+nice(name));
 }
 const CLEARFILE={out:'/patterns/clear_from_out.thr',in:'/patterns/clear_from_in.thr',side:'/patterns/clear_sideway.thr'};

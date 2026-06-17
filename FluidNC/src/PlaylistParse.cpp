@@ -4,6 +4,8 @@
 #include "PlaylistParse.h"
 
 #include <cstdio>
+#include <cstring>
+#include <strings.h>  // strcasecmp
 
 namespace PlaylistParse {
 
@@ -82,5 +84,26 @@ namespace PlaylistParse {
             default:
                 return Clear::None;
         }
+    }
+
+    bool parse_clear_mode(const char* name, int& mode) {
+        if (!name || !*name) {
+            return false;
+        }
+        struct {
+            const char* key;
+            int         value;
+        } table[] = {
+            { "none", CLEAR_NONE },     { "adaptive", CLEAR_ADAPTIVE }, { "in", CLEAR_IN },
+            { "out", CLEAR_OUT },       { "sideway", CLEAR_SIDEWAY },   { "side", CLEAR_SIDEWAY },
+            { "random", CLEAR_RANDOM },
+        };
+        for (auto const& e : table) {
+            if (strcasecmp(name, e.key) == 0) {
+                mode = e.value;
+                return true;
+            }
+        }
+        return false;
     }
 }

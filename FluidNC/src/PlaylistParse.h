@@ -48,4 +48,10 @@ namespace PlaylistParse {
     // near the center is preceded by a clear that ends at the center
     // (clear-from-out), and vice versa.
     Clear choose_clear(int clear_mode, float first_rho, uint32_t rnd);
+
+    // Map a clear-mode name ("none"|"adaptive"|"in"|"out"|"sideway"|"side"
+    // |"random", case-insensitive; "side" is an alias for "sideway") to its
+    // CLEAR_* value.  Returns false (leaving mode untouched) for an empty or
+    // unrecognized name so callers can report a usage error.
+    bool parse_clear_mode(const char* name, int& mode);
 }

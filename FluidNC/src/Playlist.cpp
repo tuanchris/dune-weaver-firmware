@@ -125,8 +125,40 @@ Error Playlist::requestRun(const char* name, Channel& out) {
         return Error::IdleError;
     }
     strlcpy(_req_name, name, sizeof(_req_name));
-    _req_run = true;
+    _req_single         = false;
+    _req_clear_override = -1;  // playlist runs use the $Playlist/ClearPattern setting
+    _req_run            = true;
     log_info_to(out, "Playlist queued: " << name);
+    return Error::Ok;
+}
+
+Error Playlist::runSingle(const char* patternPath, const char* clearMode, Channel& out) {
+    if (!playlistInstance) {
+        log_error_to(out, "No playlist: section in the config (needed to sequence the clear)");
+        return Error::InvalidStatement;
+    }
+    return playlistInstance->requestSingle(patternPath, clearMode, out);
+}
+
+Error Playlist::requestSingle(const char* patternPath, const char* clearMode, Channel& out) {
+    if (!patternPath || !*patternPath) {
+        log_error_to(out, "Usage: $Sand/Run=<file> [clear=none|adaptive|in|out|sideway|random]");
+        return Error::InvalidValue;
+    }
+    if (state_is(State::Alarm) || state_is(State::ConfigAlarm) || state_is(State::Critical)) {
+        log_error_to(out, "Machine is in alarm; home ($H) or unlock ($X) first");
+        return Error::IdleError;
+    }
+    int mode = PlaylistParse::CLEAR_NONE;
+    if (clearMode && *clearMode && !PlaylistParse::parse_clear_mode(clearMode, mode)) {
+        log_error_to(out, "Unknown clear mode; use none|adaptive|in|out|sideway|random");
+        return Error::InvalidValue;
+    }
+    strlcpy(_req_name, patternPath, sizeof(_req_name));
+    _req_single         = true;
+    _req_clear_override = mode;
+    _req_run            = true;
+    log_info_to(out, "Pattern queued: " << patternPath << " clear=" << mode);
     return Error::Ok;
 }
 
@@ -229,7 +261,10 @@ void Playlist::finish(const char* why) {
 // Write the current state into the cross-task snapshot.  Runs in the
 // polling task only.
 void Playlist::publish() {
-    bool active     = _phase != Phase::Off;
+    // A single $Sand/Run uses this machine but is not a playlist, so it never
+    // sets playlist.active (the app reads the running file from the job instead);
+    // its clear phase still surfaces as "clearing" so the UI can show it.
+    bool active     = _phase != Phase::Off && !_single;
     _pub_active     = active;
     _pub_clearing   = _phase == Phase::RunClear;
     _pub_quiet      = _in_quiet;
@@ -319,6 +354,26 @@ bool Playlist::loadPlaylist(const std::string& name) {
     return true;
 }
 
+// Build a synthetic one-item "playlist" so a single $Sand/Run rides the same
+// clear -> pattern -> stop state machine (and the same safe job injection) as a
+// real playlist, without touching SD.  The path is normalized like a playlist
+// line (leading '/').  _single makes the machine finish after one pattern and
+// keeps it out of the playlist status snapshot.
+void Playlist::loadSingle(const std::string& path) {
+    std::string p = path;
+    if (p.empty() || p[0] != '/') {
+        p = "/" + p;
+    }
+    _items.assign(1, p);
+    _order.assign(1, 0);
+    _playlist_name = p;  // not surfaced (active=false) but useful in the log
+    _index         = 0;
+    _since_home    = 0;
+    _clear_done    = false;
+    _pending_clear.clear();
+    log_info("playlist: single pattern " << p << (_clear_override > 0 ? " (with clear)" : ""));
+}
+
 // Read the head of the pattern file and extract its first rho; -1 on failure
 float Playlist::firstRho(const std::string& sdpath) {
     std::string content;
@@ -335,7 +390,9 @@ float Playlist::firstRho(const std::string& sdpath) {
 }
 
 std::string Playlist::clearFileFor(const std::string& patternPath) {
-    int   mode = _clear_mode->get();
+    // A single $Sand/Run carries its own clear mode (the host's pre_execution);
+    // a playlist run uses the persisted $Playlist/ClearPattern setting.
+    int   mode = _clear_override >= 0 ? _clear_override : _clear_mode->get();
     float rho  = mode == PlaylistParse::CLEAR_ADAPTIVE ? firstRho(patternPath) : -1.0f;
 
     std::string chosen;
@@ -397,11 +454,16 @@ Error Playlist::pollLine(char* line) {
         // SAFE deferred path (not a direct Job::abort() in the poller -> UAF).
         // NextItem waits for Idle + !Job::active() before injecting the first
         // command, so the old job is fully torn down before the new one starts.
-        _req_run = false;
+        _req_run        = false;
+        _single         = _req_single;          // staged before _req_run was set
+        _clear_override = _req_clear_override;
         if (Job::active()) {
             protocol_send_event(&stopJobEvent);
         }
-        if (loadPlaylist(std::string(_req_name))) {
+        if (_single) {
+            loadSingle(std::string(_req_name));  // synthetic one-item run, never fails
+            _phase = Phase::NextItem;
+        } else if (loadPlaylist(std::string(_req_name))) {
             _phase = Phase::NextItem;
         } else {
             finish("failed to load");
@@ -418,7 +480,9 @@ Error Playlist::pollLine(char* line) {
                 finish("canceled by alarm");
                 break;
             }
-            if (quietNow(now)) {
+            // Still Sands quiet hours gate playlists between patterns, but an
+            // explicit single $Sand/Run is a deliberate user action and runs now.
+            if (!_single && quietNow(now)) {
                 if (!_in_quiet) {
                     _in_quiet = true;
                     log_info("playlist: Still Sands quiet hours, pausing ($Playlist/Skip overrides for one pattern)");
@@ -443,7 +507,7 @@ Error Playlist::pollLine(char* line) {
                 _index++;
                 _clear_done = false;
                 if (_index >= _order.size()) {
-                    if (_mode->get() == MODE_LOOP) {
+                    if (!_single && _mode->get() == MODE_LOOP) {
                         if (_shuffle->get()) {
                             shuffleOrder();
                         }
@@ -460,7 +524,7 @@ Error Playlist::pollLine(char* line) {
             if (!line || !state_is(State::Idle) || Job::active()) {
                 break;
             }
-            if (_auto_home->get() > 0 && _since_home >= _auto_home->get()) {
+            if (!_single && _auto_home->get() > 0 && _since_home >= _auto_home->get()) {
                 log_info("playlist: homing after " << _since_home << " patterns");
                 snprintf(line, LINE_BUFFER_SIZE, "$H");
                 _phase     = Phase::Homing;
@@ -558,7 +622,7 @@ Error Playlist::pollLine(char* line) {
                 _index++;
                 _clear_done = false;
                 if (_index >= _order.size()) {
-                    if (_mode->get() == MODE_LOOP) {
+                    if (!_single && _mode->get() == MODE_LOOP) {
                         if (_shuffle->get()) {
                             shuffleOrder();
                         }

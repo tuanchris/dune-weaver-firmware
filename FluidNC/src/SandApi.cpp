@@ -65,10 +65,38 @@ namespace {
         return Error::Ok;
     }
 
+    // $Sand/Run=<file> [clear=<mode>] -- run one pattern, optionally preceded by
+    // a clear (the host's "pre_execution").  The clear is sequenced by the
+    // Playlist state machine so the firmware is the single source of truth for
+    // the adaptive/random selection.  Filenames have no spaces, so the path is
+    // the first token and "clear=<mode>" is an optional trailing token.
+    Error sandRun(const char* value, AuthenticationLevel auth_level, Channel& out) {
+        std::string v = value ? value : "";
+        size_t      b = v.find_first_not_of(" \t");
+        if (b == std::string::npos) {
+            log_error_to(out, "Usage: $Sand/Run=<file> [clear=none|adaptive|in|out|sideway|random]");
+            return Error::InvalidValue;
+        }
+        size_t      sp   = v.find_first_of(" \t", b);
+        std::string path = v.substr(b, sp == std::string::npos ? std::string::npos : sp - b);
+
+        std::string clearMode;
+        if (sp != std::string::npos) {
+            size_t cp = v.find("clear=", sp);
+            if (cp != std::string::npos) {
+                cp += 6;  // past "clear="
+                size_t end = v.find_first_of(" \t", cp);
+                clearMode  = v.substr(cp, end == std::string::npos ? std::string::npos : end - cp);
+            }
+        }
+        return Playlist::runSingle(path.c_str(), clearMode.c_str(), out);
+    }
+
     // Asynchronous so $Sand/Status reports while a pattern is running.
     UserCommand sandStatusCmd(NULL, "Sand/Status", sandStatus, nullptr, WG, false);
     UserCommand sandPatternsCmd(NULL, "Sand/Patterns", sandPatterns, nullptr, WG, false);
     UserCommand sandPlaylistsCmd(NULL, "Sand/Playlists", sandPlaylists, nullptr, WG, false);
+    UserCommand sandRunCmd(NULL, "Sand/Run", sandRun, nullptr, WG, false);
 }
 
 // Shared status builder.  Defined outside the anonymous namespace so the web

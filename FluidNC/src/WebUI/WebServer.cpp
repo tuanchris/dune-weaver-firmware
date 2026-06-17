@@ -389,6 +389,7 @@ namespace WebUI {
                          "\n"
                          "Run/playlist, LED & everything else: GET /command?plain=$...\n"
                          "  $SD/Run=/patterns/star.thr | $Playlist/Run=<name>\n"
+                         "  $Sand/Run=/patterns/star.thr clear=adaptive  (clear then run)\n"
                          "  $LED/Effect=rainbow | $LED/Brightness=80   (needs leds: in config)\n");
     }
 

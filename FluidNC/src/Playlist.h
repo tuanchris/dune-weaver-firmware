@@ -104,6 +104,15 @@ public:
     Error requestSkip(Channel& out);
     Error showList(Channel& out);
 
+    // Run a single pattern, optionally preceded by a clear (the host's
+    // "pre_execution").  clearMode is a PlaylistParse clear-mode name
+    // ("none"|"adaptive"|"in"|"out"|"sideway"|"random"); nullptr/empty == none.
+    // This reuses the playlist state machine (clear -> pattern, then stop) so
+    // the clear is sequenced safely, but it is NOT reported as an active
+    // playlist.  Returns InvalidStatement if no playlist: section is configured
+    // (the clear file paths live there).  Static so SandApi can call it.
+    static Error runSingle(const char* patternPath, const char* clearMode, Channel& out);
+
     // Cross-task status snapshot for the JSON API.  Uses fixed buffers
     // (not std::string) so a reader in another task never races a heap
     // free.  Returns false if no playlist module is configured.
@@ -131,7 +140,10 @@ private:
     static constexpr int MODE_SINGLE = 0;
     static constexpr int MODE_LOOP   = 1;
 
+    Error requestSingle(const char* patternPath, const char* clearMode, Channel& out);
+
     bool  loadPlaylist(const std::string& name);
+    void  loadSingle(const std::string& path);  // synthetic one-item run
     bool  quietNow(uint32_t now);
     void  shuffleOrder();
     void  publish();  // copy current state into the cross-task snapshot
@@ -165,6 +177,11 @@ private:
     volatile bool _req_skip = false;
     volatile bool _req_run  = false;
     char          _req_name[128] = {};  // valid while _req_run is set
+    // Staged with _req_name before _req_run is set: whether the queued run is a
+    // single pattern (vs a playlist) and, for single runs, the clear-mode
+    // override (a PlaylistParse CLEAR_* value, or -1 to use the NVS setting).
+    volatile bool _req_single         = false;
+    volatile int  _req_clear_override = -1;
 
     // State machine (polling task only)
     Phase                 _phase = Phase::Off;
@@ -173,6 +190,8 @@ private:
     std::string              _playlist_name;
     std::string              _pending_clear;  // chosen clear file for current item
     size_t                   _index            = 0;
+    bool                     _single           = false;  // one-shot pattern run, not a playlist
+    int                      _clear_override   = -1;     // CLEAR_* for this run, or -1 = use setting
     bool                     _clear_done       = false;  // clear already ran for current item
     bool                     _job_seen         = false;  // injected job has been observed active
     uint32_t                 _inject_ms        = 0;      // when the last line was injected
