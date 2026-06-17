@@ -78,6 +78,8 @@
   .bar{height:7px;border-radius:6px;background:#120e08;overflow:hidden;margin:14px 0 5px}
   .bar>i{display:block;height:100%;width:0;border-radius:6px;
     background:linear-gradient(90deg,var(--sand-d),var(--glow));transition:width .7s ease}
+  .bar>i.indet{width:35%!important;transition:none;animation:indet 1.2s ease-in-out infinite}
+  @keyframes indet{0%{margin-left:-35%}100%{margin-left:100%}}
   .pcts{display:flex;justify-content:space-between;color:var(--faint);font-size:11.5px;font-variant-numeric:tabular-nums}
   .np-ctrl{display:flex;gap:9px;margin-top:14px}
   .quiet{display:inline-flex;align-items:center;gap:5px;color:var(--glow);font-size:12px;font-weight:600}
@@ -449,12 +451,17 @@ function render(s){
   $('quiet').hidden=!pl.quiet;
   const running=s.running;
   $('npDisc').classList.toggle('spin',st=='Run');
+  const clearing=!!pl.clearing;
   $('npName').textContent=running?nice(baseName(s.file)):(pl.active?'Playlist ready':'Idle');
-  let meta='';if(pl.active&&pl.name)meta=(pl.clearing?'Clearing · ':'')+'“'+pl.name+'”';
+  let meta='';if(pl.active&&pl.name)meta=(clearing?'Clearing · ':'')+'“'+pl.name+'”';
   $('npMeta').textContent=meta;
-  const pct=running&&s.progress>=0?s.progress:0;
+  // During a pre-execution clear, progress is -1 and the running file is the
+  // clear pattern, not the chosen one — show a "Clearing…" state, not the bar
+  // (otherwise it would climb through the clear then reset when the pattern starts).
+  const pct=running&&!clearing&&s.progress>=0?s.progress:0;
   $('npBar').style.width=pct+'%';
-  $('npPct').textContent=running?(s.progress>=0?s.progress.toFixed(1)+'%':'running'):'idle';
+  $('npBar').classList.toggle('indet',clearing);
+  $('npPct').textContent=clearing?'Clearing…':(running?(s.progress>=0?s.progress.toFixed(1)+'%':'running'):'idle');
   $('npPos').textContent=pl.active&&pl.total?('#'+(pl.index+1)+' / '+pl.total):'';
   const hold=st.startsWith('Hold'),idle=(st=='Idle'||st=='—');
   $('bPause').innerHTML=(hold?ICON.play+' Resume':ICON.pause+' Pause');

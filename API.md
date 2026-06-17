@@ -138,9 +138,12 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   "feed_override": 110,       // live override % (set via /sand_feed); effective = feed * pct/100
   "running": true,            // an SD job is active
   "file": "/sd/patterns/star.thr",
-  "progress": 42.5,           // 0..100, or -1.0 if unknown
+  "progress": 42.5,           // 0..100, or -1.0 if unknown / during a clear (see playlist.clearing)
   "playlist": { "active": true, "index": 2, "total": 10, "name": "evening",
                 "clearing": false, "quiet": false },
+  //  clearing=true means a pre-execution clear is running before the chosen
+  //  pattern; progress is -1 (unknown) during it. Show a "Clearing…" state, not
+  //  the pattern's progress bar, or it appears to climb then reset to 0.
   "led": { "effect": "rainbow", "brightness": 40 }   // omitted if no leds: config
 }
 ```

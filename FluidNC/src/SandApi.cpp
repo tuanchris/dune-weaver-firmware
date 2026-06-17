@@ -139,6 +139,16 @@ std::string SandApi::statusJson() {
         d.quiet             = rs.quiet;
     }
 
+    // During a pre-execution clear the running file is the CLEAR pattern, not the
+    // one the user picked, so its byte-progress is NOT the pattern's progress.
+    // Report it as unknown (-1) and surface "clearing" via the flag instead;
+    // otherwise the bar climbs through the clear and then "drops" back to ~0 when
+    // the real pattern starts.  (file stays the clear file so clients can label
+    // the phase.)
+    if (rs.clearing) {
+        d.progress = -1.0f;
+    }
+
     if (const char* effect = settingValue("LED/Effect")) {
         d.has_led    = true;
         d.led_effect = effect;
