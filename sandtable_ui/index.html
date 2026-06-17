@@ -531,10 +531,36 @@ async function previewPattern(name){
     $('shDisc').innerHTML='';$('shDisc').appendChild(c);
   }catch(e){}
 }
-function runPattern(name,clear){
-  const busy=last&&(last.running||(last.state&&last.state!='Idle'&&last.state!='—'));
-  if(busy&&!confirm('Replace the current pattern?'))return;
-  if(clear&&clear!='none'){const cf=CLEARFILE[clear];if(cf){act('$SD/Run='+cf,'Clearing…');toast('Clear then '+nice(name));setTimeout(()=>cmd('$SD/Run=/patterns/'+name),400);return;}}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// Live job/motion check over the motion-safe HTTP endpoint (works mid-pattern
+// regardless of the block-during-motion gate, and avoids the single-client WS).
+async function jobBusy(){try{const r=await fetch('/sand_status',{cache:'no-store'});const s=await r.json();return !!(s&&(s.running||(s.state&&s.state!='Idle'&&s.state!='Alarm')));}catch(e){return false;}}
+// Wait for the active job to finish.  startMs: how long to let a freshly-issued
+// $SD/Run leave Idle; runMs: cap on total run time.  Returns true once idle.
+async function waitJobIdle(startMs=8000,runMs=900000){
+  const t0=Date.now();
+  while(Date.now()-t0<startMs){if(await jobBusy())break;await sleep(300);}
+  const t1=Date.now();
+  while(Date.now()-t1<runMs){if(!await jobBusy())return true;await sleep(500);}
+  return false;
+}
+// Run a pattern, optionally preceded by a clear.  Each $SD/Run is issued only
+// when the machine is Idle so jobs are never nested on top of one another (the
+// old fixed-400ms timeout fired the pattern while the clear was still running).
+async function runPattern(name,clear){
+  if(await jobBusy()){
+    if(!confirm('Replace the current pattern?'))return;
+    rt('/sand_stop','Stopped');      // clean stop, keeps position
+    await waitJobIdle(8000);
+  }
+  if(clear&&clear!='none'){
+    const cf=CLEARFILE[clear];
+    if(cf){
+      await act('$SD/Run='+cf,'Clearing…');
+      toast('Clear then '+nice(name));
+      await waitJobIdle();           // wait for the clear to actually finish
+    }
+  }
   act('$SD/Run=/patterns/'+name,'Running '+nice(name));
 }
 const CLEARFILE={out:'/patterns/clear_from_out.thr',in:'/patterns/clear_from_in.thr',side:'/patterns/clear_sideway.thr'};

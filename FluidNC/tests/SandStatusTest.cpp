@@ -42,6 +42,7 @@ TEST(SandStatusEncode, IdleDefaults) {
     EXPECT_TRUE(has(j, "\"running\":false"));
     EXPECT_TRUE(has(j, "\"file\":\"\""));
     EXPECT_TRUE(has(j, "\"progress\":-1.0"));
+    EXPECT_TRUE(has(j, "\"feed_override\":100"));  // default = 100%
     EXPECT_TRUE(has(j, "\"playlist\":{"));
     EXPECT_TRUE(has(j, "\"active\":false"));
     // No LED block unless has_led
@@ -57,6 +58,7 @@ TEST(SandStatusEncode, RunningWithProgressAndPlaylist) {
     d.theta             = 1.2345f;
     d.rho               = 0.5f;
     d.feed              = 120.0f;
+    d.feed_override     = 110;
     d.running           = true;
     d.file              = "/sd/star.thr";
     d.progress          = 42.5f;
@@ -72,6 +74,7 @@ TEST(SandStatusEncode, RunningWithProgressAndPlaylist) {
     EXPECT_TRUE(has(j, "\"theta\":1.2345"));
     EXPECT_TRUE(has(j, "\"rho\":0.5000"));
     EXPECT_TRUE(has(j, "\"feed\":120"));
+    EXPECT_TRUE(has(j, "\"feed_override\":110"));
     EXPECT_TRUE(has(j, "\"running\":true"));
     EXPECT_TRUE(has(j, "\"file\":\"/sd/star.thr\""));
     EXPECT_TRUE(has(j, "\"progress\":42.5"));

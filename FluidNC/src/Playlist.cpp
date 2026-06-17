@@ -377,19 +377,29 @@ Error Playlist::pollLine(char* line) {
         _req_stop = false;
         _req_skip = false;
         if (_phase != Phase::Off) {
-            if (Job::active()) {
-                Job::abort();
-            }
             finish("stopped");
+            // Abort the running clear/pattern via the SAFE deferred path: the
+            // main loop calls Job::abort() only once no line is in flight
+            // (!activeChannel).  Calling Job::abort() directly here in the
+            // poller deletes the job channel while the main loop / output_loop
+            // still reference it -> use-after-free / pure-virtual -> abort().
+            // This is the same path Cmd::StopJob (/sand_stop) already uses.
+            if (Job::active()) {
+                protocol_send_event(&stopJobEvent);
+            }
         }
+        publish();  // reflect the now-Off state in the status snapshot
         return Error::NoData;
     }
 
     if (_req_run) {
-        // Starting (or restarting) a playlist; abort whatever is running
+        // Starting (or restarting) a playlist; abort whatever is running via the
+        // SAFE deferred path (not a direct Job::abort() in the poller -> UAF).
+        // NextItem waits for Idle + !Job::active() before injecting the first
+        // command, so the old job is fully torn down before the new one starts.
         _req_run = false;
         if (Job::active()) {
-            Job::abort();
+            protocol_send_event(&stopJobEvent);
         }
         if (loadPlaylist(std::string(_req_name))) {
             _phase = Phase::NextItem;
@@ -445,8 +455,9 @@ Error Playlist::pollLine(char* line) {
                 }
                 break;
             }
-            // Injecting a command needs a line slot and an idle machine
-            if (!line || !state_is(State::Idle)) {
+            // Injecting a command needs a line slot and an idle machine, and no
+            // job still tearing down (e.g. a deferred abort from skip/restart).
+            if (!line || !state_is(State::Idle) || Job::active()) {
                 break;
             }
             if (_auto_home->get() > 0 && _since_home >= _auto_home->get()) {
@@ -509,14 +520,17 @@ Error Playlist::pollLine(char* line) {
             }
             if (_req_skip) {
                 _req_skip = false;
-                if (Job::active()) {
-                    Job::abort();
-                }
                 log_info("playlist: skipped");
-                if (_phase == Phase::RunClear) {
-                    _phase = Phase::NextItem;  // skip the clear, go to the pattern
-                } else {
-                    goto pattern_done;
+                // Abort the running clear/pattern via the SAFE deferred path
+                // (post stopJobEvent, as $Playlist/Stop does) rather than a
+                // direct Job::abort() here in the poller, which frees the job
+                // channel while the main loop / output_loop still use it ->
+                // use-after-free -> abort().  Once the job goes Idle the
+                // !Job::active() check below advances to the next item exactly
+                // as a normal pattern completion would (RunClear -> NextItem,
+                // RunPattern -> pattern_done).
+                if (Job::active()) {
+                    protocol_send_event(&stopJobEvent);
                 }
                 break;
             }

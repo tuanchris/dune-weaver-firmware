@@ -22,6 +22,9 @@
 #include "Job.h"
 #include "Driver/restart.h"
 
+#include <freertos/semphr.h>
+#include <mutex>
+
 volatile ExecAlarm lastAlarm;  // The most recent alarm code
 
 volatile const char* unwind_cause = nullptr;
@@ -107,10 +110,23 @@ TaskHandle_t outputTask = nullptr;
 
 xQueueHandle message_queue;
 
+// Block until output_loop has fully processed every message currently queued.
+// We enqueue a sentinel (channel == nullptr) and wait for output_loop to reach
+// it: because the queue is FIFO, once the sentinel is consumed every message
+// ahead of it has been completely printed.  This is stronger than polling the
+// queue depth, which races -- output_loop pops the last message (depth hits 0)
+// BEFORE it finishes calling channel->print_msg(), so a caller that deletes a
+// channel on a zero-depth queue can free it mid-print (use-after-free / abort).
 void drain_messages() {
-    while (uxQueueMessagesWaiting(message_queue)) {
-        vTaskDelay(1);  // Let the output task finish sending data
+    static std::mutex        drain_mtx;  // one sentinel round-trip at a time
+    static SemaphoreHandle_t drained = nullptr;
+    std::lock_guard<std::mutex> lock(drain_mtx);
+    if (!drained) {
+        drained = xSemaphoreCreateBinary();
     }
+    LogMessage sentinel { nullptr, drained, MsgLevelNone, false };
+    while (!xQueueSend(message_queue, &sentinel, 10)) {}
+    xSemaphoreTake(drained, portMAX_DELAY);
 }
 
 void output_loop(void* unused) {
@@ -118,6 +134,12 @@ void output_loop(void* unused) {
         // Block until a message is received
         LogMessage message;
         if (xQueueReceive(message_queue, &message, portMAX_DELAY)) {
+            // Sentinel from drain_messages(): channel == nullptr, line holds the
+            // semaphore to release.  Reaching it means everything before it is done.
+            if (message.channel == nullptr) {
+                xSemaphoreGive(static_cast<SemaphoreHandle_t>(message.line));
+                continue;
+            }
             if (message.isString) {
                 std::string* s = static_cast<std::string*>(message.line);
                 message.channel->print_msg(message.level, s->c_str());

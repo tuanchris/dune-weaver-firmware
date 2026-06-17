@@ -96,6 +96,8 @@ namespace WebUI {
         static void handleDidRestart();
         static void handleSandStop();
         static void handleSandHome();
+        static void handleSandPause();
+        static void handleSandResume();
         static void handleSandStatus();
         static void handleSandPatterns();
         static void handleSandPlaylists();

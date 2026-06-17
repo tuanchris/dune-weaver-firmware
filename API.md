@@ -74,7 +74,7 @@ the WebSocket for a *single* "active controller" that wants smooth high-rate liv
 | Endpoint | Returns |
 |----------|---------|
 | `GET /sand_status` | status object (schema below) |
-| `GET /sand_patterns` | JSON array of `.thr` filenames in `/patterns` |
+| `GET /sand_patterns` | JSON array of `.thr` filenames in `/patterns` (hidden/dotfiles filtered) |
 | `GET /sand_playlists` | JSON array of playlist filenames in `/playlists` |
 | `GET /sand_settings` | JSON object of app settings (speed, LED, playlist, quiet hours), values as strings |
 
@@ -133,7 +133,8 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   "state": "Idle|Run|Hold|Alarm|Home|Jog|...",
   "theta": 1.2340,            // radians, accumulates turns
   "rho": 0.5000,              // 0.0 center .. 1.0 perimeter
-  "feed": 100,                // $THR/Feed, motor mm/min
+  "feed": 100,                // $THR/Feed programmed rate, motor mm/min
+  "feed_override": 110,       // live override % (set via /sand_feed); effective = feed * pct/100
   "running": true,            // an SD job is active
   "file": "/sd/patterns/star.thr",
   "progress": 42.5,           // 0..100, or -1.0 if unknown

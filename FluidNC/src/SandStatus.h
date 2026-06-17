@@ -12,7 +12,7 @@
 
   The document is a compact single-line JSON object, e.g.
 
-    {"state":"Run","theta":1.2340,"rho":0.5000,"feed":100,"running":true,
+    {"state":"Run","theta":1.2340,"rho":0.5000,"feed":100,"feed_override":110,"running":true,
      "file":"/sd/star.thr","progress":42.5,
      "playlist":{"active":true,"index":2,"total":10,"name":"evening",
                  "clearing":false,"quiet":false},
@@ -30,7 +30,8 @@ namespace SandStatus {
 
         float theta = 0.0f;  // radians (ThetaRho cartesian X)
         float rho   = 0.0f;  // 0..1    (ThetaRho cartesian Y)
-        float feed  = 0.0f;  // $THR/Feed, motor mm/min
+        float feed  = 0.0f;  // $THR/Feed programmed rate, motor mm/min
+        int   feed_override = 100;  // live feed-rate override, percent (sys.f_override)
 
         bool        running  = false;  // a file job is active
         std::string file;              // current job file, empty if none

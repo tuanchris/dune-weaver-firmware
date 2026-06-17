@@ -88,12 +88,17 @@ std::string SandApi::statusJson() {
     if (const char* feed = settingValue("THR/Feed")) {
         d.feed = strtof(feed, nullptr);
     }
+    // Live override (set by /sand_feed) so the app can read back the effective
+    // rate: effective mm/min = feed * feed_override / 100.
+    d.feed_override = sys.f_override;
 
-    if (Job::active()) {
-        Channel* job = Job::channel();
-        d.running    = true;
-        d.file       = job->name();
-        d.progress   = SandStatus::parse_sd_percent(job->_progress);
+    // Single locked fetch of the job source (runs in the poller task, which is
+    // also the only task that pops, so the returned pointer stays valid here).
+    if (JobSource* src = Job::source()) {
+        Channel* ch = src->channel();
+        d.running   = true;
+        d.file      = ch->name();
+        d.progress  = SandStatus::parse_sd_percent(ch->_progress);
     }
 
     Playlist::RuntimeStatus rs;
@@ -122,9 +127,15 @@ std::string SandApi::listDirJson(const char* folder) {
     try {
         FluidPath dir { folder, "sd" };
         for (auto const& entry : stdfs::directory_iterator { dir }) {
-            if (!entry.is_directory()) {
-                names.push_back(entry.path().filename().c_str());
+            if (entry.is_directory()) {
+                continue;
             }
+            std::string name = entry.path().filename().c_str();
+            // Skip hidden / macOS metadata files (".DS_Store", "._foo.thr").
+            if (name.empty() || name[0] == '.') {
+                continue;
+            }
+            names.push_back(name);
         }
     } catch (...) {
         // Folder missing or SD not mounted -> empty list (HTTP route stays 200).

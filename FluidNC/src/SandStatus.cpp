@@ -75,6 +75,8 @@ namespace SandStatus {
         append_float(o, d.rho, 4);
         o += ",\"feed\":";
         append_float(o, d.feed, 0);
+        o += ",\"feed_override\":";
+        append_int(o, d.feed_override);
         o += ",\"running\":";
         o += d.running ? "true" : "false";
         o += ",\"file\":";

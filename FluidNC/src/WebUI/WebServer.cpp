@@ -107,13 +107,16 @@ namespace WebUI {
         size_t      headerkeyssize = sizeof(headerkeys) / sizeof(char*);
         _webserver->collectHeaders(headerkeys, headerkeyssize);
 
-        _socket_server = new WebSocketsServer(_port + 1);
-        _socket_server->begin();
-        _socket_server->onEvent(handle_Websocket_Event);
-
-        _socket_serverv3 = new WebSocketsServer(_port + 2, "", "webui-v3");
-        _socket_serverv3->begin();
-        _socket_serverv3->onEvent(handle_Websocketv3_Event);
+        // Sand-table fork: the WebUI WebSockets are intentionally NOT started.
+        // They stream status / read machine, Job and report state from the
+        // poller task concurrently with motion, which races the running pattern
+        // and panics the board (StoreProhibited).  This headless build is driven
+        // entirely by the stateless HTTP API (/sand_* + /command), which any
+        // number of clients can poll safely.  Every use of _socket_server /
+        // _socket_serverv3 below is null-guarded, so leaving them NULL turns the
+        // whole WebSocket path into a no-op.
+        _socket_server   = NULL;
+        _socket_serverv3 = NULL;
 
         //events functions
         //_web_events->onConnect(handle_onevent_connect);
@@ -139,6 +142,8 @@ namespace WebUI {
         _webserver->on("/did_restart", HTTP_ANY, handleDidRestart);
         _webserver->on("/sand_stop", HTTP_ANY, handleSandStop);
         _webserver->on("/sand_home", HTTP_ANY, handleSandHome);
+        _webserver->on("/sand_pause", HTTP_ANY, handleSandPause);
+        _webserver->on("/sand_resume", HTTP_ANY, handleSandResume);
         _webserver->on("/sand_status", HTTP_ANY, handleSandStatus);
         _webserver->on("/sand_patterns", HTTP_ANY, handleSandPatterns);
         _webserver->on("/sand_playlists", HTTP_ANY, handleSandPlaylists);
@@ -362,16 +367,29 @@ namespace WebUI {
     }
 
     void Web_Server::handle_root() {
-        log_info("WebUI: Request from " << _webserver->client().remoteIP());
-        if (!(_webserver->hasArg("forcefallback") && _webserver->arg("forcefallback") == "yes")) {
-            if (myStreamFile("index.html")) {
-                return;
-            }
-        }
-
-        // If we did not send index.html, send the default content that provides simple localfs file management
-        _webserver->sendHeader("Content-Encoding", "gzip");
-        _webserver->send_P(200, "text/html", PAGE_NOFILES, PAGE_NOFILES_SIZE);
+        // Headless sand-table build: no web UI is served.  The board is driven
+        // entirely by the stateless HTTP API (and runs playlists autonomously
+        // once triggered), so a browser hitting the IP just gets this plain map
+        // of the API instead of a single-page app or the WebUI file manager.
+        _webserver->sendHeader("Cache-Control", "no-store");
+        _webserver->send(200,
+                         "text/plain",
+                         "FluidNC sand-table headless API\n"
+                         "\n"
+                         "Status     GET /sand_status      (poll ~1s; JSON)\n"
+                         "Patterns   GET /sand_patterns\n"
+                         "Playlists  GET /sand_playlists\n"
+                         "Settings   GET /sand_settings\n"
+                         "\n"
+                         "Home       GET /sand_home\n"
+                         "Stop       GET /sand_stop\n"
+                         "Pause      GET /sand_pause\n"
+                         "Resume     GET /sand_resume\n"
+                         "Speed      GET /sand_feed?d=up|down|reset\n"
+                         "\n"
+                         "Run/playlist, LED & everything else: GET /command?plain=$...\n"
+                         "  $SD/Run=/patterns/star.thr | $Playlist/Run=<name>\n"
+                         "  $LED/Effect=rainbow | $LED/Brightness=80   (needs leds: in config)\n");
     }
 
     // Handle filenames and other things that are not explicitly registered
@@ -745,6 +763,18 @@ namespace WebUI {
     // crawl, because two tasks then pump Stepper::prep_buffer().
     void Web_Server::handleSandHome() {
         protocol_send_event(&startHomeEvent);
+        _webserver->send(200, "text/plain", "ok");
+    }
+
+    // Sand-table API: pause / resume a running pattern.  Both post a realtime
+    // event to the main loop (feed hold / cycle start), so they work mid-motion
+    // and never touch the block-during-motion gate or any WebSocket.
+    void Web_Server::handleSandPause() {
+        protocol_send_event(&feedHoldEvent);
+        _webserver->send(200, "text/plain", "ok");
+    }
+    void Web_Server::handleSandResume() {
+        protocol_send_event(&cycleStartEvent);
         _webserver->send(200, "text/plain", "ok");
     }
 
