@@ -132,3 +132,35 @@ TEST(ParseSdPercent, NonProgressStrings) {
     EXPECT_FLOAT_EQ(-1.0f, parse_sd_percent("SD: star.thr: Sent"));
     EXPECT_FLOAT_EQ(-1.0f, parse_sd_percent("garbage"));
 }
+
+TEST(ExecutedPercent, ZeroSizeIsZero) {
+    EXPECT_FLOAT_EQ(0.0f, executed_percent(0, 0, 0, 0));
+    EXPECT_FLOAT_EQ(0.0f, executed_percent(100, 0, 5, 0));
+}
+
+TEST(ExecutedPercent, NoQueuedEqualsRawReadPosition) {
+    // queued_blocks == 0 -> no look-ahead to subtract -> bytes-read / size
+    EXPECT_NEAR(50.0f, executed_percent(500, 1000, 100, 0), 0.001f);
+    EXPECT_NEAR(100.0f, executed_percent(1000, 1000, 100, 0), 0.001f);
+}
+
+TEST(ExecutedPercent, SubtractsLookaheadAtStart) {
+    // 16 lines read (~10 bytes each), planner holds 15 -> almost all of the read
+    // bytes are still queued, so executed progress is ~0, not the naive 8%.
+    // avg=160/16=10, inflight=15*10=150, executed=10 -> 10/2000 = 0.5%
+    EXPECT_NEAR(0.5f, executed_percent(160, 2000, 16, 15), 0.01f);
+    // naive bytes-read/size would have been 8%:
+    EXPECT_NEAR(8.0f, 160.0f * 100.0f / 2000.0f, 0.01f);
+}
+
+TEST(ExecutedPercent, MidRunRemovesConstantLead) {
+    // avg=1000/100=10, inflight=15*10=150, executed=850 -> 42.5%  (naive 50%)
+    EXPECT_NEAR(42.5f, executed_percent(1000, 2000, 100, 15), 0.01f);
+}
+
+TEST(ExecutedPercent, FloorsAtZeroAndClampsAt100) {
+    // inflight exceeds the read position -> floored at 0
+    EXPECT_FLOAT_EQ(0.0f, executed_percent(100, 2000, 5, 50));
+    // position beyond size (shouldn't happen) -> clamped to 100
+    EXPECT_FLOAT_EQ(100.0f, executed_percent(2000, 1000, 100, 0));
+}

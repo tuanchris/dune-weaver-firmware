@@ -64,4 +64,14 @@ namespace SandStatus {
     // Percent from an InputFile progress string ("SD:<pct>,<path>");
     // returns -1 when the string is empty or not a percent report.
     float parse_sd_percent(const std::string& progress);
+
+    // Percent of a running file whose MOTION has been executed, as opposed to
+    // the raw read position.  The file reader runs ahead of the table by the
+    // moves still queued in the planner, so a naive bytes-read/size jumps to a
+    // large value and freezes at the start of a small file (e.g. ~8% on a
+    // 181-line pattern).  Subtracting the queued look-ahead (estimated as
+    // queued_blocks * average bytes per line) makes progress start near 0 and
+    // track the table, matching the host's coordinate-based progress.
+    // Clamped to [0,100]; returns 0 when size is 0.
+    float executed_percent(size_t position, size_t size, size_t lines_read, size_t queued_blocks);
 }

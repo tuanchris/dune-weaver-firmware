@@ -4,6 +4,9 @@
 #include "InputFile.h"
 
 #include "Report.h"
+#include "Planner.h"                 // plan_get_block_buffer_available()
+#include "Machine/MachineConfig.h"   // config->_planner_blocks
+#include "SandStatus.h"              // executed_percent()
 
 InputFile::InputFile(const char* defaultFs, const char* path) : FileStream(path, "r", defaultFs) {}
 /*
@@ -82,7 +85,15 @@ Error InputFile::pollLine(char* line) {
     }
     switch (auto err = readLine(line, Channel::maxLine)) {
         case Error::Ok: {
-            float percent_complete = ((float)position()) * 100.0f / size();
+            // Report progress against the move being EXECUTED, not the one just
+            // read: the reader runs ahead of the table by the moves still queued
+            // in the planner.  plan_get_block_buffer_available() returns the free
+            // slots; capacity is planner_blocks-1 (one slot is always reserved,
+            // see Planner.cpp), so queued = (planner_blocks-1) - free.
+            size_t cap     = config && config->_planner_blocks ? config->_planner_blocks - 1 : 0;
+            size_t avail   = plan_get_block_buffer_available();
+            size_t queued  = cap > avail ? cap - avail : 0;
+            float percent_complete = SandStatus::executed_percent(position(), size(), _line_number, queued);
 
             std::ostringstream s;
             s << "SD:" << std::fixed << std::setprecision(2) << percent_complete << "," << path().c_str();

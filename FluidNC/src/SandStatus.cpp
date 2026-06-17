@@ -139,6 +139,24 @@ namespace SandStatus {
         return o;
     }
 
+    float executed_percent(size_t position, size_t size, size_t lines_read, size_t queued_blocks) {
+        if (size == 0) {
+            return 0.0f;
+        }
+        float pos      = static_cast<float>(position);
+        float avg_line = lines_read ? pos / static_cast<float>(lines_read) : 0.0f;
+        float inflight = static_cast<float>(queued_blocks) * avg_line;
+        float executed = pos > inflight ? pos - inflight : 0.0f;
+        float pct      = executed * 100.0f / static_cast<float>(size);
+        if (pct < 0.0f) {
+            return 0.0f;
+        }
+        if (pct > 100.0f) {
+            return 100.0f;
+        }
+        return pct;
+    }
+
     float parse_sd_percent(const std::string& progress) {
         // "SD:<percent>,<path>"; anything else (e.g. "SD: name: Sent" or
         // "") has no parseable percent.
