@@ -85,6 +85,7 @@ enum AccessoryOverride {
 };
 
 extern const ArgEvent feedOverrideEvent;
+extern const ArgEvent feedOverrideSetEvent;
 extern const ArgEvent rapidOverrideEvent;
 extern const ArgEvent spindleOverrideEvent;
 extern const ArgEvent accessoryOverrideEvent;

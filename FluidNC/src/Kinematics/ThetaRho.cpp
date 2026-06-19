@@ -30,8 +30,12 @@ namespace Kinematics {
         handler.item("default_feed_mm_per_min", _default_feed, 0.0f, 100000.0f);
     }
 
+    ThetaRho* ThetaRho::_instance = nullptr;
+    int       ThetaRho::_live_feed = -1;
+
     void ThetaRho::init() {
         log_info("Kinematic system: " << name());
+        _instance = this;
 
         _theta_scale = _theta_mm_per_rev / TWO_PI;
 
@@ -115,7 +119,7 @@ namespace Kinematics {
     void ThetaRho::start_job(const std::string& name, const Channel* channel) {
         _job_name    = name;
         _job_channel = channel;
-        _translator.start(_feed_setting ? static_cast<float>(_feed_setting->get()) : _default_feed);
+        _translator.start(_feed_setting ? static_cast<float>(effectiveFeed()) : _default_feed);
         normalize_theta();
         log_info("ThetaRho: running theta-rho job " << name);
     }
@@ -123,7 +127,34 @@ namespace Kinematics {
     void ThetaRho::end_job() {
         _job_name.clear();
         _job_channel = nullptr;
+        _live_feed   = -1;  // the /sand_feed?mm override is per-pattern
         normalize_theta();
+    }
+
+    // Effective base feed: the in-memory live override if set, else $THR/Feed.
+    int ThetaRho::effectiveFeed() {
+        if (!_instance || !_instance->_feed_setting) {
+            return -1;
+        }
+        return _live_feed >= 0 ? _live_feed : _instance->_feed_setting->get();
+    }
+
+    // Set the base feed (mm/min) live.  Idle: persist to $THR/Feed (and drop
+    // the override so the setting stays authoritative).  Running: in-memory
+    // override (no flash write), applied on the next move, cleared at end_job.
+    Error ThetaRho::setFeedLive(int mm_per_min) {
+        if (!_instance || !_instance->_feed_setting) {
+            return Error::InvalidStatement;
+        }
+        if (mm_per_min < 0 || mm_per_min > 100000) {
+            return Error::NumberRange;
+        }
+        if (state_is(State::Idle) || state_is(State::Alarm)) {
+            _live_feed = -1;
+            return _instance->_feed_setting->setStringValue(std::to_string(mm_per_min));
+        }
+        _live_feed = mm_per_min;
+        return Error::Ok;
     }
 
     // Called when a pattern is stopped (Cmd::StopJob) or finished: close out
@@ -157,8 +188,9 @@ namespace Kinematics {
         bool was_locked = _translator.offset_locked();
 
         if (_feed_setting) {
-            // Live feed: a changed $THR/Feed takes effect on the next move
-            _translator.set_feed(static_cast<float>(_feed_setting->get()));
+            // Live feed: a changed $THR/Feed (idle) or /sand_feed?mm (mid-run)
+            // takes effect on the next move.
+            _translator.set_feed(static_cast<float>(effectiveFeed()));
         }
         switch (_translator.translate(line, line, maxlen)) {
             case ThrLine::Skip:

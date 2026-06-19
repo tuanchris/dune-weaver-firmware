@@ -140,6 +140,22 @@ Error Playlist::runSingle(const char* patternPath, const char* clearMode, Channe
     return playlistInstance->requestSingle(patternPath, clearMode, out);
 }
 
+bool Playlist::stopActive() {
+    if (!playlistInstance) {
+        return false;
+    }
+    Playlist* p = playlistInstance;
+    if (p->_phase == Phase::Off && !p->_req_run) {
+        return false;  // nothing sequencing; the caller's job abort is enough
+    }
+    // Same request the $Playlist/Stop command sets; pollLine() will finish()
+    // the sequence to Off (and abort the job) on its next tick, so it never
+    // advances clear -> pattern or pattern -> next.
+    p->_req_run  = false;
+    p->_req_stop = true;
+    return true;
+}
+
 Error Playlist::requestSingle(const char* patternPath, const char* clearMode, Channel& out) {
     if (!patternPath || !*patternPath) {
         log_error_to(out, "Usage: $Sand/Run=<file> [clear=none|adaptive|in|out|sideway|random]");

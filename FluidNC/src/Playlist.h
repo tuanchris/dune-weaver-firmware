@@ -113,6 +113,13 @@ public:
     // (the clear file paths live there).  Static so SandApi can call it.
     static Error runSingle(const char* patternPath, const char* clearMode, Channel& out);
 
+    // Stop the playlist / single-run (clear->pattern) sequence if one is
+    // active, so a global stop (/sand_stop) halts the whole sequence instead
+    // of letting the state machine advance to the next item (the aborted job
+    // going Idle otherwise looks like normal completion).  Returns true if a
+    // sequence was active.  Static + safe when no playlist module exists.
+    static bool stopActive();
+
     // Cross-task status snapshot for the JSON API.  Uses fixed buffers
     // (not std::string) so a reader in another task never races a heap
     // free.  Returns false if no playlist module is configured.

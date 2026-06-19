@@ -25,6 +25,8 @@
 #include "src/Protocol.h"  // protocol_send_event
 #include "src/SandApi.h"   // SandApi::statusJson() for /sand_status
 #include "src/Leds.h"      // Leds::instance() for /sand_led
+#include "src/Playlist.h"  // Playlist::stopActive() for /sand_stop
+#include "src/Kinematics/ThetaRho.h"  // ThetaRho::setFeedLive() for /sand_feed?mm
 #include "src/FluidPath.h"
 #include "src/JSONEncoder.h"
 
@@ -387,7 +389,7 @@ namespace WebUI {
                          "Stop       GET /sand_stop\n"
                          "Pause      GET /sand_pause\n"
                          "Resume     GET /sand_resume\n"
-                         "Speed      GET /sand_feed?d=up|down|reset\n"
+                         "Speed      GET /sand_feed?mm=<0..100000> | pct=<10..200> | d=up|down|reset\n"
                          "LEDs       GET /sand_led?effect=|palette=|color=|color2=|brightness=|speed=\n"
                          "\n"
                          "Run/playlist, LED & everything else: GET /command?plain=$...\n"
@@ -758,6 +760,10 @@ namespace WebUI {
 
     // Sand-table UI: clean stop (keeps position, no re-home) - see Cmd::StopJob.
     void Web_Server::handleSandStop() {
+        // Stop the clear->pattern / playlist sequence first, so the state
+        // machine goes Off instead of treating the aborted job's return to
+        // Idle as normal completion and advancing to the pattern / next item.
+        Playlist::stopActive();
         protocol_send_event(&stopJobEvent);
         _webserver->send(200, "text/plain", "ok");
     }
@@ -807,9 +813,26 @@ namespace WebUI {
         _webserver->send(200, "application/json", SandApi::settingsJson().c_str());
     }
 
-    // Sand-table UI: live feed-rate override (works mid-pattern, no flash write).
-    //   /sand_feed?d=up | down | reset
+    // Sand-table UI: live feed control (works mid-pattern, no flash write).
+    //   /sand_feed?mm=<0..100000>  set the base feed rate in motor mm/min
+    //   /sand_feed?pct=<10..200>   scale it by an absolute override percentage
+    //   /sand_feed?d=up|down|reset coarse override step / reset to 100%
+    // mm sets the actual speed ($THR/Feed) directly; pct scales it. Both are
+    // reported back by /sand_status (feed, feed_override).
     void Web_Server::handleSandFeed() {
+        if (_webserver->hasArg("mm")) {
+            if (Kinematics::ThetaRho::setFeedLive(_webserver->arg("mm").toInt()) != Error::Ok) {
+                _webserver->send(400, "text/plain", "mm out of range (0..100000)");
+            } else {
+                _webserver->send(200, "text/plain", "ok");
+            }
+            return;
+        }
+        if (_webserver->hasArg("pct")) {
+            protocol_send_event(&feedOverrideSetEvent, _webserver->arg("pct").toInt());
+            _webserver->send(200, "text/plain", "ok");
+            return;
+        }
         std::string d = _webserver->hasArg("d") ? _webserver->arg("d").c_str() : "";
         if (d == "up") {
             protocol_send_event(&feedOverrideEvent, FeedOverride::CoarseIncrement);

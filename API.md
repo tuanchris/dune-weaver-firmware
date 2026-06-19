@@ -100,8 +100,12 @@ reliably over the (single-client) WebSocket. Pattern/playlist **contents** are f
 ### Speed
 | Command | Notes |
 |---------|-------|
-| `$THR/Feed=<mm_per_min>` | motor mm/min, 0..100000, NVS-persisted; applied on the next `.thr` move (live) |
-| `/sand_feed?d=up\|down\|reset` | HTTP one-shot coarse feed-override ±/reset |
+| `/sand_feed?mm=<0..100000>` | set base feed rate (motor mm/min) live; works mid-pattern. Idle → persists to `$THR/Feed`; running → in-memory, per-pattern (resets next pattern) |
+| `$THR/Feed=<mm_per_min>` | same base rate, NVS-persisted; idle-gated; applied on the next `.thr` move |
+| `/sand_feed?pct=<10..200>` | scale the base rate by an absolute override percentage; works mid-pattern |
+| `/sand_feed?d=up\|down\|reset` | HTTP one-shot coarse feed-override ±10% / reset to 100% |
+
+Effective speed = base feed (`feed`) × `feed_override`/100; both are in `/sand_status`.
 
 ### LEDs (NVS-persisted; only present if `leds:` is configured)
 `$LED/Effect=<name>` · `$LED/Palette=<name>` · `$LED/Color=RRGGBB` · `$LED/Color2=RRGGBB` ·

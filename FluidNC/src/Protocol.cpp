@@ -1106,6 +1106,23 @@ static void protocol_do_feed_override(void* incrementvp) {
     }
 }
 
+// Set the feed override to an absolute percentage (clamped), unlike
+// protocol_do_feed_override which applies a relative increment.  Lets a
+// client supply a target speed directly instead of stepping up/down.
+static void protocol_do_set_feed_override(void* percentvp) {
+    int percent = int(percentvp);
+    if (percent > FeedOverride::Max) {
+        percent = FeedOverride::Max;
+    } else if (percent < FeedOverride::Min) {
+        percent = FeedOverride::Min;
+    }
+    if (percent != sys.f_override) {
+        sys.f_override = percent;
+        update_velocities();
+        gc_ovr_changed();
+    }
+}
+
 static void protocol_do_rapid_override(void* percentvp) {
     int percent = int(percentvp);
     if (percent != sys.r_override) {
@@ -1215,6 +1232,7 @@ void protocol_do_rt_reset() {
 }
 
 const ArgEvent feedOverrideEvent { protocol_do_feed_override };
+const ArgEvent feedOverrideSetEvent { protocol_do_set_feed_override };
 const ArgEvent rapidOverrideEvent { protocol_do_rapid_override };
 const ArgEvent spindleOverrideEvent { protocol_do_spindle_override };
 const ArgEvent accessoryOverrideEvent { protocol_do_accessory_override };

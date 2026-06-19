@@ -29,6 +29,7 @@
 #include "System.h"               // get_mpos()
 #include "Machine/MachineConfig.h"
 #include "Kinematics/Kinematics.h"
+#include "Kinematics/ThetaRho.h"  // live base-feed override for status + /sand_feed?mm
 #include "Job.h"
 #include "FluidPath.h"
 
@@ -128,6 +129,10 @@ std::string SandApi::statusJson() {
 
     if (const char* feed = settingValue("THR/Feed")) {
         d.feed = strtof(feed, nullptr);
+    }
+    // Reflect a live /sand_feed?mm base-feed override active during a run.
+    if (int live = Kinematics::ThetaRho::effectiveFeed(); live >= 0) {
+        d.feed = static_cast<float>(live);
     }
     // Live override (set by /sand_feed) so the app can read back the effective
     // rate: effective mm/min = feed * feed_override / 100.

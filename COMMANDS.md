@@ -10,7 +10,8 @@ behind each command see `FluidNC/src/SandApi.cpp`, `Playlist.cpp`, `Leds.cpp`,
 ## Setup
 
 ```bash
-B=http://fluidnc.local        # mDNS name; or the LAN IP, e.g. http://192.168.68.160
+B=http://192.168.68.160       # LAN IP (preferred); or the mDNS name, e.g. http://DWMP.local
+#   hostname comes from `hostname:` in config.yaml (this table: DWMP), else $Hostname (default fluidnc)
 ```
 
 - In a shell, `\$` escapes the `$` so it isn't treated as a variable.
@@ -48,7 +49,9 @@ curl "$B/command?plain=\$SD/Run=/patterns/star.thr"
 #   from the pattern's first rho).  Needs a playlist: config section.
 curl "$B/command?plain=\$Sand/Run=/patterns/star.thr%20clear=adaptive"
 
-# Clean stop (decel to Idle, keeps position, no re-home needed)
+# Clean stop (decel to Idle, keeps position, no re-home needed).
+# Stops the WHOLE sequence: if a pre-execution clear or a playlist is running,
+# it halts everything rather than advancing clear->pattern or pattern->next.
 curl "$B/sand_stop"
 
 # Pause / resume mid-pattern
@@ -76,10 +79,14 @@ curl "$B/command?plain=\$X"               # unlock from Alarm without homing
 ## Speed
 
 ```bash
-curl "$B/command?plain=\$THR/Feed=2000"   # absolute base rate, mm/min (applies to next move)
-curl "$B/sand_feed?d=up"                  # live override + (coarse)
-curl "$B/sand_feed?d=down"                # live override -
+curl "$B/sand_feed?mm=500"                # base rate in mm/min (0..100000), works mid-pattern
+curl "$B/command?plain=\$THR/Feed=2000"   # same base rate, but idle-only + NVS-persisted
+curl "$B/sand_feed?pct=150"               # scale the base rate by an absolute % (10..200), mid-pattern
+curl "$B/sand_feed?d=up"                  # override + (coarse, +10%)
+curl "$B/sand_feed?d=down"                # override - (coarse, -10%)
 curl "$B/sand_feed?d=reset"               # back to 100%
+#   effective speed = base mm/min (feed) * feed_override% / 100; poll /sand_status for feed + feed_override.
+#   ?mm during a run is in-memory (per-pattern, resets next pattern); ?mm while idle persists to $THR/Feed.
 ```
 
 `/sand_status` reports `feed` (programmed) and `feed_override` (live %); effective

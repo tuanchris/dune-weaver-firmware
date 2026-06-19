@@ -61,6 +61,14 @@ namespace Kinematics {
         // Configuration handlers
         void group(Configuration::HandlerBase& handler) override;
 
+        // Live base feed (mm/min) for the running pattern, usable mid-motion
+        // (unlike the idle-gated $THR/Feed setting).  When idle this persists
+        // to $THR/Feed; while moving it is an in-memory override applied on the
+        // next move and cleared at end_job (so each pattern starts from the
+        // persisted setting).  Backs /sand_feed?mm=.  Static + null-safe.
+        static Error setFeedLive(int mm_per_min);
+        static int   effectiveFeed();  // live override or the persisted setting; -1 if no module
+
         ~ThetaRho() {}
 
     private:
@@ -82,6 +90,11 @@ namespace Kinematics {
         // $THR/Feed: live, NVS-persisted feed for .thr jobs (mm/min in
         // motor space); read per line so changes apply mid-pattern
         IntSetting* _feed_setting = nullptr;
+
+        // In-memory feed override set via /sand_feed?mm while running (no flash
+        // write mid-motion); -1 = unset.  Cleared in end_job().
+        static ThetaRho* _instance;
+        static int       _live_feed;
 
         // Per-job translation state
         std::string    _job_name;                // channel name of the active .thr job

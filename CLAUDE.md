@@ -17,8 +17,11 @@ SPA, is a dev/mock client, not served by the board.
 ## Hardware (active test board)
 
 **Dune Weaver Mini Pro** on **MKS-DLC32 V2.1**, plain **stepstick** drivers (so no
-Trinamic/StallGuard). On the LAN at **`fluidnc.local` / 192.168.68.160**, USB serial
-**`/dev/cu.usbserial-8320` @ 115200**. (A second table exists: the **DWG "Desert
+Trinamic/StallGuard). On the LAN at **`DWMP.local` / 192.168.68.160** (prefer the IP;
+mDNS is flaky here), USB serial **`/dev/cu.usbserial-8320` @ 115200**. The hostname
+is set by **`hostname: DWMP`** in config.yaml (a top-level key that overrides the
+`$Hostname` NVS setting; empty/absent → the NVS default `fluidnc`). (A second table
+exists: the **DWG "Desert
 Compass"**.)
 
 - Kinematics **ThetaRho**: theta 50 mm/rev, rho 20 mm, coupling 0.195.
