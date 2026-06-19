@@ -28,13 +28,16 @@ B=http://192.168.68.160       # LAN IP (preferred); or the mDNS name, e.g. http:
 ```bash
 curl "$B/sand_status"        # state, theta, rho, feed, feed_override, running, file,
                              #   progress, playlist{active,index,total,name,clearing,quiet}, led{}
-curl "$B/sand_patterns"      # JSON array of /patterns/*.thr (dotfiles filtered)
+curl "$B/sand_patterns"      # serves /patterns/index.json manifest if present (full recursive catalog,
+                             #   paths relative to /patterns); else top-level /patterns/*.thr (non-recursive).
+                             #   Run any pattern by full path: $Sand/Run=/patterns/sub/x.thr
 curl "$B/sand_playlists"     # JSON array of /playlists/*.txt
 curl "$B/sand_settings"      # JSON of all app settings (speed, LED, playlist, quiet hours)
 ```
 
-`progress` is `0..100`, or `-1` when unknown / **during a pre-execution clear**
-(`playlist.clearing` is `true` then — show "Clearing…", not a 0→100 bar).
+`progress` is a `0..1` fraction, or `-1` when unknown. During a **pre-execution
+clear** `playlist.clearing` is `true` and `progress` tracks the *clear* file's own
+0→1 — show a separate "Clearing…" bar that resets when the chosen pattern starts.
 
 ---
 
@@ -225,6 +228,17 @@ curl -F "path=/patterns" -F "my.thrS=$(wc -c < my.thr)" \
 # Upload to the on-board flash / littlefs (e.g. config.yaml)
 curl -F "path=/" -F "config.yamlS=$(wc -c < config.yaml)" \
      -F "config.yaml=@config.yaml;filename=config.yaml" "$B/files"
+
+# Regenerate + push the pattern manifest (/patterns/index.json) that
+# /sand_patterns serves.  Run from the patterns root (or the SD mounted on a Mac):
+#   full recursive .thr list, paths relative to /patterns, as a JSON array.
+python3 -c 'import os,json; \
+  fs=[os.path.relpath(os.path.join(d,f),".").replace(os.sep,"/") \
+      for d,ds,fns in os.walk(".") if (ds.__setitem__(slice(None),[x for x in ds if x!="cached_images" and not x.startswith(".")]) or True) \
+      for f in fns if f.lower().endswith(".thr") and not f.startswith(".")]; \
+  fs.sort(key=str.lower); open("/tmp/index.json","w").write(json.dumps(fs,ensure_ascii=False,separators=(",",":")))'
+curl -F "path=/patterns" -F "/patterns/index.jsonS=$(wc -c < /tmp/index.json)" \
+     -F "f=@/tmp/index.json;filename=/patterns/index.json;type=application/json" "$B/upload"
 ```
 
 ---

@@ -41,7 +41,7 @@ TEST(SandStatusEncode, IdleDefaults) {
     EXPECT_TRUE(has(j, "\"state\":\"Idle\""));
     EXPECT_TRUE(has(j, "\"running\":false"));
     EXPECT_TRUE(has(j, "\"file\":\"\""));
-    EXPECT_TRUE(has(j, "\"progress\":-1.0"));
+    EXPECT_TRUE(has(j, "\"progress\":-1,"));  // unknown sentinel, clean "-1"
     EXPECT_TRUE(has(j, "\"feed_override\":100"));  // default = 100%
     EXPECT_TRUE(has(j, "\"playlist\":{"));
     EXPECT_TRUE(has(j, "\"active\":false"));
@@ -61,7 +61,7 @@ TEST(SandStatusEncode, RunningWithProgressAndPlaylist) {
     d.feed_override     = 110;
     d.running           = true;
     d.file              = "/sd/star.thr";
-    d.progress          = 42.5f;
+    d.progress          = 0.425f;  // 0..1 fraction
     d.playlist_active   = true;
     d.playlist_index    = 2;
     d.playlist_total    = 10;
@@ -77,7 +77,7 @@ TEST(SandStatusEncode, RunningWithProgressAndPlaylist) {
     EXPECT_TRUE(has(j, "\"feed_override\":110"));
     EXPECT_TRUE(has(j, "\"running\":true"));
     EXPECT_TRUE(has(j, "\"file\":\"/sd/star.thr\""));
-    EXPECT_TRUE(has(j, "\"progress\":42.5"));
+    EXPECT_TRUE(has(j, "\"progress\":0.425"));
     EXPECT_TRUE(has(j, "\"index\":2"));
     EXPECT_TRUE(has(j, "\"total\":10"));
     EXPECT_TRUE(has(j, "\"name\":\"evening\""));

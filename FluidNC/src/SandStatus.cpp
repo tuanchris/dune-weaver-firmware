@@ -82,7 +82,12 @@ namespace SandStatus {
         o += ",\"file\":";
         append_escaped(o, d.file.c_str());
         o += ",\"progress\":";
-        append_float(o, d.progress, 1);
+        // 0..1 fraction; <0 means unknown, emitted as a clean "-1" sentinel.
+        if (d.progress < 0.0f) {
+            o += "-1";
+        } else {
+            append_float(o, d.progress, 3);
+        }
 
         o += ",\"playlist\":{";
         o += "\"active\":";

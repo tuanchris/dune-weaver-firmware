@@ -99,6 +99,7 @@ namespace WebUI {
         static void handleSandPause();
         static void handleSandResume();
         static void handleSandStatus();
+        static void streamSandList(const char* folder, const char* ext);
         static void handleSandPatterns();
         static void handleSandPlaylists();
         static void handleSandSettings();

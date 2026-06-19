@@ -32,6 +32,7 @@
 #include "Kinematics/ThetaRho.h"  // live base-feed override for status + /sand_feed?mm
 #include "Job.h"
 #include "FluidPath.h"
+#include "FileStream.h"           // serve a prebuilt pattern manifest
 
 #include <cstring>
 #include <cstdlib>
@@ -52,18 +53,97 @@ namespace {
         out.print("\n");
     }
 
+    // Depth-first walk of an SD folder, emitting files as JSON-array elements
+    // ("<subdir>/<file>") so patterns organised in subfolders are listed too.
+    //
+    // CRASH SAFETY: the ESP32 heap is small and fragmented (WiFi + web server),
+    // and the real library is large (1000+ .thr).  Building the whole ~50 KB
+    // list as one string risks a bad_alloc -> std::terminate -> panic, so we
+    // stream instead: append into a small buffer and flush it through `emit`
+    // (chunked HTTP / channel write) whenever it crosses kFlushAt, keeping RAM
+    // bounded regardless of file count.  Depth is capped; hidden / macOS-metadata
+    // names (".DS_Store", "._foo.thr") and hidden subdirs (".Trashes") are
+    // skipped.
+    constexpr size_t kBufReserve   = 2048;
+    constexpr size_t kFlushAt      = 1536;  // < reserve, so the buffer never reallocs
+
+    // Optional prebuilt catalog (full recursive .thr list as a JSON array); the
+    // host regenerates + uploads it when patterns change.  Served verbatim by
+    // /sand_patterns when present.
+    constexpr const char* kPatternManifest = "/patterns/index.json";
+
+    // Case-insensitive "does name end with ext" (ext like ".thr"); a null/empty
+    // ext matches everything.
+    bool hasExt(const std::string& name, const char* ext) {
+        if (!ext || !*ext) {
+            return true;
+        }
+        size_t el = strlen(ext);
+        return name.size() >= el && strcasecmp(name.c_str() + name.size() - el, ext) == 0;
+    }
+
+    // Emits the matching files in ONE folder (non-recursive) as JSON-array
+    // elements, keeping only names ending in `ext` (e.g. ".thr"), flushing
+    // through `emit` as the buffer fills.
+    //
+    // Deliberately NOT recursive: the real library is ~1000 .thr nested several
+    // levels deep on a slow 8 MHz SD, and a full recursive walk froze the
+    // single-threaded web server for minutes.  The app owns the full catalog
+    // and runs patterns by full path (e.g. $Sand/Run=/patterns/sub/x.thr), so
+    // this endpoint is just a fast top-level convenience / fallback.
+    void appendFilesJson(const stdfs::path& dir, const char* ext, std::string& buf, bool& first, const SandApi::JsonSink& emit) {
+        for (auto const& entry : stdfs::directory_iterator { dir }) {
+            std::string fname = entry.path().filename().c_str();
+            if (fname.empty() || fname[0] == '.') {
+                continue;
+            }
+            bool isdir = false;
+            try {
+                isdir = entry.is_directory();
+            } catch (...) {
+                continue;  // unstattable entry -> skip, don't abort the whole list
+            }
+            if (isdir || !hasExt(fname, ext)) {
+                continue;  // subdirs are the app's job; skip non-matching files
+            }
+            {
+                if (!first) {
+                    buf += ',';
+                }
+                first = false;
+                SandStatus::append_escaped(buf, fname.c_str());
+                if (buf.size() >= kFlushAt) {
+                    emit(buf.data(), buf.size());
+                    buf.clear();
+                }
+            }
+        }
+    }
+
     Error sandStatus(const char* value, AuthenticationLevel auth_level, Channel& out) {
         writeJson(out, SandApi::statusJson());
         return Error::Ok;
     }
 
+    // Stream the JSON array straight to the channel so a 1000+ pattern list is
+    // never assembled as one big string (heap-safe).
+    void streamToChannel(const char* folder, const char* ext, Channel& out) {
+        SandApi::streamDirJson(folder, ext, [&out](const char* data, size_t len) {
+            out.write(reinterpret_cast<const uint8_t*>(data), len);
+        });
+        out.print("\n");
+    }
+
     Error sandPatterns(const char* value, AuthenticationLevel auth_level, Channel& out) {
-        writeJson(out, SandApi::listDirJson("/patterns"));
+        SandApi::streamPatterns([&out](const char* data, size_t len) {
+            out.write(reinterpret_cast<const uint8_t*>(data), len);
+        });
+        out.print("\n");
         return Error::Ok;
     }
 
     Error sandPlaylists(const char* value, AuthenticationLevel auth_level, Channel& out) {
-        writeJson(out, SandApi::listDirJson("/playlists"));
+        streamToChannel("/playlists", ".txt", out);
         return Error::Ok;
     }
 
@@ -158,13 +238,15 @@ std::string SandApi::statusJson() {
     }
 
     // During a pre-execution clear the running file is the CLEAR pattern, not the
-    // one the user picked, so its byte-progress is NOT the pattern's progress.
-    // Report it as unknown (-1) and surface "clearing" via the flag instead;
-    // otherwise the bar climbs through the clear and then "drops" back to ~0 when
-    // the real pattern starts.  (file stays the clear file so clients can label
-    // the phase.)
-    if (rs.clearing) {
-        d.progress = -1.0f;
+    // one the user picked; we report the clear file's own progress (file stays the
+    // clear file and the "clearing" flag marks the phase, so clients can show e.g.
+    // a separate "clearing" bar that resets when the real pattern starts).
+
+    // Report progress as a 0..1 fraction; keep the <0 "unknown" sentinel as-is.
+    // (executed_percent / parse_sd_percent stay in percent internally so their
+    // unit tests are unaffected; we scale only at the reporting boundary.)
+    if (d.progress >= 0.0f) {
+        d.progress /= 100.0f;
     }
 
     if (const char* effect = settingValue("LED/Effect")) {
@@ -188,25 +270,42 @@ std::string SandApi::statusJson() {
     return SandStatus::encode(d);
 }
 
-std::string SandApi::listDirJson(const char* folder) {
-    std::vector<std::string> names;
+void SandApi::streamPatterns(const JsonSink& emit) {
+    // Prefer a prebuilt manifest (/patterns/index.json): the full library is
+    // ~1000 .thr nested deep on a slow SD, so an on-device recursive walk froze
+    // the single-threaded server for minutes.  The app/host generates the
+    // manifest offline and pushes it; here we just stream that one file (a fast
+    // sequential read).  If it's absent (or the SD is down), fall back to a live
+    // top-level listing so the endpoint still works.
     try {
-        FluidPath dir { folder, "sd" };
-        for (auto const& entry : stdfs::directory_iterator { dir }) {
-            if (entry.is_directory()) {
-                continue;
-            }
-            std::string name = entry.path().filename().c_str();
-            // Skip hidden / macOS metadata files (".DS_Store", "._foo.thr").
-            if (name.empty() || name[0] == '.') {
-                continue;
-            }
-            names.push_back(name);
+        FileStream f(kPatternManifest, "r", "sd");
+        char       chunk[1024];
+        size_t     n;
+        while ((n = f.read(chunk, sizeof(chunk))) > 0) {
+            emit(chunk, n);
         }
+        return;
     } catch (...) {
-        // Folder missing or SD not mounted -> empty list (HTTP route stays 200).
+        // no manifest / SD unavailable -> live listing below
     }
-    return SandStatus::encode_array(names);
+    streamDirJson("/patterns", ".thr", emit);
+}
+
+void SandApi::streamDirJson(const char* folder, const char* ext, const JsonSink& emit) {
+    std::string buf;
+    bool        first = true;
+    buf.reserve(kBufReserve);
+    buf.push_back('[');
+    try {
+        // Lists one folder, non-recursive (see appendFilesJson).  Streamed via
+        // `emit` so RAM stays bounded.
+        FluidPath dir { folder, "sd" };
+        appendFilesJson(dir, ext, buf, first, emit);
+    } catch (...) {
+        // Folder missing or SD not mounted -> emit the (possibly empty) array.
+    }
+    buf.push_back(']');
+    emit(buf.data(), buf.size());
 }
 
 std::string SandApi::settingsJson() {

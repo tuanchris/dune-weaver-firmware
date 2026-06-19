@@ -800,13 +800,30 @@ namespace WebUI {
 
     // Multi-client HTTP reads (the $Sand/* command equivalents emit asynchronously
     // and only reach the single-client WebSocket).  All read-only and motion-safe.
-    void Web_Server::handleSandPatterns() {
+    // Chunked-stream the listing so a 1000+ pattern library (~50 KB JSON) is
+    // never built as one string -> no heap exhaustion / panic.
+    void Web_Server::streamSandList(const char* folder, const char* ext) {
         _webserver->sendHeader("Cache-Control", "no-store");
-        _webserver->send(200, "application/json", SandApi::listDirJson("/patterns").c_str());
+        _webserver->setContentLength(CONTENT_LENGTH_UNKNOWN);
+        _webserver->send(200, "application/json", "");
+        SandApi::streamDirJson(folder, ext, [](const char* data, size_t len) {
+            _webserver->sendContent(data, len);  // _webserver is static
+        });
+        _webserver->sendContent("", 0);  // terminate the chunked response
+    }
+    void Web_Server::handleSandPatterns() {
+        // Serves the prebuilt /patterns/index.json manifest if present, else a
+        // live top-level listing (see SandApi::streamPatterns).
+        _webserver->sendHeader("Cache-Control", "no-store");
+        _webserver->setContentLength(CONTENT_LENGTH_UNKNOWN);
+        _webserver->send(200, "application/json", "");
+        SandApi::streamPatterns([](const char* data, size_t len) {
+            _webserver->sendContent(data, len);  // _webserver is static
+        });
+        _webserver->sendContent("", 0);  // terminate the chunked response
     }
     void Web_Server::handleSandPlaylists() {
-        _webserver->sendHeader("Cache-Control", "no-store");
-        _webserver->send(200, "application/json", SandApi::listDirJson("/playlists").c_str());
+        streamSandList("/playlists", ".txt");
     }
     void Web_Server::handleSandSettings() {
         _webserver->sendHeader("Cache-Control", "no-store");

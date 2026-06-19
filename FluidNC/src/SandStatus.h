@@ -13,7 +13,7 @@
   The document is a compact single-line JSON object, e.g.
 
     {"state":"Run","theta":1.2340,"rho":0.5000,"feed":100,"feed_override":110,"running":true,
-     "file":"/sd/star.thr","progress":42.5,
+     "file":"/sd/star.thr","progress":0.425,
      "playlist":{"active":true,"index":2,"total":10,"name":"evening",
                  "clearing":false,"quiet":false},
      "led":{"effect":"rainbow","brightness":40}}
@@ -35,7 +35,7 @@ namespace SandStatus {
 
         bool        running  = false;  // a file job is active
         std::string file;              // current job file, empty if none
-        float       progress = -1.0f;  // 0..100, or <0 if unknown
+        float       progress = -1.0f;  // 0..1 fraction, or <0 if unknown
 
         bool        playlist_active   = false;
         int         playlist_index    = 0;  // 0-based

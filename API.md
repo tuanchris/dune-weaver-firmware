@@ -74,8 +74,8 @@ the WebSocket for a *single* "active controller" that wants smooth high-rate liv
 | Endpoint | Returns |
 |----------|---------|
 | `GET /sand_status` | status object (schema below) |
-| `GET /sand_patterns` | JSON array of `.thr` filenames in `/patterns` (hidden/dotfiles filtered) |
-| `GET /sand_playlists` | JSON array of playlist filenames in `/playlists` |
+| `GET /sand_patterns` | JSON array of `.thr` paths. **If `/patterns/index.json` (a prebuilt manifest) exists, it is served verbatim** — a fast single-file read of the full recursive catalog (paths relative to `/patterns`, e.g. `custom_patterns/x.thr`; run via `$Sand/Run=/patterns/<path>`). Generate it on the host and upload to the card whenever patterns change (see COMMANDS.md). **Without a manifest** it falls back to a non-recursive top-level listing (subfolders omitted — enumerating the ~1000-file nested library on the slow SD froze the single-threaded server). Chunked/streamed |
+| `GET /sand_playlists` | JSON array of `.txt` files in the top level of `/playlists` (non-recursive) |
 | `GET /sand_settings` | JSON object of app settings (speed, LED, playlist, quiet hours), values as strings |
 
 These are read-only, fast, and skip the block-during-motion gate, so clients keep reading while a pattern
@@ -141,7 +141,7 @@ converted) at 1–2 Hz for the sand-specific JSON.
 
 ## `$Sand/Status` JSON schema
 
-Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 dp, progress 1 dp.
+Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 dp, progress 3 dp.
 
 ```json
 {
@@ -152,12 +152,13 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   "feed_override": 110,       // live override % (set via /sand_feed); effective = feed * pct/100
   "running": true,            // an SD job is active
   "file": "/sd/patterns/star.thr",
-  "progress": 42.5,           // 0..100, or -1.0 if unknown / during a clear (see playlist.clearing)
+  "progress": 0.425,          // 0..1 fraction of executed motion, or -1 if unknown
   "playlist": { "active": true, "index": 2, "total": 10, "name": "evening",
                 "clearing": false, "quiet": false },
   //  clearing=true means a pre-execution clear is running before the chosen
-  //  pattern; progress is -1 (unknown) during it. Show a "Clearing…" state, not
-  //  the pattern's progress bar, or it appears to climb then reset to 0.
+  //  pattern; progress then tracks the CLEAR file's own 0..1 progress (file is the
+  //  clear pattern). Render it as a separate "Clearing…" bar that resets when the
+  //  real pattern starts, rather than the chosen pattern's progress.
   "led": { "effect": "rainbow", "brightness": 40 }   // omitted if no leds: config
 }
 ```
