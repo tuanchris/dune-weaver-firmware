@@ -95,9 +95,10 @@ namespace Machine {
         // Tracks and reports gcode line numbers. Disabled by default.
         bool _useLineNumbers = false;
 
-        std::string _board = "None";
-        std::string _name  = "None";
-        std::string _meta  = "";
+        std::string _board    = "None";
+        std::string _name     = "None";
+        std::string _meta     = "";
+        std::string _hostname = "";  // network/mDNS hostname; empty -> use the $Hostname NVS setting
 #if 1
         static MachineConfig*& instance() {
             static MachineConfig* instance = nullptr;

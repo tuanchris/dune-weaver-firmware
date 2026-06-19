@@ -725,8 +725,9 @@ namespace WebUI {
                 log_info("STA SSID is not set");
                 return false;
             }
-            //Hostname needs to be set before mode to take effect
-            WiFi.setHostname(_hostname->get());
+            //Hostname needs to be set before mode to take effect.
+            //A hostname in config.yaml overrides the $Hostname NVS setting.
+            WiFi.setHostname(config->_hostname.empty() ? _hostname->get() : config->_hostname.c_str());
             WiFi.mode(WIFI_STA);
             WiFi.setMinSecurity(static_cast<wifi_auth_mode_t>(_sta_min_security->get()));
             WiFi.setScanMethod(_fast_scan->get() ? WIFI_FAST_SCAN : WIFI_ALL_CHANNEL_SCAN);

@@ -39,6 +39,7 @@ namespace Machine {
         handler.item("board", _board);
         handler.item("name", _name);
         handler.item("meta", _meta);
+        handler.item("hostname", _hostname);
 
         handler.section("stepping", _stepping);
 
