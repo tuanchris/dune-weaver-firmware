@@ -69,6 +69,11 @@ namespace Kinematics {
         static Error setFeedLive(int mm_per_min);
         static int   effectiveFeed();  // live override or the persisted setting; -1 if no module
 
+        // Current ball angle as a fraction of a full turn, [0,1).  Lets the
+        // LED "ball" effect track the ball's angular position.  -1 if no
+        // ThetaRho kinematics is configured.
+        static float ballAngle();
+
         ~ThetaRho() {}
 
     private:

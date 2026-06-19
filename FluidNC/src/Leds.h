@@ -22,13 +22,15 @@
     $LED/Color2=RRGGBB     (secondary color, used by 'gradient')
     $LED/Brightness=0..255 (master brightness over every effect)
     $LED/Speed=1..255      (animation speed)
+    $LED/Direction=cw|ccw  ('ball' effect: ring winding vs theta)
+    $LED/Align=0..359      ('ball' effect: angular offset, degrees)
 
   Effects:
     off static rainbow breathe colorloop theater scan running sine
     gradient sinelon twinkle sparkle fire candle meteor bouncing
     wipe dualscan juggle multicomet glitter dissolve ripple drip
     lightning fireworks plasma heartbeat strobe police chase railway
-    pacifica aurora pride colorwaves bpm
+    pacifica aurora pride colorwaves bpm ball
 
   Palettes (rainbow == the classic wheel; the rest are gradient tables):
     rainbow ocean lava forest party cloud heat sunset
@@ -153,7 +155,11 @@ private:
     static constexpr int EFFECT_PRIDE     = 35;
     static constexpr int EFFECT_COLORWAVES = 36;
     static constexpr int EFFECT_BPM       = 37;
+    static constexpr int EFFECT_BALL      = 38;  // LED tracks the sand ball's angle
     static constexpr int EFFECT_NONE      = 255;  // RunEffect/IdleEffect: no override
+
+    static constexpr int DIR_CW  = 0;  // $LED/Direction values
+    static constexpr int DIR_CCW = 1;
 
     static constexpr int kBalls = 3;
 
@@ -202,6 +208,8 @@ private:
     IntSetting*    _speed       = nullptr;
     EnumSetting*   _run_effect  = nullptr;
     EnumSetting*   _idle_effect = nullptr;
+    EnumSetting*   _direction   = nullptr;  // 'ball' effect: ring winding vs theta (cw/ccw)
+    IntSetting*    _align       = nullptr;  // 'ball' effect: angular offset, degrees 0..359
 
     // Machine-state tracking (poll task only: reports arrive via our
     // own autoReport, which runs inside pollLine)
@@ -212,6 +220,7 @@ private:
     // persisted setting is used.  Set while moving, flushed to NVS at idle.
     static Leds* _instance;
     std::string  _live_effect, _live_palette, _live_color, _live_color2, _live_bright, _live_speed;
+    std::string  _live_direction, _live_align;
     bool         _was_running = false;
     int          _cur_palette = 0;       // palette id resolved once per frame
 

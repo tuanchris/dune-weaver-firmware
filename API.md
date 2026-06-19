@@ -110,8 +110,10 @@ Effective speed = base feed (`feed`) × `feed_override`/100; both are in `/sand_
 ### LEDs (NVS-persisted; only present if `leds:` is configured)
 `$LED/Effect=<name>` · `$LED/Palette=<name>` · `$LED/Color=RRGGBB` · `$LED/Color2=RRGGBB` ·
 `$LED/Brightness=0..255` · `$LED/Speed=1..255` · `$LED/RunEffect=none|<name>` · `$LED/IdleEffect=none|<name>`
-Effect names: `off static rainbow breathe colorloop theater scan running sine gradient sinelon twinkle sparkle fire candle meteor bouncing wipe dualscan juggle multicomet glitter dissolve ripple drip lightning fireworks plasma heartbeat strobe police chase railway pacifica aurora pride colorwaves bpm`
+`$LED/Direction=cw|ccw` · `$LED/Align=0..359` (the `ball` effect: ring winding vs theta, and angular offset in degrees)
+Effect names: `off static rainbow breathe colorloop theater scan running sine gradient sinelon twinkle sparkle fire candle meteor bouncing wipe dualscan juggle multicomet glitter dissolve ripple drip lightning fireworks plasma heartbeat strobe police chase railway pacifica aurora pride colorwaves bpm ball`
 Palette names: `rainbow ocean lava forest party cloud heat sunset`
+Live LED keys (`/sand_led?…` or `$Sand/Led=`): `effect palette color color2 brightness speed direction align`
 
 The `$LED/*` settings are idle-gated (NVS writes are blocked mid-motion). For
 live control during a pattern use:

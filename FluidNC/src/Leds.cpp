@@ -7,6 +7,7 @@
 #include "Settings.h"
 #include "Serial.h"  // allChannels
 #include "Types.h"   // state_is, State
+#include "Kinematics/ThetaRho.h"  // ballAngle() for the 'ball' effect
 
 #include <driver/rmt.h>
 #include <freertos/FreeRTOS.h>
@@ -36,7 +37,10 @@ namespace {
         { "drip", 24 },      { "lightning", 25 },  { "fireworks", 26 },   { "plasma", 27 },
         { "heartbeat", 28 }, { "strobe", 29 },     { "police", 30 },      { "chase", 31 },
         { "railway", 32 },   { "pacifica", 33 },   { "aurora", 34 },      { "pride", 35 },
-        { "colorwaves", 36 },{ "bpm", 37 },
+        { "colorwaves", 36 },{ "bpm", 37 },        { "ball", 38 },
+    };
+    enum_opt_t ledDirections = {
+        { "cw", 0 }, { "ccw", 1 },
     };
     // Same list plus "none" (no override) for the state hooks.
     enum_opt_t ledHookEffects = {
@@ -49,7 +53,7 @@ namespace {
         { "drip", 24 },      { "lightning", 25 },  { "fireworks", 26 },   { "plasma", 27 },
         { "heartbeat", 28 }, { "strobe", 29 },     { "police", 30 },      { "chase", 31 },
         { "railway", 32 },   { "pacifica", 33 }, { "aurora", 34 },      { "pride", 35 },
-        { "colorwaves", 36 },{ "bpm", 37 },      { "none", 255 },
+        { "colorwaves", 36 },{ "bpm", 37 },      { "ball", 38 },        { "none", 255 },
     };
 
     // 16-entry packed-RGB gradient palettes (mostly the classic FastLED
@@ -188,6 +192,8 @@ void Leds::init() {
         _speed       = new IntSetting("LED effect speed", EXTENDED, WG, NULL, "LED/Speed", 50, 1, 255);
         _run_effect  = new EnumSetting("LED effect while running", EXTENDED, WG, NULL, "LED/RunEffect", EFFECT_NONE, &ledHookEffects);
         _idle_effect = new EnumSetting("LED effect while idle", EXTENDED, WG, NULL, "LED/IdleEffect", EFFECT_NONE, &ledHookEffects);
+        _direction   = new EnumSetting("LED ball direction", EXTENDED, WG, NULL, "LED/Direction", DIR_CW, &ledDirections);
+        _align       = new IntSetting("LED ball alignment, degrees", EXTENDED, WG, NULL, "LED/Align", 0, 0, 359);
     }
 
     log_info("leds: " << _num_leds << " WS2812 on pin " << _data_pin.name() << " order " << _color_order);
@@ -345,6 +351,23 @@ Error Leds::setLive(const std::string& key, const std::string& value) {
             return _speed->setStringValue(value);
         }
         _live_speed = value;
+    } else if (key == "direction") {
+        if (enumId(ledDirections, value, -1) < 0) {
+            return Error::InvalidStatement;  // expects cw|ccw
+        }
+        if (idle) {
+            return _direction->setStringValue(value);
+        }
+        _live_direction = value;
+    } else if (key == "align") {
+        int v = atoi(value.c_str());
+        if (v < 0 || v > 359) {
+            return Error::NumberRange;
+        }
+        if (idle) {
+            return _align->setStringValue(value);
+        }
+        _live_align = value;
     } else {
         return Error::InvalidStatement;
     }
@@ -377,6 +400,14 @@ void Leds::flushLive() {
     if (!_live_speed.empty()) {
         _speed->setStringValue(_live_speed);
         _live_speed.clear();
+    }
+    if (!_live_direction.empty()) {
+        _direction->setStringValue(_live_direction);
+        _live_direction.clear();
+    }
+    if (!_live_align.empty()) {
+        _align->setStringValue(_live_align);
+        _live_align.clear();
     }
 }
 
@@ -934,6 +965,31 @@ void Leds::renderEffect(int effect, uint8_t speed) {
                 }
                 setFb(i, (r * bri) >> 8, (g * bri) >> 8, (b * bri) >> 8);
             }
+            break;
+        }
+
+        case EFFECT_BALL: {  // a glowing dot that tracks the sand ball's angle
+            float frac = Kinematics::ThetaRho::ballAngle();  // 0..1 around the table
+            memset(_fb, 0, _num_leds * 3);
+            if (frac < 0.0f) {
+                break;  // no ThetaRho kinematics -> strip dark
+            }
+            int dir = _live_direction.empty() ? (_direction ? _direction->get() : DIR_CW)
+                                              : enumId(ledDirections, _live_direction, DIR_CW);
+            int align_deg = _live_align.empty() ? (_align ? _align->get() : 0) : atoi(_live_align.c_str());
+
+            float pf = frac * (dir == DIR_CCW ? -1.0f : 1.0f) + align_deg / 360.0f;
+            pf -= floorf(pf);  // wrap into [0,1)
+            int center = static_cast<int>(lroundf(pf * _num_leds)) % _num_leds;
+            if (center < 0) {
+                center += _num_leds;
+            }
+            primaryColor(r, g, b);
+            setFb(center, r, g, b);  // bright head + symmetric glow falloff
+            setFb((center - 1 + _num_leds) % _num_leds, scale8(r, 96), scale8(g, 96), scale8(b, 96));
+            setFb((center + 1) % _num_leds, scale8(r, 96), scale8(g, 96), scale8(b, 96));
+            setFb((center - 2 + _num_leds) % _num_leds, scale8(r, 28), scale8(g, 28), scale8(b, 28));
+            setFb((center + 2) % _num_leds, scale8(r, 28), scale8(g, 28), scale8(b, 28));
             break;
         }
 

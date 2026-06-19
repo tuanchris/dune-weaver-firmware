@@ -870,7 +870,8 @@ namespace WebUI {
             _webserver->send(503, "text/plain", "leds not configured");
             return;
         }
-        static const char* const keys[] = { "effect", "palette", "color", "color2", "brightness", "speed" };
+        static const char* const keys[] = { "effect", "palette",    "color", "color2",
+                                            "brightness", "speed", "direction", "align" };
         std::string              rejected;
         int                      applied = 0;
         for (const char* k : keys) {

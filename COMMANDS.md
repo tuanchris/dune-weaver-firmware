@@ -155,6 +155,7 @@ Effects (`$LED/Effect=<name>`):
 | `pride`     | flowing rainbow with brightness waves                   | rainbow |
 | `colorwaves`| pride, but colored from the active palette              | auto-hue |
 | `bpm`       | palette sweep pulsed by a beat                          | auto-hue |
+| `ball`      | a glowing dot that tracks the sand ball's angle         | Color + Direction/Align |
 
 `Speed` paces every effect (and gates spawn rates for `twinkle`/`bouncing`).
 `Brightness` is a master scale applied over whatever the effect produces.
@@ -168,12 +169,23 @@ it applies in memory immediately (no flash write) and is persisted to NVS
 automatically when the table next returns to idle.
 
 ```bash
-# Works any time, including mid-pattern. keys: effect palette color color2 brightness speed
+# Works any time, including mid-pattern.
+#   keys: effect palette color color2 brightness speed direction align
 curl "$B/sand_led?effect=fire&palette=ocean&brightness=120"
 curl "$B/sand_led?color=FF0000&speed=80"
 # command form (same behavior), space-separated key=value:
 curl "$B/command?plain=\$Sand/Led=effect=plasma%20palette=lava"
 ```
+
+The **`ball`** effect makes a glowing dot follow the sand ball's angle. Calibrate
+it live while a pattern runs:
+```bash
+curl "$B/sand_led?effect=ball"
+curl "$B/sand_led?direction=ccw"     # cw|ccw — flip if the dot moves opposite the ball
+curl "$B/sand_led?align=120"         # 0..359 degrees — rotate the dot onto the ball
+```
+`direction`/`align` are also `$LED/Direction` (cw|ccw) and `$LED/Align` (degrees)
+settings; like the rest, they persist to NVS when set at idle.
 
 `/sand_status`'s `led` object reflects the live value during a run. A live
 choice set mid-run is saved to the matching `$LED/*` setting on the return to

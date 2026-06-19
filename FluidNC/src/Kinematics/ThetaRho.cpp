@@ -131,6 +131,16 @@ namespace Kinematics {
         normalize_theta();
     }
 
+    // Ball angle as a fraction of a full turn, [0,1), for the LED ball effect.
+    float ThetaRho::ballAngle() {
+        if (!_instance) {
+            return -1.0f;
+        }
+        float mpos[MAX_N_AXIS];
+        copyAxes(mpos, get_mpos());
+        return positive_mod_2pi(mpos[X_AXIS]) / TWO_PI;
+    }
+
     // Effective base feed: the in-memory live override if set, else $THR/Feed.
     int ThetaRho::effectiveFeed() {
         if (!_instance || !_instance->_feed_setting) {
