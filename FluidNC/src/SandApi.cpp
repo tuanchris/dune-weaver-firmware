@@ -185,8 +185,8 @@ std::string SandApi::settingsJson() {
     // App-relevant settings, returned as strings (the app casts numeric ones).
     static const char* const keys[] = {
         "THR/Feed",
-        "LED/Effect",      "LED/Color",        "LED/Brightness",        "LED/Speed",
-        "LED/RunEffect",   "LED/IdleEffect",
+        "LED/Effect",      "LED/Palette",      "LED/Color",             "LED/Color2",
+        "LED/Brightness",  "LED/Speed",        "LED/RunEffect",         "LED/IdleEffect",
         "Playlist/Mode",   "Playlist/Shuffle", "Playlist/PauseTime",    "Playlist/PauseFromStart",
         "Playlist/ClearPattern", "Playlist/AutoHome",
         "Sands/Enabled",   "Sands/Slots",

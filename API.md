@@ -104,8 +104,10 @@ reliably over the (single-client) WebSocket. Pattern/playlist **contents** are f
 | `/sand_feed?d=up\|down\|reset` | HTTP one-shot coarse feed-override ±/reset |
 
 ### LEDs (NVS-persisted; only present if `leds:` is configured)
-`$LED/Effect=off|static|rainbow` · `$LED/Color=RRGGBB` · `$LED/Brightness=0..255` ·
-`$LED/Speed=1..255` · `$LED/RunEffect=none|off|static|rainbow` · `$LED/IdleEffect=none|off|static|rainbow`
+`$LED/Effect=<name>` · `$LED/Palette=<name>` · `$LED/Color=RRGGBB` · `$LED/Color2=RRGGBB` ·
+`$LED/Brightness=0..255` · `$LED/Speed=1..255` · `$LED/RunEffect=none|<name>` · `$LED/IdleEffect=none|<name>`
+Effect names: `off static rainbow breathe colorloop theater scan running sine gradient sinelon twinkle sparkle fire candle meteor bouncing wipe dualscan juggle multicomet glitter dissolve ripple drip lightning fireworks plasma heartbeat strobe police chase railway pacifica aurora pride colorwaves bpm`
+Palette names: `rainbow ocean lava forest party cloud heat sunset`
 
 ### Playlist / quiet-hours settings (NVS)
 `$Playlist/Mode=single|loop` · `$Playlist/Shuffle=ON|OFF` · `$Playlist/PauseTime=<sec>` ·

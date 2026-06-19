@@ -90,15 +90,70 @@ rate = `feed * feed_override / 100`.
 ## LEDs (only if `leds:` is configured; this table: 49 px on gpio.18, RGB)
 
 ```bash
-curl "$B/command?plain=\$LED/Effect=rainbow"     # off | static | rainbow
-curl "$B/command?plain=\$LED/Color=FF0000"       # RRGGBB hex (used by 'static')
-curl "$B/command?plain=\$LED/Brightness=80"      # 0..255
-curl "$B/command?plain=\$LED/Speed=50"           # rainbow animation speed 1..255
+curl "$B/command?plain=\$LED/Effect=fire"        # see effect list below
+curl "$B/command?plain=\$LED/Palette=ocean"      # recolors the hue-cycling effects
+curl "$B/command?plain=\$LED/Color=FF0000"       # primary color, RRGGBB hex
+curl "$B/command?plain=\$LED/Color2=0040FF"      # secondary color (used by 'gradient')
+curl "$B/command?plain=\$LED/Brightness=80"      # 0..255, master over every effect
+curl "$B/command?plain=\$LED/Speed=50"           # animation speed 1..255
+```
 
+Palettes (`$LED/Palette=<name>`): `rainbow ocean lava forest party cloud heat sunset`.
+`rainbow` is the classic wheel (default). The rest recolor every effect whose "Uses"
+column below says **auto-hue** — e.g. `Palette=ocean` gives an ocean `colorloop`,
+`sinelon`, `juggle`, `colorwaves`, etc.
+
+Effects (`$LED/Effect=<name>`):
+
+| Name | What it does | Uses |
+|------|--------------|------|
+| `off`       | all pixels dark                                         | — |
+| `static`    | solid fill                                              | Color |
+| `rainbow`   | full color wheel spread around the ring, rotating       | auto-hue |
+| `breathe`   | solid color pulsing in brightness on a sine             | Color |
+| `colorloop` | whole ring one hue, slowly cycling through the wheel    | auto-hue |
+| `theater`   | every 3rd pixel lit, marching (theater chase)           | Color |
+| `scan`      | dot sweeps back and forth with a short trail (Cylon)    | Color |
+| `running`   | one sine peak of the color sliding around the ring      | Color |
+| `sine`      | two faster sine bands of the color drifting             | Color |
+| `gradient`  | scrolling blend between the two colors                  | Color + Color2 |
+| `sinelon`   | moving dot with a fading trail and shifting hue         | auto-hue |
+| `twinkle`   | random pixels light then fade out                       | auto-hue |
+| `sparkle`   | dim base color with random white flashes                | Color |
+| `fire`      | Fire2012 1D flame (heat diffusion + sparks)             | heat palette |
+| `candle`    | warm global flicker                                     | Color |
+| `meteor`    | bright head sweeping the ring, random-decay trail       | Color |
+| `bouncing`  | a few balls bouncing under gravity                      | Color |
+| `wipe`      | color-wipe from one end, alternating the two colors     | Color + Color2 |
+| `dualscan`  | two dots sweeping the ring (one per color)              | Color + Color2 |
+| `juggle`    | several sine dots of different colors, fading trails    | auto-hue |
+| `multicomet`| several comets chasing at different speeds              | auto-hue |
+| `glitter`   | rainbow base with random white sparks                   | auto-hue |
+| `dissolve`  | pixels randomly flip color↔color2, then reverse         | Color + Color2 |
+| `ripple`    | expanding rings from random centers, decaying           | auto-hue |
+| `drip`      | droplets fall and splash                                | Color |
+| `lightning` | random bright strikes over darkness                     | white |
+| `fireworks` | random colored bursts that fade                         | auto-hue |
+| `plasma`    | interfering sine waves through the color wheel          | auto-hue |
+| `heartbeat` | double-pulse "lub-dub" brightness                       | Color |
+| `strobe`    | brief full-strip flashes                                | Color |
+| `police`    | alternating red / blue halves                           | red/blue |
+| `chase`     | bright dot(s) running over a dim background             | Color + Color2 |
+| `railway`   | alternating two colors with a moving shimmer            | Color + Color2 |
+| `pacifica`  | layered scrolling ocean with whitecaps                  | built-in ocean |
+| `aurora`    | drifting green/purple curtains                          | built-in aurora |
+| `pride`     | flowing rainbow with brightness waves                   | rainbow |
+| `colorwaves`| pride, but colored from the active palette              | auto-hue |
+| `bpm`       | palette sweep pulsed by a beat                          | auto-hue |
+
+`Speed` paces every effect (and gates spawn rates for `twinkle`/`bouncing`).
+`Brightness` is a master scale applied over whatever the effect produces.
+
+```bash
 # Motion-reactive (override the manual effect by machine state; none = don't override)
-curl "$B/command?plain=\$LED/RunEffect=rainbow"  # while Run/Jog/Home
-curl "$B/command?plain=\$LED/IdleEffect=static"  # while Idle/Hold
-#   values: none | off | static | rainbow
+curl "$B/command?plain=\$LED/RunEffect=fire"     # while Run/Jog/Home
+curl "$B/command?plain=\$LED/IdleEffect=breathe" # while Idle/Hold
+#   values: none | <any effect name from the table above>
 ```
 
 ---
