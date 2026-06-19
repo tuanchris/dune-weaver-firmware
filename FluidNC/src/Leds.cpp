@@ -6,6 +6,7 @@
 #include "Machine/MachineConfig.h"
 #include "Settings.h"
 #include "Serial.h"  // allChannels
+#include "Types.h"   // state_is, State
 
 #include <driver/rmt.h>
 #include <freertos/FreeRTOS.h>
@@ -105,7 +106,15 @@ namespace {
     uint32_t now_ms() {
         return xTaskGetTickCount() * portTICK_PERIOD_MS;
     }
+
+    // Name -> id lookup in an effect/palette map (returns dflt if not found)
+    int enumId(const enum_opt_t& m, const std::string& name, int dflt) {
+        auto it = m.find(name.c_str());
+        return it == m.end() ? dflt : it->second;
+    }
 }
+
+Leds* Leds::_instance = nullptr;
 
 void Leds::afterParse() {
     // Reduce the color order string to byte offsets in wire order
@@ -183,7 +192,8 @@ void Leds::init() {
 
     log_info("leds: " << _num_leds << " WS2812 on pin " << _data_pin.name() << " order " << _color_order);
 
-    _ready = true;
+    _ready    = true;
+    _instance = this;
     allChannels.registration(this);
     setReportInterval(500);  // receive status reports for the state hooks
 }
@@ -199,6 +209,9 @@ void Leds::deinit() {
         _fb     = nullptr;
         _heat   = nullptr;
         _ready  = false;
+        if (_instance == this) {
+            _instance = nullptr;
+        }
     }
 }
 
@@ -265,6 +278,108 @@ void Leds::getColor(StringSetting* s, uint8_t& r, uint8_t& g, uint8_t& b) {
     b            = rgb & 0xff;
 }
 
+void Leds::primaryColor(uint8_t& r, uint8_t& g, uint8_t& b) {
+    if (_live_color.empty()) {
+        getColor(_color, r, g, b);
+    } else {
+        uint32_t rgb = strtoul(_live_color.c_str(), NULL, 16);
+        r = (rgb >> 16) & 0xff, g = (rgb >> 8) & 0xff, b = rgb & 0xff;
+    }
+}
+void Leds::secondaryColor(uint8_t& r, uint8_t& g, uint8_t& b) {
+    if (_live_color2.empty()) {
+        getColor(_color2, r, g, b);
+    } else {
+        uint32_t rgb = strtoul(_live_color2.c_str(), NULL, 16);
+        r = (rgb >> 16) & 0xff, g = (rgb >> 8) & 0xff, b = rgb & 0xff;
+    }
+}
+
+// Apply a live LED parameter.  Idle: persist to NVS (normal gated setter).
+// Running: store an in-memory override (no flash write); flushLive() writes
+// it on the return to idle.
+Error Leds::setLive(const std::string& key, const std::string& value) {
+    bool idle = state_is(State::Idle) || state_is(State::Alarm);
+
+    if (key == "effect") {
+        if (enumId(ledEffects, value, -1) < 0) {
+            return Error::InvalidStatement;
+        }
+        if (idle) {
+            return _effect->setStringValue(value);
+        }
+        _live_effect = value;
+    } else if (key == "palette") {
+        if (enumId(ledPalettes, value, -1) < 0) {
+            return Error::InvalidStatement;
+        }
+        if (idle) {
+            return _palette->setStringValue(value);
+        }
+        _live_palette = value;
+    } else if (key == "color") {
+        if (idle) {
+            return _color->setStringValue(value);
+        }
+        _live_color = value;
+    } else if (key == "color2") {
+        if (idle) {
+            return _color2->setStringValue(value);
+        }
+        _live_color2 = value;
+    } else if (key == "brightness") {
+        int v = atoi(value.c_str());
+        if (v < 0 || v > 255) {
+            return Error::NumberRange;
+        }
+        if (idle) {
+            return _brightness->setStringValue(value);
+        }
+        _live_bright = value;
+    } else if (key == "speed") {
+        int v = atoi(value.c_str());
+        if (v < 1 || v > 255) {
+            return Error::NumberRange;
+        }
+        if (idle) {
+            return _speed->setStringValue(value);
+        }
+        _live_speed = value;
+    } else {
+        return Error::InvalidStatement;
+    }
+    return Error::Ok;
+}
+
+// Persist any in-memory live overrides to NVS, then clear them so the
+// $LED/* settings regain authority.  Called once on the Run->Idle edge.
+void Leds::flushLive() {
+    if (!_live_effect.empty()) {
+        _effect->setStringValue(_live_effect);
+        _live_effect.clear();
+    }
+    if (!_live_palette.empty()) {
+        _palette->setStringValue(_live_palette);
+        _live_palette.clear();
+    }
+    if (!_live_color.empty()) {
+        _color->setStringValue(_live_color);
+        _live_color.clear();
+    }
+    if (!_live_color2.empty()) {
+        _color2->setStringValue(_live_color2);
+        _live_color2.clear();
+    }
+    if (!_live_bright.empty()) {
+        _brightness->setStringValue(_live_bright);
+        _live_bright.clear();
+    }
+    if (!_live_speed.empty()) {
+        _speed->setStringValue(_live_speed);
+        _live_speed.clear();
+    }
+}
+
 void Leds::setPixel(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness) {
     uint16_t scale         = brightness + 1;
     uint8_t* p             = &_pixels[index * 3];
@@ -323,8 +438,8 @@ void Leds::sampleTable(const uint32_t* pal, uint8_t index, uint8_t& r, uint8_t& 
 }
 
 void Leds::palColor(uint8_t index, uint8_t& r, uint8_t& g, uint8_t& b) {
-    int p = _palette ? _palette->get() : 0;
-    if (p == 0) {  // rainbow palette is the classic wheel
+    int p = _cur_palette;  // resolved once per frame in render()
+    if (p == 0) {          // rainbow palette is the classic wheel
         wheel(index, r, g, b);
     } else {
         sampleTable(kPalettes[p - 1], index, r, g, b);
@@ -354,7 +469,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
 
     switch (effect) {
         case EFFECT_STATIC:
-            getColor(_color, r, g, b);
+            primaryColor(r, g, b);
             for (int i = 0; i < _num_leds; i++) {
                 setFb(i, r, g, b);
             }
@@ -368,7 +483,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
             break;
 
         case EFFECT_BREATHE: {
-            getColor(_color, r, g, b);
+            primaryColor(r, g, b);
             uint16_t lvl = 16 + ((sin8(hi) * 239) >> 8);  // 16..255, never fully off
             for (int i = 0; i < _num_leds; i++) {
                 setFb(i, (r * lvl) >> 8, (g * lvl) >> 8, (b * lvl) >> 8);
@@ -384,7 +499,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
             break;
 
         case EFFECT_THEATER: {
-            getColor(_color, r, g, b);
+            primaryColor(r, g, b);
             int off = (_phase >> 9) % 3;
             for (int i = 0; i < _num_leds; i++) {
                 if (i % 3 == off) {
@@ -397,7 +512,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
         }
 
         case EFFECT_SCAN: {  // Larson / Cylon, with a short trail
-            getColor(_color, r, g, b);
+            primaryColor(r, g, b);
             fadeBy(90);
             int pos = scale8(sin8(hi), _num_leds - 1);
             setFb(pos, r, g, b);
@@ -405,7 +520,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
         }
 
         case EFFECT_RUNNING: {  // one sine peak of the primary color, sliding
-            getColor(_color, r, g, b);
+            primaryColor(r, g, b);
             for (int i = 0; i < _num_leds; i++) {
                 uint8_t s = sin8(static_cast<uint8_t>(i * (256 / _num_leds) - hi));
                 setFb(i, (r * s) >> 8, (g * s) >> 8, (b * s) >> 8);
@@ -414,7 +529,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
         }
 
         case EFFECT_SINE: {  // two faster sine bands of the primary color
-            getColor(_color, r, g, b);
+            primaryColor(r, g, b);
             for (int i = 0; i < _num_leds; i++) {
                 uint8_t s = sin8(static_cast<uint8_t>(i * (512 / _num_leds) + hi));
                 setFb(i, (r * s) >> 8, (g * s) >> 8, (b * s) >> 8);
@@ -424,8 +539,8 @@ void Leds::renderEffect(int effect, uint8_t speed) {
 
         case EFFECT_GRADIENT: {  // scrolling blend between color and color2
             uint8_t r1, g1, b1, r2, g2, b2;
-            getColor(_color, r1, g1, b1);
-            getColor(_color2, r2, g2, b2);
+            primaryColor(r1, g1, b1);
+            secondaryColor(r2, g2, b2);
             for (int i = 0; i < _num_leds; i++) {
                 uint8_t t   = static_cast<uint8_t>((i * 256) / _num_leds + hi);
                 uint8_t tri = t < 128 ? t * 2 : (255 - t) * 2;  // triangle so the ring loops
@@ -452,7 +567,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
         }
 
         case EFFECT_SPARKLE: {  // dim base color + white flashes
-            getColor(_color, r, g, b);
+            primaryColor(r, g, b);
             for (int i = 0; i < _num_leds; i++) {
                 setFb(i, (r * 40) >> 8, (g * 40) >> 8, (b * 40) >> 8);
             }
@@ -481,7 +596,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
         }
 
         case EFFECT_CANDLE: {  // warm global flicker on the primary color
-            getColor(_color, r, g, b);
+            primaryColor(r, g, b);
             uint8_t target = 100 + random8(155);
             _candle        = (_candle * 7 + target) >> 3;  // smooth toward target
             for (int i = 0; i < _num_leds; i++) {
@@ -491,7 +606,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
         }
 
         case EFFECT_METEOR: {  // head sweeping the ring, random-decay trail
-            getColor(_color, r, g, b);
+            primaryColor(r, g, b);
             fadeBy(40 + random8(40));
             int pos = (_phase >> 8) % _num_leds;
             setFb(pos, r, g, b);
@@ -499,7 +614,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
         }
 
         case EFFECT_BOUNCING: {  // a few balls under gravity
-            getColor(_color, r, g, b);
+            primaryColor(r, g, b);
             fadeBy(120);
             float dt    = (_frame_ms / 1000.0f) * (speed / 50.0f);
             float gravy = 9.8f;
@@ -521,8 +636,8 @@ void Leds::renderEffect(int effect, uint8_t speed) {
 
         case EFFECT_WIPE: {  // color-wipe from one end, alternating Color/Color2
             uint8_t r2, g2, b2;
-            getColor(_color, r, g, b);
-            getColor(_color2, r2, g2, b2);
+            primaryColor(r, g, b);
+            secondaryColor(r2, g2, b2);
             int span = (_phase >> 7) % (2 * _num_leds);
             for (int i = 0; i < _num_leds; i++) {
                 if (span < _num_leds) {
@@ -544,8 +659,8 @@ void Leds::renderEffect(int effect, uint8_t speed) {
 
         case EFFECT_DUALSCAN: {  // two dots sweeping toward/past each other
             uint8_t r2, g2, b2;
-            getColor(_color, r, g, b);
-            getColor(_color2, r2, g2, b2);
+            primaryColor(r, g, b);
+            secondaryColor(r2, g2, b2);
             fadeBy(80);
             int pos = scale8(sin8(hi), _num_leds - 1);
             addFb(pos, r, g, b);
@@ -586,8 +701,8 @@ void Leds::renderEffect(int effect, uint8_t speed) {
 
         case EFFECT_DISSOLVE: {  // pixels randomly flip Color<->Color2, then reverse
             uint8_t r2, g2, b2;
-            getColor(_color, r, g, b);
-            getColor(_color2, r2, g2, b2);
+            primaryColor(r, g, b);
+            secondaryColor(r2, g2, b2);
             int converts = _num_leds / 12 + 1;
             for (int n = 0; n < converts; n++) {
                 _heat[random8(_num_leds)] = _aux;  // _aux is the current target (0/1)
@@ -629,7 +744,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
         }
 
         case EFFECT_DRIP: {  // droplets fall and splash
-            getColor(_color, r, g, b);
+            primaryColor(r, g, b);
             fadeBy(60);
             float accel = 0.02f * (speed / 50.0f);
             for (int k = 0; k < kBalls; k++) {
@@ -682,7 +797,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
         }
 
         case EFFECT_HEARTBEAT: {  // double-pulse brightness (lub-dub)
-            getColor(_color, r, g, b);
+            primaryColor(r, g, b);
             uint8_t  t = hi;
             uint16_t lvl;
             if (t < 32) {
@@ -704,7 +819,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
         }
 
         case EFFECT_STROBE: {  // brief full-strip flashes
-            getColor(_color, r, g, b);
+            primaryColor(r, g, b);
             bool on = (hi < 32);
             for (int i = 0; i < _num_leds; i++) {
                 if (on) {
@@ -732,8 +847,8 @@ void Leds::renderEffect(int effect, uint8_t speed) {
 
         case EFFECT_CHASE: {  // bright dot(s) running over a dim background
             uint8_t r2, g2, b2;
-            getColor(_color, r, g, b);
-            getColor(_color2, r2, g2, b2);
+            primaryColor(r, g, b);
+            secondaryColor(r2, g2, b2);
             for (int i = 0; i < _num_leds; i++) {
                 setFb(i, (r2 * 40) >> 8, (g2 * 40) >> 8, (b2 * 40) >> 8);
             }
@@ -746,8 +861,8 @@ void Leds::renderEffect(int effect, uint8_t speed) {
 
         case EFFECT_RAILWAY: {  // alternating two colors with a moving shimmer
             uint8_t r2, g2, b2;
-            getColor(_color, r, g, b);
-            getColor(_color2, r2, g2, b2);
+            primaryColor(r, g, b);
+            secondaryColor(r2, g2, b2);
             for (int i = 0; i < _num_leds; i++) {
                 uint8_t  s     = sin8(static_cast<uint8_t>(i * (256 / _num_leds) - hi));
                 uint16_t scale = 100 + ((s * 155) >> 8);
@@ -841,9 +956,17 @@ void Leds::render() {
         return;
     }
 
-    int     effect     = _auto_effect >= 0 ? _auto_effect : _effect->get();
-    uint8_t brightness = static_cast<uint8_t>(_brightness->get());
-    uint8_t speed      = static_cast<uint8_t>(_speed->get());
+    // Live override (any state) beats the state hook beats the persisted setting.
+    int effect;
+    if (!_live_effect.empty()) {
+        effect = enumId(ledEffects, _live_effect, _effect->get());
+    } else {
+        effect = _auto_effect >= 0 ? _auto_effect : _effect->get();
+    }
+    _cur_palette = _live_palette.empty() ? (_palette ? _palette->get() : 0) : enumId(ledPalettes, _live_palette, 0);
+
+    uint8_t brightness = _live_bright.empty() ? static_cast<uint8_t>(_brightness->get()) : static_cast<uint8_t>(atoi(_live_bright.c_str()));
+    uint8_t speed      = _live_speed.empty() ? static_cast<uint8_t>(_speed->get()) : static_cast<uint8_t>(atoi(_live_speed.c_str()));
 
     renderEffect(effect, speed);
     commit(brightness);
@@ -894,6 +1017,13 @@ void Leds::parse_state_report() {
 Error Leds::pollLine(char* line) {
     if (_ready) {
         autoReport();
+        // On the Run->Idle edge, persist any live overrides set during the
+        // run (flash writes are safe now) and hand authority back to $LED/*.
+        bool idle = state_is(State::Idle) || state_is(State::Alarm);
+        if (_was_running && idle) {
+            flushLive();
+        }
+        _was_running = !idle;
         uint32_t now = now_ms();
         if (now - _last_frame >= static_cast<uint32_t>(_frame_ms)) {
             _last_frame = now;

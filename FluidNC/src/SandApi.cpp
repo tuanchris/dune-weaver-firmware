@@ -22,6 +22,7 @@
 #include "SandApi.h"
 #include "SandStatus.h"
 #include "Playlist.h"
+#include "Leds.h"                  // live LED control during a run
 
 #include "Settings.h"
 #include "Report.h"               // state_name()
@@ -92,11 +93,23 @@ namespace {
         return Playlist::runSingle(path.c_str(), clearMode.c_str(), out);
     }
 
+    // $Sand/Led=<key>=<val> [<key>=<val> ...] -- live LED control that works
+    // while a pattern is running (the $LED/* settings are idle-gated).
+    Error sandLed(const char* value, AuthenticationLevel auth_level, Channel& out) {
+        if (!value || !*value) {
+            log_error_to(out, "Usage: $Sand/Led=effect=fire palette=ocean brightness=120");
+            return Error::InvalidValue;
+        }
+        return static_cast<Error>(SandApi::applyLed(value, out));
+    }
+
     // Asynchronous so $Sand/Status reports while a pattern is running.
     UserCommand sandStatusCmd(NULL, "Sand/Status", sandStatus, nullptr, WG, false);
     UserCommand sandPatternsCmd(NULL, "Sand/Patterns", sandPatterns, nullptr, WG, false);
     UserCommand sandPlaylistsCmd(NULL, "Sand/Playlists", sandPlaylists, nullptr, WG, false);
     UserCommand sandRunCmd(NULL, "Sand/Run", sandRun, nullptr, WG, false);
+    // cmdChecker = nullptr, so this is NOT idle-gated -- usable mid-pattern.
+    UserCommand sandLedCmd(NULL, "Sand/Led", sandLed, nullptr, WG, false);
 }
 
 // Shared status builder.  Defined outside the anonymous namespace so the web
@@ -155,6 +168,16 @@ std::string SandApi::statusJson() {
         if (const char* b = settingValue("LED/Brightness")) {
             d.led_brightness = atoi(b);
         }
+        // Reflect any live override active during a run.
+        if (Leds* leds = Leds::instance()) {
+            if (const char* le = leds->liveEffect()) {
+                d.led_effect = le;
+            }
+            int lb = leds->liveBrightness();
+            if (lb >= 0) {
+                d.led_brightness = lb;
+            }
+        }
     }
 
     return SandStatus::encode(d);
@@ -198,4 +221,41 @@ std::string SandApi::settingsJson() {
         }
     }
     return SandStatus::encode_object(kv);
+}
+
+int SandApi::applyLed(const std::string& kv, Channel& out) {
+    Leds* leds = Leds::instance();
+    if (!leds) {
+        log_error_to(out, "leds not configured");
+        return static_cast<int>(Error::InvalidStatement);
+    }
+    Error first = Error::Ok;
+    size_t i    = 0;
+    while (i < kv.size()) {
+        // tokens separated by space, tab, comma or &
+        size_t b = kv.find_first_not_of(" \t,&", i);
+        if (b == std::string::npos) {
+            break;
+        }
+        size_t e     = kv.find_first_of(" \t,&", b);
+        std::string token = kv.substr(b, e == std::string::npos ? std::string::npos : e - b);
+        i             = e == std::string::npos ? kv.size() : e + 1;
+
+        size_t eq = token.find('=');
+        if (eq == std::string::npos) {
+            log_error_to(out, "bad token (need key=value): " << token);
+            if (first == Error::Ok) {
+                first = Error::InvalidValue;
+            }
+            continue;
+        }
+        std::string key = token.substr(0, eq);
+        std::string val = token.substr(eq + 1);
+        Error err       = leds->setLive(key, val);
+        if (err != Error::Ok && first == Error::Ok) {
+            first = err;
+            log_error_to(out, "rejected " << key << "=" << val);
+        }
+    }
+    return static_cast<int>(first);
 }

@@ -109,6 +109,14 @@ reliably over the (single-client) WebSocket. Pattern/playlist **contents** are f
 Effect names: `off static rainbow breathe colorloop theater scan running sine gradient sinelon twinkle sparkle fire candle meteor bouncing wipe dualscan juggle multicomet glitter dissolve ripple drip lightning fireworks plasma heartbeat strobe police chase railway pacifica aurora pride colorwaves bpm`
 Palette names: `rainbow ocean lava forest party cloud heat sunset`
 
+The `$LED/*` settings are idle-gated (NVS writes are blocked mid-motion). For
+live control during a pattern use:
+| Command | Notes |
+|---------|-------|
+| `/sand_led?effect=&palette=&color=&color2=&brightness=&speed=` | HTTP; any subset of keys; applies in-memory live, persisted to NVS on return to idle |
+| `$Sand/Led=<key>=<val> [<key>=<val> ...]` | command form, not idle-gated; same behavior |
+`/sand_status` `led` reflects the live value during a run.
+
 ### Playlist / quiet-hours settings (NVS)
 `$Playlist/Mode=single|loop` · `$Playlist/Shuffle=ON|OFF` · `$Playlist/PauseTime=<sec>` ·
 `$Playlist/PauseFromStart=ON|OFF` · `$Playlist/ClearPattern=none|adaptive|in|out|sideway|random` ·

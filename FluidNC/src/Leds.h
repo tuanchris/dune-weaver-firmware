@@ -63,6 +63,7 @@
 #include "Pin.h"
 
 #include <string>
+#include <cstdlib>
 
 class IntSetting;
 class EnumSetting;
@@ -81,6 +82,17 @@ public:
 
     void init() override;
     void deinit() override;
+
+    // Live control, usable while a pattern is running (unlike the gated
+    // $LED/* settings).  key in {effect,palette,color,color2,brightness,
+    // speed}.  When idle the value is persisted to NVS; while moving it is
+    // applied in memory only (no flash write) and flushed to NVS on the
+    // return to idle.  Reached from $Sand/Led and /sand_led.
+    static Leds* instance() { return _instance; }
+    Error        setLive(const std::string& key, const std::string& value);
+    // Effective values for status reporting (live override or persisted).
+    const char*  liveEffect() { return _live_effect.empty() ? nullptr : _live_effect.c_str(); }
+    int          liveBrightness() { return _live_bright.empty() ? -1 : atoi(_live_bright.c_str()); }
 
     // Channel interface; receives status reports, produces no input
     size_t write(uint8_t data) override;
@@ -150,12 +162,15 @@ private:
     void commit(uint8_t brightness);               // _fb -> _pixels, applies master brightness
     void parse_state_report();
     void setPixel(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness);
+    void flushLive();  // persist any in-memory live overrides to NVS (called at idle)
 
     // Framebuffer helpers (operate on _fb, logical R,G,B order)
     void setFb(int i, uint8_t r, uint8_t g, uint8_t b);
     void addFb(int i, uint8_t r, uint8_t g, uint8_t b);
     void fadeBy(uint8_t amount);
     void getColor(StringSetting* s, uint8_t& r, uint8_t& g, uint8_t& b);
+    void primaryColor(uint8_t& r, uint8_t& g, uint8_t& b);    // live _color override or setting
+    void secondaryColor(uint8_t& r, uint8_t& g, uint8_t& b);  // live _color2 override or setting
 
     // Small fixed-point / math helpers (FastLED-style, self-contained)
     uint8_t        random8();
@@ -192,6 +207,13 @@ private:
     // own autoReport, which runs inside pollLine)
     std::string _report;                 // partial report line being received
     int         _auto_effect = -1;       // -1: no override; else EFFECT_*
+
+    // Live overrides ($Sand/Led / /sand_led).  Empty string = unset, so the
+    // persisted setting is used.  Set while moving, flushed to NVS at idle.
+    static Leds* _instance;
+    std::string  _live_effect, _live_palette, _live_color, _live_color2, _live_bright, _live_speed;
+    bool         _was_running = false;
+    int          _cur_palette = 0;       // palette id resolved once per frame
 
     // Driver state
     bool     _ready = false;

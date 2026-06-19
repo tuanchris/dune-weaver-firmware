@@ -103,6 +103,7 @@ namespace WebUI {
         static void handleSandPlaylists();
         static void handleSandSettings();
         static void handleSandFeed();
+        static void handleSandLed();
         static void LocalFSFileupload();
         static void handleFileList();
         static void handleUpdate();

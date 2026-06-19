@@ -24,6 +24,7 @@
 
 #include "src/Protocol.h"  // protocol_send_event
 #include "src/SandApi.h"   // SandApi::statusJson() for /sand_status
+#include "src/Leds.h"      // Leds::instance() for /sand_led
 #include "src/FluidPath.h"
 #include "src/JSONEncoder.h"
 
@@ -149,6 +150,7 @@ namespace WebUI {
         _webserver->on("/sand_playlists", HTTP_ANY, handleSandPlaylists);
         _webserver->on("/sand_settings", HTTP_ANY, handleSandSettings);
         _webserver->on("/sand_feed", HTTP_ANY, handleSandFeed);
+        _webserver->on("/sand_led", HTTP_ANY, handleSandLed);
 
         //LocalFS
         _webserver->on("/files", HTTP_ANY, handleFileList, LocalFSFileupload);
@@ -386,6 +388,7 @@ namespace WebUI {
                          "Pause      GET /sand_pause\n"
                          "Resume     GET /sand_resume\n"
                          "Speed      GET /sand_feed?d=up|down|reset\n"
+                         "LEDs       GET /sand_led?effect=|palette=|color=|color2=|brightness=|speed=\n"
                          "\n"
                          "Run/playlist, LED & everything else: GET /command?plain=$...\n"
                          "  $SD/Run=/patterns/star.thr | $Playlist/Run=<name>\n"
@@ -816,6 +819,37 @@ namespace WebUI {
             protocol_send_event(&feedOverrideEvent, FeedOverride::Default);
         }
         _webserver->send(200, "text/plain", "ok");
+    }
+
+    // Sand-table UI: live LED control (works mid-pattern, no flash write).
+    //   /sand_led?effect=fire&palette=ocean&brightness=120&color=FF0000&speed=80
+    void Web_Server::handleSandLed() {
+        _webserver->sendHeader("Cache-Control", "no-store");
+        Leds* leds = Leds::instance();
+        if (!leds) {
+            _webserver->send(503, "text/plain", "leds not configured");
+            return;
+        }
+        static const char* const keys[] = { "effect", "palette", "color", "color2", "brightness", "speed" };
+        std::string              rejected;
+        int                      applied = 0;
+        for (const char* k : keys) {
+            if (_webserver->hasArg(k)) {
+                if (leds->setLive(k, _webserver->arg(k).c_str()) == Error::Ok) {
+                    ++applied;
+                } else {
+                    rejected += k;
+                    rejected += ' ';
+                }
+            }
+        }
+        if (!rejected.empty()) {
+            _webserver->send(400, "text/plain", ("rejected: " + rejected).c_str());
+        } else if (applied == 0) {
+            _webserver->send(400, "text/plain", "no LED args (effect|palette|color|color2|brightness|speed)");
+        } else {
+            _webserver->send(200, "text/plain", "ok");
+        }
     }
 
     //push error code and message to websocket.  Used by upload code

@@ -49,14 +49,19 @@ Compass"**.)
 
 - **API rides command dispatch, not REST routes** (rebase-safe, serial-testable):
   `$Sand/*`, `$Playlist/*`, `$LED/*`, `$THR/Feed`, etc., plus a few `/sand_*` HTTP
-  action routes (`/sand_home|stop|pause|resume|feed`). `handle_root` serves a plain
-  API map.
+  action routes (`/sand_home|stop|pause|resume|feed|led`). `handle_root` serves a
+  plain API map.
 - **WebUI WebSockets are disabled** (`_socket_server = NULL`) — they raced motion and
   panicked the board. Drive everything over stateless HTTP (`/command` + `/sand_*`),
   poll `/sand_status` ~1 Hz.
 - **Settings framework = the way to make things app-configurable**: any NVS-backed
   `Setting` is auto-readable via `GET /sand_settings` and writable via
   `$Key=value` over `/command`. Add a setting + its key in `settingsJson()`.
+  **But `Setting` writes are idle-gated** (`Setting::check_state` → `IdleError`
+  "Command requires idle state"; flash/NVS writes are blocked mid-motion). To
+  change something **while a pattern runs**, add a non-gated path that applies
+  in-memory and persists on the return to idle — e.g. `/sand_led` + `$Sand/Led`
+  (a `UserCommand` with `cmdChecker=nullptr`) driving `Leds::setLive()`.
 - **Motion from a web/non-protocol task must signal the main loop**, never block
   inline — `$H`/jogs run in `protocol_main_loop` via an event (`/sand_home` →
   `startHomeEvent`); running blocking motion in the web task starves segment prep

@@ -149,6 +149,26 @@ Effects (`$LED/Effect=<name>`):
 `Speed` paces every effect (and gates spawn rates for `twinkle`/`bouncing`).
 `Brightness` is a master scale applied over whatever the effect produces.
 
+### Live control while a pattern is running
+
+The `$LED/*` settings above are **idle-gated** — sending one while the table is
+moving returns `Error: Command requires idle state` (FluidNC blocks NVS/flash
+writes mid-motion). Use `/sand_led` (or `$Sand/Led`) for live control instead:
+it applies in memory immediately (no flash write) and is persisted to NVS
+automatically when the table next returns to idle.
+
+```bash
+# Works any time, including mid-pattern. keys: effect palette color color2 brightness speed
+curl "$B/sand_led?effect=fire&palette=ocean&brightness=120"
+curl "$B/sand_led?color=FF0000&speed=80"
+# command form (same behavior), space-separated key=value:
+curl "$B/command?plain=\$Sand/Led=effect=plasma%20palette=lava"
+```
+
+`/sand_status`'s `led` object reflects the live value during a run. A live
+choice set mid-run is saved to the matching `$LED/*` setting on the return to
+idle, so it survives the next reboot.
+
 ```bash
 # Motion-reactive (override the manual effect by machine state; none = don't override)
 curl "$B/command?plain=\$LED/RunEffect=fire"     # while Run/Jog/Home
