@@ -12,6 +12,7 @@
 #include "System.h"    // state_is
 #include "Protocol.h"  // LINE_BUFFER_SIZE
 #include "FileStream.h"
+#include "Kinematics/ThetaRho.h"  // clearFeedLive() when a run ends
 #include "FluidPath.h"
 
 #include <freertos/FreeRTOS.h>
@@ -265,6 +266,9 @@ bool Playlist::quietNow(uint32_t now) {
 
 void Playlist::finish(const char* why) {
     log_info("playlist: " << _playlist_name << " " << why);
+    // A live /sand_feed?mm override persists across the run's patterns; clear it
+    // now the run (playlist or single $Sand/Run) is over, back to $THR/Feed.
+    Kinematics::ThetaRho::clearFeedLive();
     _phase = Phase::Off;
     _items.clear();
     _items.shrink_to_fit();

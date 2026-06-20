@@ -6,6 +6,8 @@
 #include <functional>
 #include <cstddef>
 
+#include "Error.h"
+
 class Channel;
 
 namespace SandApi {
@@ -47,4 +49,12 @@ namespace SandApi {
     // is running (in-memory; persisted to NVS at idle).  Backs both the
     // $Sand/Led command and the /sand_led route.  Returns the first error.
     int applyLed(const std::string& kv, Channel& out);
+
+    // Jog to an absolute theta (radians) and/or rho (0..1) for manual
+    // positioning between patterns.  At least one axis must be present.  rho is
+    // clamped to 0..1; theta is the absolute machine angle in radians.  Requires
+    // Idle (returns Error::IdleError if a pattern is running or unhomed); the
+    // jog itself is run by the main loop (see protocol_request_goto).  Backs
+    // $Sand/Goto and /sand_goto.
+    Error goTo(bool hasTheta, float theta, bool hasRho, float rho);
 }

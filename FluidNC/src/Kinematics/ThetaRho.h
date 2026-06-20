@@ -64,9 +64,11 @@ namespace Kinematics {
         // Live base feed (mm/min) for the running pattern, usable mid-motion
         // (unlike the idle-gated $THR/Feed setting).  When idle this persists
         // to $THR/Feed; while moving it is an in-memory override applied on the
-        // next move and cleared at end_job (so each pattern starts from the
-        // persisted setting).  Backs /sand_feed?mm=.  Static + null-safe.
+        // next move.  It persists across patterns (so a speed set mid-playlist
+        // holds for the whole playlist) and is cleared by clearFeedLive() when
+        // the run ends.  Backs /sand_feed?mm=.  Static + null-safe.
         static Error setFeedLive(int mm_per_min);
+        static void  clearFeedLive();  // drop the override back to $THR/Feed (run ended)
         static int   effectiveFeed();  // live override or the persisted setting; -1 if no module
 
         // Current ball angle as a fraction of a full turn, [0,1).  Lets the

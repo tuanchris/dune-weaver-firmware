@@ -145,6 +145,7 @@ namespace WebUI {
         _webserver->on("/did_restart", HTTP_ANY, handleDidRestart);
         _webserver->on("/sand_stop", HTTP_ANY, handleSandStop);
         _webserver->on("/sand_home", HTTP_ANY, handleSandHome);
+        _webserver->on("/sand_goto", HTTP_ANY, handleSandGoto);
         _webserver->on("/sand_pause", HTTP_ANY, handleSandPause);
         _webserver->on("/sand_resume", HTTP_ANY, handleSandResume);
         _webserver->on("/sand_status", HTTP_ANY, handleSandStatus);
@@ -386,6 +387,7 @@ namespace WebUI {
                          "Settings   GET /sand_settings\n"
                          "\n"
                          "Home       GET /sand_home\n"
+                         "Goto       GET /sand_goto?theta=<rad>&rho=<0..1>  (either/both; idle only)\n"
                          "Stop       GET /sand_stop\n"
                          "Pause      GET /sand_pause\n"
                          "Resume     GET /sand_resume\n"
@@ -771,6 +773,23 @@ namespace WebUI {
     // Sand-table UI: home.  Flags the main loop to run $H in the main task -
     // running $H here (the polling_loop task, via handleClient) makes homing
     // crawl, because two tasks then pump Stepper::prep_buffer().
+    // Jog to an absolute theta (radians) and/or rho (0..1) for manual
+    // positioning between patterns: /sand_goto?theta=<rad>&rho=<0..1> (either or
+    // both).  Requires idle (no pattern running); the jog runs in the main loop.
+    void Web_Server::handleSandGoto() {
+        bool  hasTheta = _webserver->hasArg("theta");
+        bool  hasRho   = _webserver->hasArg("rho");
+        float theta    = hasTheta ? _webserver->arg("theta").toFloat() : 0.0f;
+        float rho      = hasRho ? _webserver->arg("rho").toFloat() : 0.0f;
+        Error err      = SandApi::goTo(hasTheta, theta, hasRho, rho);
+        if (err == Error::Ok) {
+            _webserver->send(200, "text/plain", "ok");
+        } else if (err == Error::IdleError) {
+            _webserver->send(409, "text/plain", "busy: goto requires idle (home first / stop the pattern)");
+        } else {
+            _webserver->send(400, "text/plain", "need theta=<rad> and/or rho=<0..1>");
+        }
+    }
     void Web_Server::handleSandHome() {
         protocol_send_event(&startHomeEvent);
         _webserver->send(200, "text/plain", "ok");

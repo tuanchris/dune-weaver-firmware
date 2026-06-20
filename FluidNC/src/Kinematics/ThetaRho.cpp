@@ -127,8 +127,18 @@ namespace Kinematics {
     void ThetaRho::end_job() {
         _job_name.clear();
         _job_channel = nullptr;
-        _live_feed   = -1;  // the /sand_feed?mm override is per-pattern
+        // NOTE: the /sand_feed?mm live override (_live_feed) is intentionally NOT
+        // cleared here.  It persists across patterns so a speed set mid-playlist
+        // stays in effect for the rest of the playlist; Playlist::finish() clears
+        // it when the playlist (or a single $Sand/Run) ends.
         normalize_theta();
+    }
+
+    // Clear the live base-feed override (back to the persisted $THR/Feed).
+    // Called when a playlist / single run ends so the override is per-run, not
+    // forever.
+    void ThetaRho::clearFeedLive() {
+        _live_feed = -1;
     }
 
     // Ball angle as a fraction of a full turn, [0,1), for the LED ball effect.

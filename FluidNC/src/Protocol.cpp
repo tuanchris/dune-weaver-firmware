@@ -69,6 +69,16 @@ static volatile bool rtStopJob = false;
 // (main task only) ran at full speed.
 static volatile bool rtStartHome = false;
 
+// Set by /sand_goto -> protocol_request_goto; the main loop runs the jog to an
+// absolute theta/rho.  Like homing, jog planning runs in the main task (not the
+// web/polling task) to avoid racing the planner / segment prep.
+static volatile bool  rtStartGoto  = false;
+static volatile bool  gotoHasTheta = false;
+static volatile bool  gotoHasRho   = false;
+static volatile float gotoTheta    = 0.0f;
+static volatile float gotoRho      = 0.0f;
+static volatile float gotoFeed     = 0.0f;
+
 volatile bool runLimitLoop;  // Interface to show_limits()
 
 static void protocol_exec_rt_suspend();
@@ -363,6 +373,31 @@ void protocol_main_loop() {
             execute_line(line, allChannels, AuthenticationLevel::LEVEL_GUEST);
         }
 
+        // Run a web-requested goto (/sand_goto) here in the main task: build an
+        // absolute G1 move to the target theta/rho and let the gcode parser /
+        // planner run in this task only.  We use G1 (not $J= jog) because jog
+        // applies X/Y in motor units, bypassing the ThetaRho cartesian->motor
+        // transform; G1 goes through kinematics exactly like a .thr move, so
+        // theta is in radians and rho in 0..1.  Dropped (not latched) unless
+        // Idle, so it never fires after a pattern that was running at request.
+        if (rtStartGoto) {
+            rtStartGoto = false;
+            if (state_is(State::Idle)) {
+                char gline[LINE_BUFFER_SIZE];
+                int  n = snprintf(gline, sizeof(gline), "G90G1");
+                if (gotoHasTheta) {
+                    n += snprintf(gline + n, sizeof(gline) - n, "X%.5f", gotoTheta);
+                }
+                if (gotoHasRho) {
+                    n += snprintf(gline + n, sizeof(gline) - n, "Y%.5f", gotoRho);
+                }
+                n += snprintf(gline + n, sizeof(gline) - n, "F%.1f", gotoFeed);
+                if (n > 0 && static_cast<size_t>(n) < sizeof(gline)) {
+                    execute_line(gline, allChannels, AuthenticationLevel::LEVEL_GUEST);
+                }
+            }
+        }
+
         // check to see if we should disable the stepper drivers
         // If idleEndTime is 0, no disable is pending.
 
@@ -640,6 +675,17 @@ void protocol_do_stop_job() {
 // prep (see rtStartHome above).
 void protocol_do_start_home() {
     rtStartHome = true;
+}
+
+// Sand-table goto request (called from the web/command task).  Stores the
+// target, then raises the flag last so the main loop reads fully-written params.
+void protocol_request_goto(bool hasTheta, float theta, bool hasRho, float rho, float feed) {
+    gotoHasTheta = hasTheta;
+    gotoHasRho   = hasRho;
+    gotoTheta    = theta;
+    gotoRho      = rho;
+    gotoFeed     = feed;
+    rtStartGoto  = true;
 }
 
 static void protocol_do_feedhold() {

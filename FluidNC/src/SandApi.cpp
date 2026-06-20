@@ -33,6 +33,7 @@
 #include "Job.h"
 #include "FluidPath.h"
 #include "FileStream.h"           // serve a prebuilt pattern manifest
+#include "Protocol.h"            // protocol_request_goto (deferred jog)
 
 #include <cstring>
 #include <cstdlib>
@@ -184,6 +185,44 @@ namespace {
         return static_cast<Error>(SandApi::applyLed(value, out));
     }
 
+    // $Sand/Goto theta=<rad> rho=<0..1> -- jog to an absolute theta and/or rho
+    // for manual positioning between patterns (at least one axis).
+    Error sandGoto(const char* value, AuthenticationLevel auth_level, Channel& out) {
+        std::string v = value ? value : "";
+        bool        hasTheta = false, hasRho = false;
+        float       theta = 0.0f, rho = 0.0f;
+        size_t      i = 0;
+        while (i < v.size()) {
+            size_t b = v.find_first_not_of(" \t,&", i);
+            if (b == std::string::npos) {
+                break;
+            }
+            size_t      e     = v.find_first_of(" \t,&", b);
+            std::string token = v.substr(b, e == std::string::npos ? std::string::npos : e - b);
+            i                 = e == std::string::npos ? v.size() : e + 1;
+            size_t eq = token.find('=');
+            if (eq == std::string::npos) {
+                continue;
+            }
+            std::string key = token.substr(0, eq);
+            float       val = strtof(token.c_str() + eq + 1, nullptr);
+            if (strcasecmp(key.c_str(), "theta") == 0) {
+                theta    = val;
+                hasTheta = true;
+            } else if (strcasecmp(key.c_str(), "rho") == 0) {
+                rho    = val;
+                hasRho = true;
+            }
+        }
+        Error err = SandApi::goTo(hasTheta, theta, hasRho, rho);
+        if (err == Error::InvalidValue) {
+            log_error_to(out, "Usage: $Sand/Goto theta=<rad> rho=<0..1> (at least one)");
+        } else if (err == Error::IdleError) {
+            log_error_to(out, "goto requires idle (home first / stop the pattern)");
+        }
+        return err;
+    }
+
     // Asynchronous so $Sand/Status reports while a pattern is running.
     UserCommand sandStatusCmd(NULL, "Sand/Status", sandStatus, nullptr, WG, false);
     UserCommand sandPatternsCmd(NULL, "Sand/Patterns", sandPatterns, nullptr, WG, false);
@@ -191,6 +230,9 @@ namespace {
     UserCommand sandRunCmd(NULL, "Sand/Run", sandRun, nullptr, WG, false);
     // cmdChecker = nullptr, so this is NOT idle-gated -- usable mid-pattern.
     UserCommand sandLedCmd(NULL, "Sand/Led", sandLed, nullptr, WG, false);
+    // goTo() checks Idle itself (so it can report a clear error), so leave this
+    // un-gated rather than letting the generic idle gate reject it first.
+    UserCommand sandGotoCmd(NULL, "Sand/Goto", sandGoto, nullptr, WG, false);
 }
 
 // Shared status builder.  Defined outside the anonymous namespace so the web
@@ -200,11 +242,13 @@ std::string SandApi::statusJson() {
     SandStatus::Data d;
     d.state = state_name();
 
-    if (config && config->_kinematics) {
-        float cartesian[MAX_N_AXIS] = {};
-        config->_kinematics->motors_to_cartesian(cartesian, get_mpos(), Axes::_numberAxis);
-        d.theta = cartesian[X_AXIS];
-        d.rho   = cartesian[Y_AXIS];
+    // get_mpos() already returns the cartesian (theta, rho) machine position
+    // (it runs motors_to_cartesian internally, see motor_steps_to_mpos), so use
+    // it directly.  Re-applying motors_to_cartesian here double-transformed it
+    // (theta came out ~7.96x too small and rho mis-coupled).
+    if (float* mpos = get_mpos()) {
+        d.theta = mpos[X_AXIS];
+        d.rho   = mpos[Y_AXIS];
     }
 
     if (const char* feed = settingValue("THR/Feed")) {
@@ -328,6 +372,28 @@ std::string SandApi::settingsJson() {
         }
     }
     return SandStatus::encode_object(kv);
+}
+
+Error SandApi::goTo(bool hasTheta, float theta, bool hasRho, float rho) {
+    if (!hasTheta && !hasRho) {
+        return Error::InvalidValue;  // nothing to move
+    }
+    // Only when no pattern is running and the machine is homed.  (Alarm = unhomed
+    // -> position is garbage; Run/Hold/Jog = busy.)
+    if (!state_is(State::Idle)) {
+        return Error::IdleError;
+    }
+    if (hasRho) {
+        rho = rho < 0.0f ? 0.0f : (rho > 1.0f ? 1.0f : rho);  // rho is 0..1
+    }
+    float feed = static_cast<float>(Kinematics::ThetaRho::effectiveFeed());
+    if (feed <= 0.0f) {
+        feed = 1000.0f;  // fallback if $THR/Feed unset
+    }
+    // Deferred to the main loop so the jog is planned in the main task, never
+    // concurrently with it from the web/command task.
+    protocol_request_goto(hasTheta, theta, hasRho, rho, feed);
+    return Error::Ok;
 }
 
 int SandApi::applyLed(const std::string& kv, Channel& out) {

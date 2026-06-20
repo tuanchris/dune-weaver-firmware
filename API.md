@@ -93,6 +93,7 @@ reliably over the (single-client) WebSocket. Pattern/playlist **contents** are f
 | `$Playlist/Stop` | stop after the current pattern |
 | `$Playlist/Skip` | abort current pattern, advance to next |
 | `$Playlist/List` | text listing + active playlist index/total/name |
+| `$Sand/Goto theta=<rad> rho=<0..1>` / `GET /sand_goto?theta=&rho=` | jog to an absolute θ (radians) and/or ρ (0..1); either or both axes (omitted axis stays put). For manual positioning **between patterns** — requires Idle (rejects with IdleError/HTTP 409 if a pattern is running or unhomed). ρ clamped to 0..1; uses the current feed; runs as a `G1` move (through ThetaRho kinematics) in the main loop — stop with `/sand_stop` |
 | `$H` | home (sets θ=0, normalizes; **send over WebSocket**) |
 | `!` / `~` | realtime feed-hold (pause) / cycle-start (resume) |
 | `0x18` (Ctrl-X) | realtime soft reset (loses position) |
@@ -100,7 +101,7 @@ reliably over the (single-client) WebSocket. Pattern/playlist **contents** are f
 ### Speed
 | Command | Notes |
 |---------|-------|
-| `/sand_feed?mm=<0..100000>` | set base feed rate (motor mm/min) live; works mid-pattern. Idle → persists to `$THR/Feed`; running → in-memory, per-pattern (resets next pattern) |
+| `/sand_feed?mm=<0..100000>` | set base feed rate (motor mm/min) live; works mid-pattern. Idle → persists to `$THR/Feed`; running → in-memory override that **persists across the whole playlist/run** (no longer reset per pattern), cleared back to `$THR/Feed` when the run ends |
 | `$THR/Feed=<mm_per_min>` | same base rate, NVS-persisted; idle-gated; applied on the next `.thr` move |
 | `/sand_feed?pct=<10..200>` | scale the base rate by an absolute override percentage; works mid-pattern |
 | `/sand_feed?d=up\|down\|reset` | HTTP one-shot coarse feed-override ±10% / reset to 100% |

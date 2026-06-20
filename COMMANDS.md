@@ -79,6 +79,15 @@ curl "$B/command?plain=\$X"               # unlock from Alarm without homing
 - Sensor homing uses the limit switches (gpio.36 theta, gpio.35 rho).
 - Crash (sensorless) homing is **not implemented** in firmware.
 
+```bash
+# Goto an absolute theta (radians) and/or rho (0..1) - manual positioning between
+# patterns (idle only; either or both axes, omitted axis stays put).
+curl "$B/sand_goto?theta=3.14159&rho=0.5"   # both
+curl "$B/sand_goto?rho=0"                    # rho only -> center
+curl "$B/sand_goto?theta=6.28318"            # theta only -> one turn from 0
+#   409 if a pattern is running / unhomed. Same via command: $Sand/Goto theta=.. rho=..
+```
+
 ---
 
 ## Speed
@@ -91,7 +100,8 @@ curl "$B/sand_feed?d=up"                  # override + (coarse, +10%)
 curl "$B/sand_feed?d=down"                # override - (coarse, -10%)
 curl "$B/sand_feed?d=reset"               # back to 100%
 #   effective speed = base mm/min (feed) * feed_override% / 100; poll /sand_status for feed + feed_override.
-#   ?mm during a run is in-memory (per-pattern, resets next pattern); ?mm while idle persists to $THR/Feed.
+#   ?mm during a run is in-memory and persists across the whole playlist/run (cleared when it ends);
+#   ?mm while idle persists to $THR/Feed.
 ```
 
 `/sand_status` reports `feed` (programmed) and `feed_override` (live %); effective

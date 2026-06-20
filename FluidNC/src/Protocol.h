@@ -46,6 +46,12 @@ void protocol_cancel_disable_steppers();
 
 void protocol_do_motion_cancel();
 
+// Sand-table goto: request a jog to an absolute theta (radians) and/or rho
+// (0..1); feed is mm/min.  The actual jog runs in protocol_main_loop (main
+// task) so it is planned by the same task that pumps segment prep, never
+// concurrently from the web/polling task.  Ignored unless the machine is Idle.
+void protocol_request_goto(bool hasTheta, float theta, bool hasRho, float rho, float feed);
+
 extern volatile bool rtCycleStop;
 
 extern volatile bool runLimitLoop;
