@@ -156,11 +156,13 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   "file": "/sd/patterns/star.thr",
   "progress": 0.425,          // 0..1 fraction of executed motion, or -1 if unknown
   "playlist": { "active": true, "index": 2, "total": 10, "name": "evening",
-                "clearing": false, "quiet": false },
+                "clearing": false, "quiet": false, "pause_remaining": -1 },
   //  clearing=true means a pre-execution clear is running before the chosen
   //  pattern; progress then tracks the CLEAR file's own 0..1 progress (file is the
   //  clear pattern). Render it as a separate "Clearing…" bar that resets when the
   //  real pattern starts, rather than the chosen pattern's progress.
+  //  pause_remaining = seconds left in the between-patterns pause ($Playlist/PauseTime),
+  //  counting down live; -1 when not in that pause. Show a "next in Ns" countdown.
   "led": { "effect": "rainbow", "brightness": 40 }   // omitted if no leds: config
 }
 ```

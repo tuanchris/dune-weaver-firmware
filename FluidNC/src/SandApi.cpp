@@ -229,12 +229,13 @@ std::string SandApi::statusJson() {
 
     Playlist::RuntimeStatus rs;
     if (Playlist::runtimeStatus(rs)) {
-        d.playlist_active   = rs.active;
-        d.playlist_index    = rs.index;
-        d.playlist_total    = rs.total;
-        d.playlist_name     = rs.name;
-        d.playlist_clearing = rs.clearing;
-        d.quiet             = rs.quiet;
+        d.playlist_active            = rs.active;
+        d.playlist_index             = rs.index;
+        d.playlist_total             = rs.total;
+        d.playlist_pause_remaining   = rs.pause_remaining;
+        d.playlist_name              = rs.name;
+        d.playlist_clearing          = rs.clearing;
+        d.quiet                      = rs.quiet;
     }
 
     // During a pre-execution clear the running file is the CLEAR pattern, not the

@@ -280,10 +280,12 @@ void Playlist::publish() {
     // A single $Sand/Run uses this machine but is not a playlist, so it never
     // sets playlist.active (the app reads the running file from the job instead);
     // its clear phase still surfaces as "clearing" so the UI can show it.
-    bool active     = _phase != Phase::Off && !_single;
-    _pub_active     = active;
-    _pub_clearing   = _phase == Phase::RunClear;
-    _pub_quiet      = _in_quiet;
+    bool active         = _phase != Phase::Off && !_single;
+    _pub_active         = active;
+    _pub_clearing       = _phase == Phase::RunClear;
+    _pub_quiet          = _in_quiet;
+    _pub_pausing        = _phase == Phase::Pausing;
+    _pub_pause_until_ms = _pause_until_ms;
     _pub_index      = active ? static_cast<int>(_index) : 0;
     _pub_total      = active ? static_cast<int>(_order.size()) : 0;
     if (active) {
@@ -305,6 +307,14 @@ bool Playlist::runtimeStatus(RuntimeStatus& out) {
     out.quiet    = p->_pub_quiet;
     out.index    = p->_pub_index;
     out.total    = p->_pub_total;
+    // Seconds left in the between-patterns pause, computed live so it counts
+    // down between status polls; -1 when not pausing.
+    if (p->_pub_pausing) {
+        int32_t left_ms      = static_cast<int32_t>(p->_pub_pause_until_ms - now_ms());
+        out.pause_remaining = left_ms > 0 ? (left_ms + 999) / 1000 : 0;
+    } else {
+        out.pause_remaining = -1;
+    }
     strlcpy(out.name, p->_pub_name, sizeof(out.name));
     strlcpy(out.current, p->_pub_current, sizeof(out.current));
     return true;

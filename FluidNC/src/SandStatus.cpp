@@ -102,6 +102,8 @@ namespace SandStatus {
         o += d.playlist_clearing ? "true" : "false";
         o += ",\"quiet\":";
         o += d.quiet ? "true" : "false";
+        o += ",\"pause_remaining\":";
+        append_int(o, d.playlist_pause_remaining);  // seconds; -1 when not pausing
         o += '}';
 
         if (d.has_led) {

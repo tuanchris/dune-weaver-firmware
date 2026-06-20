@@ -129,6 +129,7 @@ public:
         bool quiet    = false;
         int  index    = 0;
         int  total    = 0;
+        int  pause_remaining = -1;  // seconds left in the between-patterns pause; -1 if not pausing
         char name[64]     = {};
         char current[160] = {};
     };
@@ -217,11 +218,13 @@ private:
 
     // Published snapshot (written by the polling task, read by the API
     // command handler in another task).  POD only - no std::string.
-    volatile bool _pub_active   = false;
-    volatile bool _pub_clearing = false;
-    volatile bool _pub_quiet    = false;
-    volatile int  _pub_index    = 0;
-    volatile int  _pub_total    = 0;
+    volatile bool     _pub_active         = false;
+    volatile bool     _pub_clearing       = false;
+    volatile bool     _pub_quiet          = false;
+    volatile bool     _pub_pausing        = false;  // in the between-patterns pause
+    volatile int      _pub_index          = 0;
+    volatile int      _pub_total          = 0;
+    volatile uint32_t _pub_pause_until_ms = 0;  // deadline; remaining computed live at read
     char          _pub_name[64]     = {};
     char          _pub_current[160] = {};
 };
