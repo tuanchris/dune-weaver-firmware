@@ -25,7 +25,13 @@ FluidPath::FluidPath(const char* name, const char* fs, std::error_code* ecptr) :
             throw stdfs::filesystem_error { "SD card is inaccessible", name, ec };
         }
         if (_refcnt == 0) {
-            auto ec = sd_mount();
+            // Allow several concurrently-open SD files.  The default of 1 means a
+            // running .thr job holds the only descriptor, so any other SD open
+            // (serving the /patterns/index.json manifest, a /sd file fetch, the
+            // adaptive-clear firstRho peek) fails with "no free file descriptors"
+            // and the retry storm wedges the board.  Headroom: job + manifest +
+            // a file fetch + spare.
+            auto ec = sd_mount(5);
             if (ec) {
                 if (ecptr) {
                     *ecptr = ec;
