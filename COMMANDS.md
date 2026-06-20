@@ -27,8 +27,9 @@ B=http://192.168.68.160       # LAN IP (preferred); or the mDNS name, e.g. http:
 
 ```bash
 curl "$B/sand_status"        # state, theta, rho, feed, feed_override, running, file, progress,
-                             #   playlist{active,index,total,name,clearing,quiet,pause_remaining}, led{}
-                             #   pause_remaining = seconds left in between-patterns pause (-1 if not pausing)
+                             #   playlist{active,index,total,name,clearing,quiet,pause_remaining,pause_total}, led{}
+                             #   pause_remaining/pause_total = sec left / full length of between-patterns pause
+                             #   (both -1 if not pausing); bar fill = (pause_total-pause_remaining)/pause_total
 curl "$B/sand_patterns"      # serves /patterns/index.json manifest if present (full recursive catalog,
                              #   paths relative to /patterns); else top-level /patterns/*.thr (non-recursive).
                              #   Run any pattern by full path: $Sand/Run=/patterns/sub/x.thr

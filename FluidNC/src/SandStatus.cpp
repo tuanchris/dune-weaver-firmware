@@ -104,6 +104,8 @@ namespace SandStatus {
         o += d.quiet ? "true" : "false";
         o += ",\"pause_remaining\":";
         append_int(o, d.playlist_pause_remaining);  // seconds; -1 when not pausing
+        o += ",\"pause_total\":";
+        append_int(o, d.playlist_pause_total);  // seconds; bar fill = (total-remaining)/total
         o += '}';
 
         if (d.has_led) {

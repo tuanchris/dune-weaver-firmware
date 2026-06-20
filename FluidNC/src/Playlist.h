@@ -130,6 +130,7 @@ public:
         int  index    = 0;
         int  total    = 0;
         int  pause_remaining = -1;  // seconds left in the between-patterns pause; -1 if not pausing
+        int  pause_total     = -1;  // full duration of that pause, seconds; -1 if not pausing (for a progress bar)
         char name[64]     = {};
         char current[160] = {};
     };
@@ -205,6 +206,7 @@ private:
     uint32_t                 _inject_ms        = 0;      // when the last line was injected
     uint32_t                 _pattern_start_ms = 0;
     uint32_t                 _pause_until_ms   = 0;
+    uint32_t                 _pause_total_ms   = 0;
     int                      _since_home       = 0;
     bool                     _registered       = false;
 
@@ -225,6 +227,7 @@ private:
     volatile int      _pub_index          = 0;
     volatile int      _pub_total          = 0;
     volatile uint32_t _pub_pause_until_ms = 0;  // deadline; remaining computed live at read
+    volatile uint32_t _pub_pause_total_ms = 0;  // full pause duration, for the status progress bar
     char          _pub_name[64]     = {};
     char          _pub_current[160] = {};
 };

@@ -286,6 +286,7 @@ void Playlist::publish() {
     _pub_quiet          = _in_quiet;
     _pub_pausing        = _phase == Phase::Pausing;
     _pub_pause_until_ms = _pause_until_ms;
+    _pub_pause_total_ms = _pause_total_ms;
     _pub_index      = active ? static_cast<int>(_index) : 0;
     _pub_total      = active ? static_cast<int>(_order.size()) : 0;
     if (active) {
@@ -311,9 +312,11 @@ bool Playlist::runtimeStatus(RuntimeStatus& out) {
     // down between status polls; -1 when not pausing.
     if (p->_pub_pausing) {
         int32_t left_ms      = static_cast<int32_t>(p->_pub_pause_until_ms - now_ms());
-        out.pause_remaining = left_ms > 0 ? (left_ms + 999) / 1000 : 0;
+        out.pause_remaining  = left_ms > 0 ? (left_ms + 999) / 1000 : 0;
+        out.pause_total      = (p->_pub_pause_total_ms + 999) / 1000;  // for a progress bar
     } else {
         out.pause_remaining = -1;
+        out.pause_total     = -1;
     }
     strlcpy(out.name, p->_pub_name, sizeof(out.name));
     strlcpy(out.current, p->_pub_current, sizeof(out.current));
@@ -661,6 +664,7 @@ Error Playlist::pollLine(char* line) {
                 if (pause_ms > 0) {
                     log_info("playlist: pausing " << (pause_ms / 1000) << "s");
                     _pause_until_ms = now + pause_ms;
+                    _pause_total_ms = pause_ms;  // full duration, for the status progress bar
                     _phase          = Phase::Pausing;
                 } else {
                     _phase = Phase::NextItem;
