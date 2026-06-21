@@ -194,6 +194,7 @@ void Leds::init() {
         _idle_effect = new EnumSetting("LED effect while idle", EXTENDED, WG, NULL, "LED/IdleEffect", EFFECT_NONE, &ledHookEffects);
         _direction   = new EnumSetting("LED ball direction", EXTENDED, WG, NULL, "LED/Direction", DIR_CW, &ledDirections);
         _align       = new IntSetting("LED ball alignment, degrees", EXTENDED, WG, NULL, "LED/Align", 0, 0, 359);
+        _ballsize    = new IntSetting("LED ball glow size, LEDs", EXTENDED, WG, NULL, "LED/BallSize", 3, 1, 200);
     }
 
     log_info("leds: " << _num_leds << " WS2812 on pin " << _data_pin.name() << " order " << _color_order);
@@ -368,6 +369,15 @@ Error Leds::setLive(const std::string& key, const std::string& value) {
             return _align->setStringValue(value);
         }
         _live_align = value;
+    } else if (key == "size") {
+        int v = atoi(value.c_str());
+        if (v < 1 || v > 200) {
+            return Error::NumberRange;
+        }
+        if (idle) {
+            return _ballsize->setStringValue(value);
+        }
+        _live_ballsize = value;
     } else {
         return Error::InvalidStatement;
     }
@@ -408,6 +418,10 @@ void Leds::flushLive() {
     if (!_live_align.empty()) {
         _align->setStringValue(_live_align);
         _live_align.clear();
+    }
+    if (!_live_ballsize.empty()) {
+        _ballsize->setStringValue(_live_ballsize);
+        _live_ballsize.clear();
     }
 }
 
@@ -493,6 +507,7 @@ void Leds::renderEffect(int effect, uint8_t speed) {
             _ball_pos[k] = 0.0f;
             _ball_vel[k] = 4.4f - 0.5f * k;  // staggered launch
         }
+        _ball_track = -1.0f;  // 'ball' effect snaps to the current angle on (re)entry
     }
 
     uint8_t hi    = static_cast<uint8_t>(_phase >> 8);  // smooth 0..255 phase
@@ -968,28 +983,57 @@ void Leds::renderEffect(int effect, uint8_t speed) {
             break;
         }
 
-        case EFFECT_BALL: {  // a glowing dot that tracks the sand ball's angle
-            float frac = Kinematics::ThetaRho::ballAngle();  // 0..1 around the table
-            memset(_fb, 0, _num_leds * 3);
+        case EFFECT_BALL: {  // a smooth glowing blob that tracks the sand ball's
+                             // angle over a background colour; size + smoothing tunable
+            uint8_t bgr, bgg, bgb;
+            secondaryColor(bgr, bgg, bgb);  // background = LED/Color2 (live or setting)
+            for (int i = 0; i < _num_leds; i++) {
+                setFb(i, bgr, bgg, bgb);
+            }
+            float frac = Kinematics::ThetaRho::ballAngle();  // 0..1, or -1 if no kinematics
             if (frac < 0.0f) {
-                break;  // no ThetaRho kinematics -> strip dark
+                break;  // no ThetaRho -> just the background
             }
             int dir = _live_direction.empty() ? (_direction ? _direction->get() : DIR_CW)
                                               : enumId(ledDirections, _live_direction, DIR_CW);
-            int align_deg = _live_align.empty() ? (_align ? _align->get() : 0) : atoi(_live_align.c_str());
-
-            float pf = frac * (dir == DIR_CCW ? -1.0f : 1.0f) + align_deg / 360.0f;
+            int   align_deg = _live_align.empty() ? (_align ? _align->get() : 0) : atoi(_live_align.c_str());
+            float pf        = frac * (dir == DIR_CCW ? -1.0f : 1.0f) + align_deg / 360.0f;
             pf -= floorf(pf);  // wrap into [0,1)
-            int center = static_cast<int>(lroundf(pf * _num_leds)) % _num_leds;
-            if (center < 0) {
-                center += _num_leds;
+
+            // Smooth motion: glide _ball_track toward the target along the
+            // shortest path around the ring.  Speed sets responsiveness
+            // (low = smoother/laggier, high = snappier).
+            if (_ball_track < 0.0f) {
+                _ball_track = pf;  // snap on first frame / (re)entry
             }
-            primaryColor(r, g, b);
-            setFb(center, r, g, b);  // bright head + symmetric glow falloff
-            setFb((center - 1 + _num_leds) % _num_leds, scale8(r, 96), scale8(g, 96), scale8(b, 96));
-            setFb((center + 1) % _num_leds, scale8(r, 96), scale8(g, 96), scale8(b, 96));
-            setFb((center - 2 + _num_leds) % _num_leds, scale8(r, 28), scale8(g, 28), scale8(b, 28));
-            setFb((center + 2) % _num_leds, scale8(r, 28), scale8(g, 28), scale8(b, 28));
+            float alpha = speed / 255.0f;
+            if (alpha < 0.03f) {
+                alpha = 0.03f;
+            }
+            float delta = pf - _ball_track;
+            delta -= roundf(delta);  // shortest wrap into [-0.5, 0.5]
+            _ball_track += delta * alpha;
+            _ball_track -= floorf(_ball_track);  // back into [0,1)
+
+            float posf = _ball_track * _num_leds;  // sub-pixel position (no LED snapping)
+            int   size = _live_ballsize.empty() ? (_ballsize ? _ballsize->get() : 3) : atoi(_live_ballsize.c_str());
+            if (size < 1) {
+                size = 1;
+            }
+            primaryColor(r, g, b);  // blob/head colour
+            for (int i = 0; i < _num_leds; i++) {
+                float d = fabsf(i - posf);
+                d       = fminf(d, _num_leds - d);  // circular distance
+                float t = 1.0f - d / size;          // linear falloff over `size` LEDs
+                if (t <= 0.0f) {
+                    continue;  // leaves the background colour
+                }
+                t = t * t * (3.0f - 2.0f * t);  // smoothstep -> soft blob, anti-aliased
+                setFb(i,
+                      static_cast<uint8_t>(bgr + (r - bgr) * t),
+                      static_cast<uint8_t>(bgg + (g - bgg) * t),
+                      static_cast<uint8_t>(bgb + (b - bgb) * t));
+            }
             break;
         }
 

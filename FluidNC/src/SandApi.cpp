@@ -384,7 +384,7 @@ std::string SandApi::settingsJson() {
         "THR/Feed",
         "LED/Effect",      "LED/Palette",      "LED/Color",             "LED/Color2",
         "LED/Brightness",  "LED/Speed",        "LED/RunEffect",         "LED/IdleEffect",
-        "LED/Direction",   "LED/Align",
+        "LED/Direction",   "LED/Align",      "LED/BallSize",
         "Playlist/Mode",   "Playlist/Shuffle", "Playlist/PauseTime",    "Playlist/PauseFromStart",
         "Playlist/ClearPattern", "Playlist/AutoHome", "Playlist/Autostart",
         "Playlist/AutostartMode", "Playlist/AutostartShuffle", "Playlist/AutostartPause",

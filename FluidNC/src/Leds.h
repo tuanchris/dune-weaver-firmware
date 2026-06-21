@@ -215,6 +215,7 @@ private:
     EnumSetting*   _idle_effect = nullptr;
     EnumSetting*   _direction   = nullptr;  // 'ball' effect: ring winding vs theta (cw/ccw)
     IntSetting*    _align       = nullptr;  // 'ball' effect: angular offset, degrees 0..359
+    IntSetting*    _ballsize    = nullptr;  // 'ball' effect: glow radius in LEDs (size of the follow blob)
 
     // Machine-state tracking (poll task only: reports arrive via our
     // own autoReport, which runs inside pollLine)
@@ -226,7 +227,8 @@ private:
     static Leds* _instance;
     std::string  _live_effect, _live_palette, _live_color, _live_color2, _live_bright, _live_speed;
     bool         _quiet_off = false;  // Still Sands: force strip off (in-memory, highest priority)
-    std::string  _live_direction, _live_align;
+    std::string  _live_direction, _live_align, _live_ballsize;
+    float        _ball_track = -1.0f;  // smoothed ball position [0,1) for the 'ball' effect
     bool         _was_running = false;
     int          _cur_palette = 0;       // palette id resolved once per frame
 
