@@ -77,6 +77,7 @@ the WebSocket for a *single* "active controller" that wants smooth high-rate liv
 | `GET /sand_patterns` | JSON array of `.thr` paths. **If `/patterns/index.json` (a prebuilt manifest) exists, it is served verbatim** — a fast single-file read of the full recursive catalog (paths relative to `/patterns`, e.g. `custom_patterns/x.thr`; run via `$Sand/Run=/patterns/<path>`). Generate it on the host and upload to the card whenever patterns change (see COMMANDS.md). **Without a manifest** it falls back to a non-recursive top-level listing (subfolders omitted — enumerating the ~1000-file nested library on the slow SD froze the single-threaded server). Chunked/streamed |
 | `GET /sand_playlists` | JSON array of `.txt` files in the top level of `/playlists` (non-recursive) |
 | `GET /sand_settings` | JSON object of app settings (speed, LED, playlist, quiet hours), values as strings |
+| `GET /sand_time` | wall clock `{epoch, synced, local, tz}`. `?epoch=<unix>` sets the clock (app auto-sync / AP mode); `?tz=<POSIX>` sets + persists the timezone. Also surfaced in `/sand_status` under `time` |
 
 These are read-only, fast, and skip the block-during-motion gate, so clients keep reading while a pattern
 runs. The `$Sand/Status` / `$Sand/Patterns` / `$Sand/Playlists` **commands** return the same data but only
@@ -140,7 +141,12 @@ auto-play can behave differently:
 `$Playlist/AutostartClear=none|adaptive|in|out|sideway|random`
 (defaults: loop, OFF, 0, OFF, none).
 
-### Live status stream
+### Clock (needed by quiet hours)
+Configure NTP + timezone in `config.yaml` (`time:` section: `ntp`, `server`, `tz`).
+Runtime/over-HTTP:
+`$Time/Show` (current local time + sync state) · `$Time/Set=<unix epoch>` (set the
+clock manually) · `$Time/Zone=<POSIX>` (override + persist the tz, empty = use config).
+Prefer the JSON `GET /sand_time` for apps (read + `?epoch=` / `?tz=` to sync).
 | Command | Notes |
 |---------|-------|
 | `$RI=<ms>` | set this channel's auto-report interval (min 50 ms). Streams standard `<state\|MPos:…\|…>` frames |
@@ -176,7 +182,10 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   //  pause_remaining = seconds left in the between-patterns pause ($Playlist/PauseTime),
   //  counting down live; pause_total = that pause's full length in seconds; both -1
   //  when not pausing. Progress bar fill = (pause_total - pause_remaining) / pause_total.
-  "led": { "effect": "rainbow", "brightness": 40 }   // omitted if no leds: config
+  "led": { "effect": "rainbow", "brightness": 40 },  // omitted if no leds: config
+  "time": { "epoch": 1718971402, "synced": true, "local": "2026-06-21 14:03:22", "tz": "ICT-7" }
+  //  synced=false means the clock isn't set (no NTP yet / no $Time/Set) -> quiet
+  //  hours won't fire; the app can push time via GET /sand_time?epoch=<unix>.
 }
 ```
 

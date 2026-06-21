@@ -27,6 +27,7 @@
 #include "src/Leds.h"      // Leds::instance() for /sand_led
 #include "src/Playlist.h"  // Playlist::stopActive() for /sand_stop
 #include "src/Kinematics/ThetaRho.h"  // ThetaRho::setFeedLive() for /sand_feed?mm
+#include "src/TimeKeeper.h"            // Clock:: for /sand_time
 #include "src/FluidPath.h"
 #include "src/JSONEncoder.h"
 
@@ -152,6 +153,7 @@ namespace WebUI {
         _webserver->on("/sand_patterns", HTTP_ANY, handleSandPatterns);
         _webserver->on("/sand_playlists", HTTP_ANY, handleSandPlaylists);
         _webserver->on("/sand_settings", HTTP_ANY, handleSandSettings);
+        _webserver->on("/sand_time", HTTP_ANY, handleSandTime);
         _webserver->on("/sand_feed", HTTP_ANY, handleSandFeed);
         _webserver->on("/sand_led", HTTP_ANY, handleSandLed);
 
@@ -392,6 +394,7 @@ namespace WebUI {
                          "Pause      GET /sand_pause\n"
                          "Resume     GET /sand_resume\n"
                          "Speed      GET /sand_feed?mm=<0..100000> | pct=<10..200> | d=up|down|reset\n"
+                         "Time       GET /sand_time [?epoch=<unix>] [?tz=<POSIX>]   (read / app-sync clock)\n"
                          "LEDs       GET /sand_led?effect=|palette=|color=|color2=|brightness=|speed=\n"
                          "\n"
                          "Run/playlist, LED & everything else: GET /command?plain=$...\n"
@@ -847,6 +850,24 @@ namespace WebUI {
     void Web_Server::handleSandSettings() {
         _webserver->sendHeader("Cache-Control", "no-store");
         _webserver->send(200, "application/json", SandApi::settingsJson().c_str());
+    }
+
+    // Wall clock: read state, and let the app auto-sync the clock / timezone.
+    //   GET /sand_time                       -> {epoch, synced, local, tz}
+    //   GET /sand_time?epoch=<unix>          -> set the clock (e.g. app sync)
+    //   GET /sand_time?tz=<POSIX>            -> set + persist the timezone
+    void Web_Server::handleSandTime() {
+        _webserver->sendHeader("Cache-Control", "no-store");
+        if (_webserver->hasArg("tz")) {
+            Clock::setTz(_webserver->arg("tz").c_str());
+        }
+        if (_webserver->hasArg("epoch")) {
+            if (!Clock::setEpoch(static_cast<time_t>(_webserver->arg("epoch").toInt()))) {
+                _webserver->send(400, "text/plain", "epoch must be a unix time after 2023-01-01");
+                return;
+            }
+        }
+        _webserver->send(200, "application/json", SandApi::timeJson().c_str());
     }
 
     // Sand-table UI: live feed control (works mid-pattern, no flash write).

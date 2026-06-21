@@ -20,6 +20,8 @@
   time(nullptr) > a 2023 epoch; the RTC starts at 1970 on power-up.
 */
 
+#include "TimeKeeper.h"
+
 #include "Config.h"
 #include "Module.h"
 #include "Settings.h"
@@ -30,6 +32,17 @@
 #include <ctime>
 #include <cstdlib>
 #include <string>
+
+// Persisted runtime TZ override ($Time/Zone), shared with the Clock:: API.
+// Non-empty wins over the config `time: tz:`.
+static StringSetting* s_tz_setting = nullptr;
+static std::string    s_config_tz  = "UTC0";
+
+static void applyTz() {
+    const char* tz = (s_tz_setting && *s_tz_setting->get()) ? s_tz_setting->get() : s_config_tz.c_str();
+    setenv("TZ", tz, 1);
+    tzset();
+}
 
 class TimeKeeper : public ConfigurableModule {
 public:
@@ -45,20 +58,25 @@ public:
     static bool valid() { return time(nullptr) > 1672531200; }  // 2023-01-01
 
     void init() override {
-        setenv("TZ", _tz.c_str(), 1);
-        tzset();
+        if (!s_tz_setting) {
+            s_tz_setting = new StringSetting(
+                "POSIX TZ override (empty = config time:tz)", EXTENDED, WG, NULL, "Time/Zone", "", 0, 64);
+        }
+        s_config_tz = _tz;
+        applyTz();  // effective TZ = $Time/Zone if set, else config tz
         if (_ntp) {
             sntp_setoperatingmode(SNTP_OPMODE_POLL);
             sntp_setservername(0, _server.c_str());
             sntp_set_time_sync_notification_cb(synced);
             sntp_init();
         }
-        log_info("time: tz " << _tz << (_ntp ? " ntp " : " no ntp") << (_ntp ? _server : ""));
+        log_info("time: tz " << getenv("TZ") << (_ntp ? " ntp " : " no ntp") << (_ntp ? _server : ""));
 
         if (!_commands_made) {
             _commands_made = true;
             new UserCommand(NULL, "Time/Show", showTime, nullptr, WG, false);
             new UserCommand(NULL, "Time/Set", setTime, nullptr, WG, false);
+            new UserCommand(NULL, "Time/Zone", setZone, nullptr, WG, false);
         }
     }
 
@@ -104,12 +122,62 @@ private:
         return showTime(NULL, auth_level, out);
     }
 
+    static Error setZone(const char* value, AuthenticationLevel auth_level, Channel& out) {
+        if (!value) {
+            value = "";
+        }
+        s_tz_setting->setStringValue(value);  // "" clears the override -> config tz
+        applyTz();
+        log_info_to(out, "TZ now " << getenv("TZ"));
+        return Error::Ok;
+    }
+
     bool        _ntp    = true;
     std::string _server = "pool.ntp.org";
     std::string _tz     = "UTC0";
 
     bool _commands_made = false;
 };
+
+// ---- Clock:: wall-clock API (TimeKeeper.h) ----
+namespace Clock {
+    bool   isSet() { return time(nullptr) > 1672531200; }  // 2023-01-01
+    time_t now() { return time(nullptr); }
+
+    void localString(char* buf, size_t n) {
+        time_t    t = time(nullptr);
+        struct tm lt;
+        localtime_r(&t, &lt);
+        strftime(buf, n, "%Y-%m-%d %H:%M:%S", &lt);
+    }
+
+    const char* tz() {
+        const char* z = getenv("TZ");
+        return z ? z : "";
+    }
+
+    bool setEpoch(time_t t) {
+        if (t < 1672531200) {
+            return false;
+        }
+        struct timeval tv = { t, 0 };
+        settimeofday(&tv, NULL);
+        return true;
+    }
+
+    bool setTz(const char* z) {
+        if (s_tz_setting) {
+            s_tz_setting->setStringValue(z ? z : "");  // persist (time: module present)
+            applyTz();                                 // effective = setting else config tz
+        } else {
+            // No time: config section -> apply for this session only (the app
+            // re-syncs tz/epoch on connect anyway).
+            setenv("TZ", (z && *z) ? z : "UTC0", 1);
+            tzset();
+        }
+        return true;
+    }
+}
 
 namespace {
     ConfigurableModuleFactory::InstanceBuilder<TimeKeeper> registration("time");

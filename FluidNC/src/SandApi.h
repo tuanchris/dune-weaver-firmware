@@ -44,6 +44,11 @@ namespace SandApi {
     // all settings in one multi-client HTTP request.
     std::string settingsJson();
 
+    // JSON object of the wall clock: {epoch, synced, local, tz}.  Backs the
+    // /sand_status "time" block and the /sand_time route (which also sets the
+    // clock/tz for app auto-sync).
+    std::string timeJson();
+
     // Apply live LED parameters from a "key=value key=value" string (keys:
     // effect palette color color2 brightness speed).  Works while a pattern
     // is running (in-memory; persisted to NVS at idle).  Backs both the

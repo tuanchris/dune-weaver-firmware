@@ -247,6 +247,15 @@ curl "$B/command?plain=\$Sands/LedOff=ON"                   # turn LEDs off duri
 curl "$B/command?plain=\$Sands/FinishPattern=OFF"           # ON=finish current pattern then pause (default); OFF=hold mid-pattern, resume after
 ```
 
+## Clock (quiet hours need a set clock)
+
+```bash
+curl "$B/sand_time"                                # {epoch, synced, local, tz}; also in /sand_status.time
+curl "$B/sand_time?epoch=$(date +%s)"              # app auto-sync: push the current unix time
+curl "$B/sand_time?tz=ICT-7"                       # set + persist POSIX timezone (empty = config time:tz)
+#   config.yaml `time:` section sets ntp/server/tz; $Time/Show, $Time/Set=<epoch>, $Time/Zone=<POSIX> also work.
+```
+
 ---
 
 ## Files

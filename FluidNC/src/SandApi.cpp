@@ -34,6 +34,7 @@
 #include "FluidPath.h"
 #include "FileStream.h"           // serve a prebuilt pattern manifest
 #include "Protocol.h"            // protocol_request_goto (deferred jog)
+#include "TimeKeeper.h"          // Clock:: for the time block / sync
 
 #include <cstring>
 #include <cstdlib>
@@ -313,7 +314,15 @@ std::string SandApi::statusJson() {
         }
     }
 
-    return SandStatus::encode(d);
+    // Splice in the wall-clock block (kept here so SandStatus stays time-free).
+    std::string json = SandStatus::encode(d);
+    if (!json.empty() && json.back() == '}') {
+        json.pop_back();
+        json += ",\"time\":";
+        json += timeJson();
+        json += '}';
+    }
+    return json;
 }
 
 void SandApi::streamPatterns(const JsonSink& emit) {
@@ -352,6 +361,21 @@ void SandApi::streamDirJson(const char* folder, const char* ext, const JsonSink&
     }
     buf.push_back(']');
     emit(buf.data(), buf.size());
+}
+
+std::string SandApi::timeJson() {
+    char local[40] = {};
+    Clock::localString(local, sizeof(local));
+    std::string o = "{\"epoch\":";
+    o += std::to_string(static_cast<long long>(Clock::now()));
+    o += ",\"synced\":";
+    o += Clock::isSet() ? "true" : "false";
+    o += ",\"local\":";
+    SandStatus::append_escaped(o, local);
+    o += ",\"tz\":";
+    SandStatus::append_escaped(o, Clock::tz());
+    o += '}';
+    return o;
 }
 
 std::string SandApi::settingsJson() {
