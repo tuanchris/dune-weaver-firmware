@@ -281,7 +281,12 @@ curl -F "path=/patterns" -F "my.thrS=$(wc -c < my.thr)" \
 curl -F "path=/" -F "config.yamlS=$(wc -c < config.yaml)" \
      -F "config.yaml=@config.yaml;filename=config.yaml" "$B/files"
 
-# Regenerate + push the pattern manifest (/patterns/index.json) that
+# Generate previews + manifest + a zip (Dune-Weaver-style .webp thumbnails):
+#   python3 tools/gen_previews.py /path/to/patterns --out export/
+#   -> export/index.json, export/cached_images/<pattern>.thr.webp, export/previews.zip
+#   (needs Pillow: pip install Pillow). Then upload export/index.json as below.
+
+# Or just (re)generate + push the manifest (/patterns/index.json) that
 # /sand_patterns serves.  Run from the patterns root (or the SD mounted on a Mac):
 #   full recursive .thr list, paths relative to /patterns, as a JSON array.
 python3 -c 'import os,json; \
