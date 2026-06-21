@@ -128,6 +128,8 @@ live control during a pattern use:
 `$Playlist/Mode=single|loop` · `$Playlist/Shuffle=ON|OFF` · `$Playlist/PauseTime=<sec>` ·
 `$Playlist/PauseFromStart=ON|OFF` · `$Playlist/ClearPattern=none|adaptive|in|out|sideway|random` ·
 `$Playlist/AutoHome=<n>` · `$Playlist/Autostart=<name>` · `$Sands/Enabled=ON|OFF` · `$Sands/Slots=HH:MM-HH:MM@days,...`
+`$Sands/LedOff=ON|OFF` (turn LEDs off during quiet hours; works headless/idle) ·
+`$Sands/FinishPattern=ON|OFF` (ON=pause between patterns/finish current [default]; OFF=feed-hold mid-pattern and resume when the window ends). Quiet hours need a set clock (`time:`/NTP).
 
 `$Playlist/Autostart=<name>` auto-runs playlist `/playlists/<name>.txt` on every boot,
 once the table reaches Idle (after homing). Empty (default) disables it. The boot run

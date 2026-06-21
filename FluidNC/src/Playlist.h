@@ -186,6 +186,8 @@ private:
     IntSetting*  _auto_home        = nullptr;
     EnumSetting*   _sands_enabled  = nullptr;
     StringSetting* _sands_slots    = nullptr;
+    EnumSetting*   _sands_led_off  = nullptr;  // turn LEDs off during quiet hours
+    EnumSetting*   _sands_finish   = nullptr;  // finish current pattern before pausing (else hold mid-run)
     StringSetting* _autostart      = nullptr;  // playlist to auto-run on boot ("" = off)
     // Per-boot-run overrides so auto-play can use different mode/pause/shuffle/
     // clear than manual runs (applied only to the autostart run).
@@ -198,6 +200,9 @@ private:
     // True from boot until the auto-play playlist has been kicked off (on the
     // first Idle after homing).  One-shot per boot.
     bool _autostart_pending = false;
+
+    bool _led_off_active = false;  // Still Sands has forced the LEDs off
+    bool _quiet_held     = false;  // Still Sands has feed-held a pattern mid-run (FinishPattern=OFF)
 
     // Active per-run overrides (-1 = inherit the global $Playlist/* setting),
     // copied from the staged _req_ov_* when a run starts.

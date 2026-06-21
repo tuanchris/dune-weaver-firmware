@@ -92,6 +92,11 @@ public:
     // return to idle.  Reached from $Sand/Led and /sand_led.
     static Leds* instance() { return _instance; }
     Error        setLive(const std::string& key, const std::string& value);
+
+    // Still Sands: force the strip off (or back on) during quiet hours, in
+    // memory only - no NVS write, works whether idle or running, and overrides
+    // every effect/override.  Driven by Playlist on the quiet-hours edge.
+    void setQuietOff(bool off) { _quiet_off = off; }
     // Effective values for status reporting (live override or persisted).
     const char*  liveEffect() { return _live_effect.empty() ? nullptr : _live_effect.c_str(); }
     int          liveBrightness() { return _live_bright.empty() ? -1 : atoi(_live_bright.c_str()); }
@@ -220,6 +225,7 @@ private:
     // persisted setting is used.  Set while moving, flushed to NVS at idle.
     static Leds* _instance;
     std::string  _live_effect, _live_palette, _live_color, _live_color2, _live_bright, _live_speed;
+    bool         _quiet_off = false;  // Still Sands: force strip off (in-memory, highest priority)
     std::string  _live_direction, _live_align;
     bool         _was_running = false;
     int          _cur_palette = 0;       // palette id resolved once per frame

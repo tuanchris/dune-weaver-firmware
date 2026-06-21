@@ -242,7 +242,9 @@ curl "$B/command?plain=\$Playlist/AutostartClear=adaptive"       # none|adaptive
 
 # Still Sands quiet hours (needs a set clock / time: config section)
 curl "$B/command?plain=\$Sands/Enabled=ON"
-curl "$B/command?plain=\$Sands/Slots=21:00-08:00@daily"     # HH:MM-HH:MM@days,...
+curl "$B/command?plain=\$Sands/Slots=21:00-08:00@daily"     # HH:MM-HH:MM@days,... (days: daily|weekdays|weekends|mon,tue,...)
+curl "$B/command?plain=\$Sands/LedOff=ON"                   # turn LEDs off during quiet hours (works headless/idle)
+curl "$B/command?plain=\$Sands/FinishPattern=OFF"           # ON=finish current pattern then pause (default); OFF=hold mid-pattern, resume after
 ```
 
 ---

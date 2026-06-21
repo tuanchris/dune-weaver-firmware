@@ -1012,9 +1012,12 @@ void Leds::render() {
         return;
     }
 
-    // Live override (any state) beats the state hook beats the persisted setting.
+    // Still Sands quiet-off wins over everything; then live override beats the
+    // state hook beats the persisted setting.
     int effect;
-    if (!_live_effect.empty()) {
+    if (_quiet_off) {
+        effect = EFFECT_OFF;
+    } else if (!_live_effect.empty()) {
         effect = enumId(ledEffects, _live_effect, _effect->get());
     } else {
         effect = _auto_effect >= 0 ? _auto_effect : _effect->get();

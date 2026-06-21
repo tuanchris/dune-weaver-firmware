@@ -13,6 +13,7 @@
 #include "Protocol.h"  // LINE_BUFFER_SIZE
 #include "FileStream.h"
 #include "Kinematics/ThetaRho.h"  // clearFeedLive() when a run ends
+#include "Leds.h"                  // Still Sands LED-off during quiet hours
 #include "FluidPath.h"
 
 #include <freertos/FreeRTOS.h>
@@ -90,6 +91,9 @@ void Playlist::init() {
         _sands_enabled = new EnumSetting("Still Sands quiet hours", EXTENDED, WG, NULL, "Sands/Enabled", 0, &onOffOptions);
         _sands_slots   = new StringSetting(
             "Quiet hour slots HH:MM-HH:MM@days,...", EXTENDED, WG, NULL, "Sands/Slots", "21:00-08:00@daily", 0, 100);
+        _sands_led_off = new EnumSetting("Still Sands turn LEDs off", EXTENDED, WG, NULL, "Sands/LedOff", 0, &onOffOptions);
+        _sands_finish  = new EnumSetting(
+            "Still Sands finish current pattern before pausing", EXTENDED, WG, NULL, "Sands/FinishPattern", 1, &onOffOptions);
         _autostart = new StringSetting(
             "Playlist to auto-run on boot (empty = off)", EXTENDED, WG, NULL, "Playlist/Autostart", "", 0, 100);
         // Boot-run overrides: let auto-play use its own mode/pause/shuffle/clear,
@@ -290,6 +294,12 @@ bool Playlist::quietNow(uint32_t now) {
 
 void Playlist::finish(const char* why) {
     log_info("playlist: " << _playlist_name << " " << why);
+    // Release a Still Sands mid-run hold so the machine doesn't stay in Hold
+    // after the run ends (the job abort below then tears it down cleanly).
+    if (_quiet_held) {
+        protocol_send_event(&cycleStartEvent);
+        _quiet_held = false;
+    }
     // A live /sand_feed?mm override persists across the run's patterns; clear it
     // now the run (playlist or single $Sand/Run) is over, back to $THR/Feed.
     Kinematics::ThetaRho::clearFeedLive();
@@ -482,6 +492,39 @@ std::string Playlist::clearFileFor(const std::string& patternPath) {
 // --- State machine: runs in the polling task via pollLine ---
 
 Error Playlist::pollLine(char* line) {
+    uint32_t now = now_ms();
+
+    // Still Sands LED-off: force the strip off during quiet hours, restore on
+    // exit.  Independent of the playlist phase, so it works headless and while
+    // idle.  In-memory only (Leds::setQuietOff), no NVS write.
+    {
+        bool want_off = _sands_led_off && _sands_led_off->get() && quietNow(now);
+        if (want_off != _led_off_active) {
+            _led_off_active = want_off;
+            if (Leds* leds = Leds::instance()) {
+                leds->setQuietOff(want_off);
+            }
+        }
+    }
+
+    // Still Sands FinishPattern=OFF: feed-hold a pattern that is running when
+    // quiet starts, and resume it when quiet ends.  (FinishPattern=ON, the
+    // default, keeps the between-patterns gate in NextItem instead.)
+    {
+        bool finish  = !_sands_finish || _sands_finish->get();  // default ON
+        bool enabled = _sands_enabled && _sands_enabled->get();
+        bool q       = enabled && !finish && quietNow(now);
+        if (q && !_quiet_held && _phase == Phase::RunPattern && state_is(State::Cycle)) {
+            protocol_send_event(&feedHoldEvent);
+            _quiet_held = true;
+            log_info("playlist: Still Sands - holding pattern mid-run");
+        } else if (_quiet_held && !q) {
+            protocol_send_event(&cycleStartEvent);
+            _quiet_held = false;
+            log_info("playlist: Still Sands - resuming pattern");
+        }
+    }
+
     // Auto-play on boot: once we first reach Idle (i.e. after homing), kick off
     // the configured playlist.  It then uses the normal $Playlist/* settings
     // (mode, pause, shuffle, clear) like any other run.  One-shot per boot.
@@ -506,7 +549,6 @@ Error Playlist::pollLine(char* line) {
     if (_phase == Phase::Off && !_req_run && !_req_stop) {
         return Error::NoData;
     }
-    uint32_t now = now_ms();
 
     if (_req_stop) {
         _req_stop = false;
