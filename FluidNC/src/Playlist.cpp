@@ -90,6 +90,8 @@ void Playlist::init() {
         _sands_enabled = new EnumSetting("Still Sands quiet hours", EXTENDED, WG, NULL, "Sands/Enabled", 0, &onOffOptions);
         _sands_slots   = new StringSetting(
             "Quiet hour slots HH:MM-HH:MM@days,...", EXTENDED, WG, NULL, "Sands/Slots", "21:00-08:00@daily", 0, 100);
+        _autostart = new StringSetting(
+            "Playlist to auto-run on boot (empty = off)", EXTENDED, WG, NULL, "Playlist/Autostart", "", 0, 100);
 
         // Handlers may run outside the protocol task and must not block
         // on motion, so synchronous=false and flag-setting only.
@@ -103,6 +105,10 @@ void Playlist::init() {
         allChannels.registration(this);
         _registered = true;
     }
+    // Arm auto-play: pollLine starts the configured playlist on the first Idle
+    // after boot (i.e. after homing).  Read in pollLine, not here, since the NVS
+    // value may not be loaded yet at module init.
+    _autostart_pending = true;
     log_info("playlist: folder " << _folder << " clear " << _clear_in << " | " << _clear_out << " | " << _clear_side);
 }
 
@@ -458,6 +464,21 @@ std::string Playlist::clearFileFor(const std::string& patternPath) {
 // --- State machine: runs in the polling task via pollLine ---
 
 Error Playlist::pollLine(char* line) {
+    // Auto-play on boot: once we first reach Idle (i.e. after homing), kick off
+    // the configured playlist.  It then uses the normal $Playlist/* settings
+    // (mode, pause, shuffle, clear) like any other run.  One-shot per boot.
+    if (_autostart_pending && _phase == Phase::Off && !_req_run && !_req_stop && state_is(State::Idle)) {
+        _autostart_pending = false;
+        const char* name   = _autostart ? _autostart->get() : "";
+        if (name && *name) {
+            strlcpy(_req_name, name, sizeof(_req_name));
+            _req_single         = false;
+            _req_clear_override = -1;  // use the $Playlist/ClearPattern setting
+            _req_run            = true;
+            log_info("playlist: auto-play on boot -> " << name);
+        }
+    }
+
     if (_phase == Phase::Off && !_req_run && !_req_stop) {
         return Error::NoData;
     }

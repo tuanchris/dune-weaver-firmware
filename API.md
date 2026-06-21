@@ -127,7 +127,11 @@ live control during a pattern use:
 ### Playlist / quiet-hours settings (NVS)
 `$Playlist/Mode=single|loop` · `$Playlist/Shuffle=ON|OFF` · `$Playlist/PauseTime=<sec>` ·
 `$Playlist/PauseFromStart=ON|OFF` · `$Playlist/ClearPattern=none|adaptive|in|out|sideway|random` ·
-`$Playlist/AutoHome=<n>` · `$Sands/Enabled=ON|OFF` · `$Sands/Slots=HH:MM-HH:MM@days,...`
+`$Playlist/AutoHome=<n>` · `$Playlist/Autostart=<name>` · `$Sands/Enabled=ON|OFF` · `$Sands/Slots=HH:MM-HH:MM@days,...`
+
+`$Playlist/Autostart=<name>` auto-runs playlist `/playlists/<name>.txt` on every boot,
+once the table reaches Idle (after homing). It uses the same `$Playlist/*` settings
+(mode, pause, shuffle, clear) as a manual run. Empty (default) disables it.
 
 ### Live status stream
 | Command | Notes |

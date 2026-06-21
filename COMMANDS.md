@@ -230,6 +230,10 @@ curl "$B/command?plain=\$Playlist/PauseTime=30"             # seconds between pa
 curl "$B/command?plain=\$Playlist/PauseFromStart=ON"        # measure cadence from start
 curl "$B/command?plain=\$Playlist/ClearPattern=adaptive"    # none|adaptive|in|out|sideway|random
 curl "$B/command?plain=\$Playlist/AutoHome=10"              # home every n patterns (0=off)
+curl "$B/command?plain=\$Playlist/Autostart=evening"       # auto-run /playlists/evening.txt on boot
+curl "$B/command?plain=\$Playlist/Autostart="             # (empty) disable auto-play on boot
+#   Autostart fires once per boot at the first Idle (after homing), using the
+#   Mode/PauseTime/Shuffle/ClearPattern settings above.
 
 # Still Sands quiet hours (needs a set clock / time: config section)
 curl "$B/command?plain=\$Sands/Enabled=ON"

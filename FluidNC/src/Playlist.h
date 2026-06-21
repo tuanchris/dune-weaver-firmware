@@ -178,6 +178,11 @@ private:
     IntSetting*  _auto_home        = nullptr;
     EnumSetting*   _sands_enabled  = nullptr;
     StringSetting* _sands_slots    = nullptr;
+    StringSetting* _autostart      = nullptr;  // playlist to auto-run on boot ("" = off)
+
+    // True from boot until the auto-play playlist has been kicked off (on the
+    // first Idle after homing).  One-shot per boot.
+    bool _autostart_pending = false;
 
     // Cross-task requests.  Handlers may run in another task, so the
     // name goes through a fixed buffer (a std::string assignment racing
