@@ -182,7 +182,7 @@ automatically when the table next returns to idle.
 
 ```bash
 # Works any time, including mid-pattern.
-#   keys: effect palette color color2 brightness speed direction align size
+#   keys: effect palette color color2 brightness speed direction align size bg fgbright bgbright
 curl "$B/sand_led?effect=fire&palette=ocean&brightness=120"
 curl "$B/sand_led?color=FF0000&speed=80"
 # command form (same behavior), space-separated key=value:
@@ -193,16 +193,19 @@ The **`ball`** effect is a smooth glowing blob that follows the sand ball's angl
 over a background colour. Tune it live while a pattern runs:
 ```bash
 curl "$B/sand_led?effect=ball"
-curl "$B/sand_led?color=FF0000"      # blob colour
-curl "$B/sand_led?color2=000020"     # background colour (behind the blob)
-curl "$B/sand_led?size=6"            # 1..200 - glow size (how big the follow blob is)
-curl "$B/sand_led?speed=200"         # tracking smoothness: low=smoother/laggier, high=snappier
-curl "$B/sand_led?direction=ccw"     # cw|ccw — flip if the blob moves opposite the ball
-curl "$B/sand_led?align=120"         # 0..359 degrees — rotate the blob onto the ball
+curl "$B/sand_led?color=FF0000&fgbright=255"   # blob colour + blob brightness (0..255)
+curl "$B/sand_led?color2=000020&bgbright=60"   # solid background colour + its own brightness
+curl "$B/sand_led?bg=plasma"                   # animated background sub-effect (or 'static'=solid color2, 'off'=black)
+curl "$B/sand_led?size=6"                      # 1..200 - glow size (how big the follow blob is)
+curl "$B/sand_led?speed=200"                   # tracking smoothness: low=smoother/laggier, high=snappier
+curl "$B/sand_led?direction=ccw"               # cw|ccw — flip if the blob moves opposite the ball
+curl "$B/sand_led?align=120"                   # 0..359 degrees — rotate the blob onto the ball
 ```
-Motion is sub-pixel/anti-aliased (no LED-to-LED jumps). `direction`/`align`/`size`
-are also `$LED/Direction`/`$LED/Align`/`$LED/BallSize`; like the rest they persist
-to NVS when set at idle.
+Motion is sub-pixel/anti-aliased. Background can be a solid colour (`bg=static` +
+`color2`) or any effect (`bg=rainbow|fire|plasma|...`) rendered behind the blob.
+Blob (`fgbright`) and background (`bgbright`) brightness are independent; master
+`$LED/Brightness` scales the whole strip. All persist to NVS when set at idle
+(`$LED/Color`/`Color2`/`BallSize`/`BallBg`/`BallBright`/`BallBgBright`/`Direction`/`Align`).
 
 `/sand_status`'s `led` object reflects the live value during a run. A live
 choice set mid-run is saved to the matching `$LED/*` setting on the return to

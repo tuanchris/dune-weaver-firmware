@@ -112,10 +112,11 @@ Effective speed = base feed (`feed`) × `feed_override`/100; both are in `/sand_
 ### LEDs (NVS-persisted; only present if `leds:` is configured)
 `$LED/Effect=<name>` · `$LED/Palette=<name>` · `$LED/Color=RRGGBB` · `$LED/Color2=RRGGBB` ·
 `$LED/Brightness=0..255` · `$LED/Speed=1..255` · `$LED/RunEffect=none|<name>` · `$LED/IdleEffect=none|<name>`
-`$LED/Direction=cw|ccw` · `$LED/Align=0..359` · `$LED/BallSize=1..200` (the `ball` effect: ring winding vs theta, angular offset in degrees, and glow size in LEDs). For `ball`: `$LED/Color`=blob colour, `$LED/Color2`=background colour, `$LED/Speed`=tracking smoothness (low=smoother/laggier, high=snappier); motion is sub-pixel/anti-aliased.
+`$LED/Direction=cw|ccw` · `$LED/Align=0..359` · `$LED/BallSize=1..200` (the `ball` effect: ring winding vs theta, angular offset, glow size in LEDs).
+More `ball` settings: `$LED/Color`=blob colour · `$LED/BallBright=0..255`=blob brightness · `$LED/Color2`=solid background colour · `$LED/BallBg=<effect>`=background sub-effect (`static`=solid Color2, `off`=black, or any effect name like `rainbow`/`fire`/`plasma` rendered behind the blob) · `$LED/BallBgBright=0..255`=background brightness · `$LED/Speed`=tracking smoothness (low=smoother/laggier, high=snappier). Motion is sub-pixel/anti-aliased; master `$LED/Brightness` still scales the whole strip.
 Effect names: `off static rainbow breathe colorloop theater scan running sine gradient sinelon twinkle sparkle fire candle meteor bouncing wipe dualscan juggle multicomet glitter dissolve ripple drip lightning fireworks plasma heartbeat strobe police chase railway pacifica aurora pride colorwaves bpm ball`
 Palette names: `rainbow ocean lava forest party cloud heat sunset`
-Live LED keys (`/sand_led?…` or `$Sand/Led=`): `effect palette color color2 brightness speed direction align size`
+Live LED keys (`/sand_led?…` or `$Sand/Led=`): `effect palette color color2 brightness speed direction align size bg fgbright bgbright` (`bg`=ball background sub-effect, `fgbright`=blob brightness, `bgbright`=background brightness)
 
 The `$LED/*` settings are idle-gated (NVS writes are blocked mid-motion). For
 live control during a pattern use:

@@ -169,7 +169,7 @@ private:
     static constexpr int kBalls = 3;
 
     void render();
-    void renderEffect(int effect, uint8_t speed);  // fills _fb (0..255 per channel)
+    void renderEffect(int effect, uint8_t speed, bool nested = false);  // fills _fb (0..255 per channel)
     void commit(uint8_t brightness);               // _fb -> _pixels, applies master brightness
     void parse_state_report();
     void setPixel(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness);
@@ -216,6 +216,9 @@ private:
     EnumSetting*   _direction   = nullptr;  // 'ball' effect: ring winding vs theta (cw/ccw)
     IntSetting*    _align       = nullptr;  // 'ball' effect: angular offset, degrees 0..359
     IntSetting*    _ballsize    = nullptr;  // 'ball' effect: glow radius in LEDs (size of the follow blob)
+    EnumSetting*   _ballbg      = nullptr;  // 'ball' effect: background sub-effect (off/static/<effect>)
+    IntSetting*    _ballbright  = nullptr;  // 'ball' effect: blob brightness 0..255
+    IntSetting*    _ballbgbright = nullptr; // 'ball' effect: background brightness 0..255
 
     // Machine-state tracking (poll task only: reports arrive via our
     // own autoReport, which runs inside pollLine)
@@ -227,7 +230,7 @@ private:
     static Leds* _instance;
     std::string  _live_effect, _live_palette, _live_color, _live_color2, _live_bright, _live_speed;
     bool         _quiet_off = false;  // Still Sands: force strip off (in-memory, highest priority)
-    std::string  _live_direction, _live_align, _live_ballsize;
+    std::string  _live_direction, _live_align, _live_ballsize, _live_ballbg, _live_ballbright, _live_ballbgbright;
     float        _ball_track = -1.0f;  // smoothed ball position [0,1) for the 'ball' effect
     bool         _was_running = false;
     int          _cur_palette = 0;       // palette id resolved once per frame
@@ -243,6 +246,7 @@ private:
 
     // Per-effect persistent state (reset when the effect changes)
     int      _last_effect = -1;
+    int      _last_bg_effect = -1;  // 'ball' effect's background sub-effect reset tracker
     uint32_t _rng         = 0x1234abcdU;  // xorshift state
     uint8_t  _candle      = 200;          // candle flicker level
     uint8_t  _aux         = 0;            // scratch toggle (e.g. dissolve direction)

@@ -195,6 +195,9 @@ void Leds::init() {
         _direction   = new EnumSetting("LED ball direction", EXTENDED, WG, NULL, "LED/Direction", DIR_CW, &ledDirections);
         _align       = new IntSetting("LED ball alignment, degrees", EXTENDED, WG, NULL, "LED/Align", 0, 0, 359);
         _ballsize    = new IntSetting("LED ball glow size, LEDs", EXTENDED, WG, NULL, "LED/BallSize", 3, 1, 200);
+        _ballbg      = new EnumSetting("LED ball background effect", EXTENDED, WG, NULL, "LED/BallBg", EFFECT_STATIC, &ledEffects);
+        _ballbright  = new IntSetting("LED ball blob brightness", EXTENDED, WG, NULL, "LED/BallBright", 255, 0, 255);
+        _ballbgbright = new IntSetting("LED ball background brightness", EXTENDED, WG, NULL, "LED/BallBgBright", 255, 0, 255);
     }
 
     log_info("leds: " << _num_leds << " WS2812 on pin " << _data_pin.name() << " order " << _color_order);
@@ -378,6 +381,25 @@ Error Leds::setLive(const std::string& key, const std::string& value) {
             return _ballsize->setStringValue(value);
         }
         _live_ballsize = value;
+    } else if (key == "bg") {  // ball background sub-effect
+        if (enumId(ledEffects, value, -1) < 0) {
+            return Error::InvalidStatement;
+        }
+        if (idle) {
+            return _ballbg->setStringValue(value);
+        }
+        _live_ballbg = value;
+    } else if (key == "fgbright" || key == "bgbright") {  // ball blob / background brightness
+        int v = atoi(value.c_str());
+        if (v < 0 || v > 255) {
+            return Error::NumberRange;
+        }
+        IntSetting*  setting = (key[0] == 'f') ? _ballbright : _ballbgbright;
+        std::string& live    = (key[0] == 'f') ? _live_ballbright : _live_ballbgbright;
+        if (idle) {
+            return setting->setStringValue(value);
+        }
+        live = value;
     } else {
         return Error::InvalidStatement;
     }
@@ -422,6 +444,18 @@ void Leds::flushLive() {
     if (!_live_ballsize.empty()) {
         _ballsize->setStringValue(_live_ballsize);
         _live_ballsize.clear();
+    }
+    if (!_live_ballbg.empty()) {
+        _ballbg->setStringValue(_live_ballbg);
+        _live_ballbg.clear();
+    }
+    if (!_live_ballbright.empty()) {
+        _ballbright->setStringValue(_live_ballbright);
+        _live_ballbright.clear();
+    }
+    if (!_live_ballbgbright.empty()) {
+        _ballbgbright->setStringValue(_live_ballbgbright);
+        _live_ballbgbright.clear();
     }
 }
 
@@ -495,10 +529,13 @@ void Leds::palColor(uint8_t index, uint8_t& r, uint8_t& g, uint8_t& b) {
 
 // Fill _fb (logical R,G,B, full 0..255 range) for the given effect.
 // Master brightness is applied later in commit().  `speed` is 1..255.
-void Leds::renderEffect(int effect, uint8_t speed) {
-    // Reset persistent state whenever the effect changes.
-    if (effect != _last_effect) {
-        _last_effect = effect;
+// `nested` is true when rendering a background sub-effect for EFFECT_BALL; it
+// tracks its own "last effect" so it doesn't thrash the top-level reset.
+void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
+    // Reset persistent state whenever the (top-level or background) effect changes.
+    int& last = nested ? _last_bg_effect : _last_effect;
+    if (effect != last) {
+        last = effect;
         memset(_fb, 0, _num_leds * 3);
         memset(_heat, 0, _num_leds);
         _candle = 200;
@@ -507,7 +544,9 @@ void Leds::renderEffect(int effect, uint8_t speed) {
             _ball_pos[k] = 0.0f;
             _ball_vel[k] = 4.4f - 0.5f * k;  // staggered launch
         }
-        _ball_track = -1.0f;  // 'ball' effect snaps to the current angle on (re)entry
+        if (!nested) {
+            _ball_track = -1.0f;  // 'ball' effect snaps to the current angle on (re)entry
+        }
     }
 
     uint8_t hi    = static_cast<uint8_t>(_phase >> 8);  // smooth 0..255 phase
@@ -983,13 +1022,34 @@ void Leds::renderEffect(int effect, uint8_t speed) {
             break;
         }
 
-        case EFFECT_BALL: {  // a smooth glowing blob that tracks the sand ball's
-                             // angle over a background colour; size + smoothing tunable
-            uint8_t bgr, bgg, bgb;
-            secondaryColor(bgr, bgg, bgb);  // background = LED/Color2 (live or setting)
-            for (int i = 0; i < _num_leds; i++) {
-                setFb(i, bgr, bgg, bgb);
+        case EFFECT_BALL: {  // a smooth blob that tracks the sand ball's angle over
+                             // a background (solid colour or an animated sub-effect)
+            // --- background ---
+            int bg = _live_ballbg.empty() ? (_ballbg ? _ballbg->get() : EFFECT_STATIC)
+                                          : enumId(ledEffects, _live_ballbg, EFFECT_STATIC);
+            if (bg == EFFECT_BALL) {
+                bg = EFFECT_STATIC;  // no recursion
             }
+            if (bg == EFFECT_OFF) {
+                memset(_fb, 0, _num_leds * 3);
+            } else if (bg == EFFECT_STATIC) {
+                uint8_t br, bgc, bb;
+                secondaryColor(br, bgc, bb);  // solid background = LED/Color2
+                for (int i = 0; i < _num_leds; i++) {
+                    setFb(i, br, bgc, bb);
+                }
+            } else {
+                renderEffect(bg, speed, true);  // animated sub-effect into _fb
+            }
+            // background brightness (independent of the blob + master)
+            int bgbright = _live_ballbgbright.empty() ? (_ballbgbright ? _ballbgbright->get() : 255)
+                                                      : atoi(_live_ballbgbright.c_str());
+            if (bgbright < 255) {
+                for (int i = 0; i < _num_leds * 3; i++) {
+                    _fb[i] = scale8(_fb[i], static_cast<uint8_t>(bgbright));
+                }
+            }
+
             float frac = Kinematics::ThetaRho::ballAngle();  // 0..1, or -1 if no kinematics
             if (frac < 0.0f) {
                 break;  // no ThetaRho -> just the background
@@ -1000,9 +1060,8 @@ void Leds::renderEffect(int effect, uint8_t speed) {
             float pf        = frac * (dir == DIR_CCW ? -1.0f : 1.0f) + align_deg / 360.0f;
             pf -= floorf(pf);  // wrap into [0,1)
 
-            // Smooth motion: glide _ball_track toward the target along the
-            // shortest path around the ring.  Speed sets responsiveness
-            // (low = smoother/laggier, high = snappier).
+            // Smooth motion: glide _ball_track toward the target along the shortest
+            // path around the ring.  Speed sets responsiveness (low = smoother).
             if (_ball_track < 0.0f) {
                 _ball_track = pf;  // snap on first frame / (re)entry
             }
@@ -1020,19 +1079,26 @@ void Leds::renderEffect(int effect, uint8_t speed) {
             if (size < 1) {
                 size = 1;
             }
-            primaryColor(r, g, b);  // blob/head colour
+            // --- blob, with its own brightness, composited over the background ---
+            int bright = _live_ballbright.empty() ? (_ballbright ? _ballbright->get() : 255)
+                                                  : atoi(_live_ballbright.c_str());
+            primaryColor(r, g, b);  // blob colour
+            r = scale8(r, static_cast<uint8_t>(bright));
+            g = scale8(g, static_cast<uint8_t>(bright));
+            b = scale8(b, static_cast<uint8_t>(bright));
             for (int i = 0; i < _num_leds; i++) {
                 float d = fabsf(i - posf);
                 d       = fminf(d, _num_leds - d);  // circular distance
                 float t = 1.0f - d / size;          // linear falloff over `size` LEDs
                 if (t <= 0.0f) {
-                    continue;  // leaves the background colour
+                    continue;  // leaves the background pixel
                 }
                 t = t * t * (3.0f - 2.0f * t);  // smoothstep -> soft blob, anti-aliased
+                uint8_t cr = _fb[i * 3 + 0], cg = _fb[i * 3 + 1], cb = _fb[i * 3 + 2];
                 setFb(i,
-                      static_cast<uint8_t>(bgr + (r - bgr) * t),
-                      static_cast<uint8_t>(bgg + (g - bgg) * t),
-                      static_cast<uint8_t>(bgb + (b - bgb) * t));
+                      static_cast<uint8_t>(cr + (r - cr) * t),  // blend blob over background
+                      static_cast<uint8_t>(cg + (g - cg) * t),
+                      static_cast<uint8_t>(cb + (b - cb) * t));
             }
             break;
         }
