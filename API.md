@@ -130,8 +130,13 @@ live control during a pattern use:
 `$Playlist/AutoHome=<n>` · `$Playlist/Autostart=<name>` · `$Sands/Enabled=ON|OFF` · `$Sands/Slots=HH:MM-HH:MM@days,...`
 
 `$Playlist/Autostart=<name>` auto-runs playlist `/playlists/<name>.txt` on every boot,
-once the table reaches Idle (after homing). It uses the same `$Playlist/*` settings
-(mode, pause, shuffle, clear) as a manual run. Empty (default) disables it.
+once the table reaches Idle (after homing). Empty (default) disables it. The boot run
+uses its **own** parameters (independent of the manual-run `$Playlist/*` settings) so
+auto-play can behave differently:
+`$Playlist/AutostartMode=single|loop` · `$Playlist/AutostartShuffle=ON|OFF` ·
+`$Playlist/AutostartPause=<sec>` · `$Playlist/AutostartPauseFromStart=ON|OFF` ·
+`$Playlist/AutostartClear=none|adaptive|in|out|sideway|random`
+(defaults: loop, OFF, 0, OFF, none).
 
 ### Live status stream
 | Command | Notes |

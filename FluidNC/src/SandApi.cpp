@@ -363,6 +363,8 @@ std::string SandApi::settingsJson() {
         "LED/Direction",   "LED/Align",
         "Playlist/Mode",   "Playlist/Shuffle", "Playlist/PauseTime",    "Playlist/PauseFromStart",
         "Playlist/ClearPattern", "Playlist/AutoHome", "Playlist/Autostart",
+        "Playlist/AutostartMode", "Playlist/AutostartShuffle", "Playlist/AutostartPause",
+        "Playlist/AutostartPauseFromStart", "Playlist/AutostartClear",
         "Sands/Enabled",   "Sands/Slots",
     };
     std::vector<std::pair<std::string, std::string>> kv;

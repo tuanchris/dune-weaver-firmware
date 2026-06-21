@@ -154,6 +154,14 @@ private:
     bool  loadPlaylist(const std::string& name);
     void  loadSingle(const std::string& path);  // synthetic one-item run
     bool  quietNow(uint32_t now);
+
+    // Effective run parameters: a per-run override (>=0, set by the boot
+    // auto-play from the Autostart* settings) wins over the global $Playlist/*
+    // setting (used by manual runs, override = -1).
+    int runMode();
+    int runShuffle();
+    int runPause();
+    int runPauseFromStart();
     void  shuffleOrder();
     void  publish();  // copy current state into the cross-task snapshot
     float firstRho(const std::string& sdpath);
@@ -179,10 +187,28 @@ private:
     EnumSetting*   _sands_enabled  = nullptr;
     StringSetting* _sands_slots    = nullptr;
     StringSetting* _autostart      = nullptr;  // playlist to auto-run on boot ("" = off)
+    // Per-boot-run overrides so auto-play can use different mode/pause/shuffle/
+    // clear than manual runs (applied only to the autostart run).
+    EnumSetting* _autostart_mode    = nullptr;
+    EnumSetting* _autostart_shuffle = nullptr;
+    IntSetting*  _autostart_pause   = nullptr;
+    EnumSetting* _autostart_pfs     = nullptr;  // pause-from-start
+    EnumSetting* _autostart_clear   = nullptr;
 
     // True from boot until the auto-play playlist has been kicked off (on the
     // first Idle after homing).  One-shot per boot.
     bool _autostart_pending = false;
+
+    // Active per-run overrides (-1 = inherit the global $Playlist/* setting),
+    // copied from the staged _req_ov_* when a run starts.
+    int _ov_mode = -1;
+    int _ov_shuffle = -1;
+    int _ov_pause = -1;
+    int _ov_pfs   = -1;
+    volatile int _req_ov_mode    = -1;
+    volatile int _req_ov_shuffle = -1;
+    volatile int _req_ov_pause   = -1;
+    volatile int _req_ov_pfs     = -1;
 
     // Cross-task requests.  Handlers may run in another task, so the
     // name goes through a fixed buffer (a std::string assignment racing

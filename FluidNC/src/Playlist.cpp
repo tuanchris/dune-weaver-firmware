@@ -92,6 +92,15 @@ void Playlist::init() {
             "Quiet hour slots HH:MM-HH:MM@days,...", EXTENDED, WG, NULL, "Sands/Slots", "21:00-08:00@daily", 0, 100);
         _autostart = new StringSetting(
             "Playlist to auto-run on boot (empty = off)", EXTENDED, WG, NULL, "Playlist/Autostart", "", 0, 100);
+        // Boot-run overrides: let auto-play use its own mode/pause/shuffle/clear,
+        // independent of the manual-run $Playlist/* settings.
+        _autostart_mode    = new EnumSetting("Auto-play run mode", EXTENDED, WG, NULL, "Playlist/AutostartMode", MODE_LOOP, &modeOptions);
+        _autostart_shuffle = new EnumSetting("Auto-play shuffle", EXTENDED, WG, NULL, "Playlist/AutostartShuffle", 0, &onOffOptions);
+        _autostart_pause   = new IntSetting("Auto-play seconds between patterns", EXTENDED, WG, NULL, "Playlist/AutostartPause", 0, 0, 86400);
+        _autostart_pfs     = new EnumSetting(
+            "Auto-play measure pause from start", EXTENDED, WG, NULL, "Playlist/AutostartPauseFromStart", 0, &onOffOptions);
+        _autostart_clear   = new EnumSetting(
+            "Auto-play clear mode", EXTENDED, WG, NULL, "Playlist/AutostartClear", PlaylistParse::CLEAR_NONE, &clearOptions);
 
         // Handlers may run outside the protocol task and must not block
         // on motion, so synchronous=false and flag-setting only.
@@ -120,6 +129,13 @@ void Playlist::deinit() {
     playlistInstance = nullptr;
 }
 
+// Effective run params: the active per-run override (set by auto-play) wins,
+// else the global $Playlist/* setting (manual runs).
+int Playlist::runMode() { return _ov_mode >= 0 ? _ov_mode : _mode->get(); }
+int Playlist::runShuffle() { return _ov_shuffle >= 0 ? _ov_shuffle : _shuffle->get(); }
+int Playlist::runPause() { return _ov_pause >= 0 ? _ov_pause : _pause_time->get(); }
+int Playlist::runPauseFromStart() { return _ov_pfs >= 0 ? _ov_pfs : _pause_from_start->get(); }
+
 // --- Command handlers: any task; flags only ---
 
 Error Playlist::requestRun(const char* name, Channel& out) {
@@ -134,6 +150,7 @@ Error Playlist::requestRun(const char* name, Channel& out) {
     strlcpy(_req_name, name, sizeof(_req_name));
     _req_single         = false;
     _req_clear_override = -1;  // playlist runs use the $Playlist/ClearPattern setting
+    _req_ov_mode = _req_ov_shuffle = _req_ov_pause = _req_ov_pfs = -1;  // manual run: globals
     _req_run            = true;
     log_info_to(out, "Playlist queued: " << name);
     return Error::Ok;
@@ -180,6 +197,7 @@ Error Playlist::requestSingle(const char* patternPath, const char* clearMode, Ch
     strlcpy(_req_name, patternPath, sizeof(_req_name));
     _req_single         = true;
     _req_clear_override = mode;
+    _req_ov_mode = _req_ov_shuffle = _req_ov_pause = _req_ov_pfs = -1;  // single run: globals
     _req_run            = true;
     log_info_to(out, "Pattern queued: " << patternPath << " clear=" << mode);
     return Error::Ok;
@@ -381,7 +399,7 @@ bool Playlist::loadPlaylist(const std::string& name) {
     for (size_t i = 0; i < _order.size(); i++) {
         _order[i] = i;
     }
-    if (_shuffle->get()) {
+    if (runShuffle()) {
         shuffleOrder();
     }
     _index      = 0;
@@ -389,7 +407,7 @@ bool Playlist::loadPlaylist(const std::string& name) {
     _clear_done = false;
     _pending_clear.clear();
     log_info("playlist: " << name << " with " << _items.size() << " patterns, mode "
-                          << (_mode->get() == MODE_LOOP ? "loop" : "single") << (_shuffle->get() ? ", shuffled" : ""));
+                          << (runMode() == MODE_LOOP ? "loop" : "single") << (runShuffle() ? ", shuffled" : ""));
     return true;
 }
 
@@ -472,8 +490,14 @@ Error Playlist::pollLine(char* line) {
         const char* name   = _autostart ? _autostart->get() : "";
         if (name && *name) {
             strlcpy(_req_name, name, sizeof(_req_name));
-            _req_single         = false;
-            _req_clear_override = -1;  // use the $Playlist/ClearPattern setting
+            _req_single = false;
+            // Auto-play uses its own Autostart* settings, independent of the
+            // manual-run $Playlist/* settings.
+            _req_clear_override = _autostart_clear->get();
+            _req_ov_mode        = _autostart_mode->get();
+            _req_ov_shuffle     = _autostart_shuffle->get();
+            _req_ov_pause       = _autostart_pause->get();
+            _req_ov_pfs         = _autostart_pfs->get();
             _req_run            = true;
             log_info("playlist: auto-play on boot -> " << name);
         }
@@ -511,6 +535,10 @@ Error Playlist::pollLine(char* line) {
         _req_run        = false;
         _single         = _req_single;          // staged before _req_run was set
         _clear_override = _req_clear_override;
+        _ov_mode        = _req_ov_mode;         // per-run overrides (auto-play sets these)
+        _ov_shuffle     = _req_ov_shuffle;
+        _ov_pause       = _req_ov_pause;
+        _ov_pfs         = _req_ov_pfs;
         if (Job::active()) {
             protocol_send_event(&stopJobEvent);
         }
@@ -561,8 +589,8 @@ Error Playlist::pollLine(char* line) {
                 _index++;
                 _clear_done = false;
                 if (_index >= _order.size()) {
-                    if (!_single && _mode->get() == MODE_LOOP) {
-                        if (_shuffle->get()) {
+                    if (!_single && runMode() == MODE_LOOP) {
+                        if (runShuffle()) {
                             shuffleOrder();
                         }
                         _index = 0;
@@ -668,16 +696,16 @@ Error Playlist::pollLine(char* line) {
             pattern_done:
                 _since_home++;
                 _quiet_override = false;  // a Skip override is good for one pattern
-                uint32_t pause_ms = static_cast<uint32_t>(_pause_time->get()) * 1000;
-                if (_pause_from_start->get()) {
+                uint32_t pause_ms = static_cast<uint32_t>(runPause()) * 1000;
+                if (runPauseFromStart()) {
                     uint32_t elapsed = now - _pattern_start_ms;
                     pause_ms         = pause_ms > elapsed ? pause_ms - elapsed : 0;
                 }
                 _index++;
                 _clear_done = false;
                 if (_index >= _order.size()) {
-                    if (!_single && _mode->get() == MODE_LOOP) {
-                        if (_shuffle->get()) {
+                    if (!_single && runMode() == MODE_LOOP) {
+                        if (runShuffle()) {
                             shuffleOrder();
                         }
                         _index = 0;
