@@ -1,6 +1,7 @@
 board: MKS-DLC32 V2.1
-name: Dune Weaver Mini Pro ThetaRho
-meta: Mini Pro ThetaRho
+name: Dune Weaver Gold ThetaRho
+meta: Gold ThetaRho
+hostname: DWGold
 stepping:
   engine: I2S_STATIC
   idle_ms: 0
@@ -63,7 +64,7 @@ axes:
         ms3_pin: NO_PIN
         reset_pin: NO_PIN
   y:
-    steps_per_mm: 164
+    steps_per_mm: 270
     max_rate_mm_per_min: 500
     acceleration_mm_per_sec2: 40
     max_travel_mm: 1.1
@@ -178,9 +179,9 @@ use_line_numbers: false
 planner_blocks: 16
 playlist:
   folder: /playlists
-  clear_from_in: /patterns/clear_from_in_mini.thr
-  clear_from_out: /patterns/clear_from_out_mini.thr
-  clear_sideway: /patterns/clear_sideway_mini.thr
+  clear_from_in: /patterns/clear_from_in.thr
+  clear_from_out: /patterns/clear_from_out.thr
+  clear_sideway: /patterns/clear_sideway.thr
 leds:
   data_pin: gpio.18
   num_leds: 49
