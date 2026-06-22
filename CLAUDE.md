@@ -11,8 +11,7 @@ hours, JSON API) are ported into firmware. Work happens on branch **`thr-kinemat
 (base v3.9.5). Roadmap/porting notes: `PORTING.md`.
 
 The table is **headless**: it exposes an HTTP API and holds no web UI. Clients (a
-future iOS/Android/web app, scripts) drive it over HTTP. Light, the `sandtable_ui/`
-SPA, is a dev/mock client, not served by the board.
+future iOS/Android/web app, scripts) drive it over HTTP.
 
 ## Hardware (active test board)
 

@@ -376,7 +376,7 @@ void report_gcode_modes(Channel& channel) {
 
 // Prints build info line
 void report_build_info(const char* line, Channel& channel) {
-    log_stream(channel, "[VER:" << grbl_version << " FluidNC " << git_info << ":" << line);
+    log_stream(channel, "[VER:" << grbl_version << " dune-weaver-firmware " << git_info << ":" << line);
 
     // The option message is included for backwards compatibility but
     // is not particularly useful for FluidNC, which has runtime

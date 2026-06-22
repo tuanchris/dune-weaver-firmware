@@ -1,3 +1,17 @@
+dune-weaver-firmware
+Copyright (c) 2026 tuanchris
+
+This project is a fork of FluidNC (https://github.com/bdring/FluidNC),
+Copyright (c) 2018-2024 Bart Dring and the FluidNC contributors, which is
+itself derived from Grbl, Copyright (c) Sungeun K. Jeon (Gnea Research LLC)
+and Simen Svale Skogsrud. All upstream copyright notices are preserved.
+
+dune-weaver-firmware is free software, licensed under the GNU General Public
+License version 3 (GPLv3) — the same license as FluidNC. The full license
+text follows.
+
+--------------------------------------------------------------------------
+
 The following license terms govern the usage of any files in this
 repository that do not explicitly specify different terms.
 

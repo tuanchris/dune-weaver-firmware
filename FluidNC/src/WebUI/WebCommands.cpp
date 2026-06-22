@@ -137,7 +137,7 @@ namespace WebUI {
                 module->build_info(out);
             }
 
-            log_stream(out, "FW version: FluidNC " << git_info);
+            log_stream(out, "FW version: dune-weaver-firmware " << git_info);
             return Error::Ok;
         }
 

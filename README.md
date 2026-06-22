@@ -1,49 +1,67 @@
-<img src="https://github.com/bdring/FluidNC/wiki/images/logos/FluidNC.svg" width="600">
+# dune-weaver-firmware
 
-## Introduction
+Firmware that turns a **single MKS-DLC32 (ESP32) board** into the whole brain of a
+[Dune Weaver](https://github.com/tuanchris/dune-weaver) kinetic sand table — no
+Raspberry Pi, no separate WLED controller. It is a fork of
+[**FluidNC**](https://github.com/bdring/FluidNC) **v3.9.5** with the sand-table host's
+features ported down into the firmware itself.
 
-**FluidNC** is a CNC firmware optimized for the ESP32 controller. It is the next generation of firmware from the creators of Grbl_ESP32. It includes a web based UI and the flexibility to operate a wide variety of machine types. This includes the ability to control machines with multiple tool types such as laser plus spindle or a tool changer.  
+## What it does
 
-## Firmware Architecture
+A Dune Weaver normally splits its brain across a host (Raspberry Pi running the
+ThetaRho / `.thr` logic, playlists, scheduler, LEDs) and a motion controller. This
+firmware folds all of that onto the ESP32:
 
-- Object-Oriented hierarchical design
-- Hardware abstraction for machine features like spindles, motors, and stepper drivers
-- Extensible - Adding new features is much easier for the firmware as well as gcode senders.
+- **ThetaRho kinematics** and `.thr` pattern playback
+- **Playlists** with shuffle, pauses, adaptive clear-between-patterns
+- **WS2812 LED** effects driven directly from the board (no WLED)
+- **Scheduler / quiet hours** ("Still Sands")
+- **Selectable homing** — limit-switch (sensor) or blind crash-into-stop, plus a
+  configurable theta zero offset
+- A stateless **HTTP/JSON API** for clients to drive the table
 
-## Machine Definition Method
+## Headless by design
 
-There is no need to compile the firmware. You use an installation script to upload the latest release of the firmware and then create [config file](http://wiki.fluidnc.com/en/config/overview) text file that describes your machine.  That file is uploaded to the FLASH on the ESP32 using the USB/Serial port or WIFI.
+The table holds **no web UI**. It exposes an HTTP API and is driven by clients (a
+phone/desktop/web app, Home Assistant, scripts). Motion is controlled over stateless
+HTTP — `POST`/`GET` to `/command` and the `/sand_*` action routes — and status is
+polled from `/sand_status` (~1 Hz). The WebUI WebSocket is disabled (it raced motion
+on this hardware).
 
-You can have multiple config files stored on the ESP32. The default is config.yaml, but you can change that with [**$Config/Filename=<myOtherConfig.yaml>**](http://wiki.fluidnc.com/en/features/commands_and_settings#config_filename)
+## Documentation
 
-## Basic Grbl Compatibility
+- [`COMMANDS.md`](COMMANDS.md) — copy-paste command / HTTP cheatsheet
+- [`API.md`](API.md) — the stable HTTP contract and `$Sand/Status` JSON schema
+- [`PORTING.md`](PORTING.md) — what was ported from the Dune Weaver host and how
+- Upstream FluidNC config reference: <http://wiki.fluidnc.com>
 
-The intent is to maintain as much Grbl compatibility as possible. It is 100% compatible with the day to day operations of running gcode with a sender, so there is no change to the Grbl gcode send/response protocol, and all Grbl gcode are supported. Most of the $ settings have been replaced with easily readable items in the config file.
+## Build & flash
 
+Uses [PlatformIO](https://platformio.org/).
 
-## WebUI
+```bash
+pio test -e tests                 # fast native unit tests (googletest + ASan/UBSan)
+pio run  -e sandtable             # build the firmware
+pio run  -e sandtable -t upload --upload-port /dev/cu.usbserial-XXXX   # flash over USB
+```
 
-FluidNC includes a built-in browser-based Web UI (Esp32_WebUI) so you control the machine from a PC, phone, or tablet on the same Wifi network.
-
-## Wiki
-
-[Check out the wiki](http://wiki.fluidnc.com) if you want the learn more about the feature or how to use it.
+The machine is described by a `config.yaml` on the board's littlefs (theta/rho axes,
+homing, LEDs, etc.) — see the upstream FluidNC [config docs](http://wiki.fluidnc.com)
+and the examples in this repo.
 
 ## Credits
 
-The original [Grbl](https://github.com/gnea/grbl) is an awesome project by Sungeon (Sonny) Jeon. I have known him for many years and he is always very helpful. I have used Grbl on many projects.
+Built on the work of others, and distributed under the same license (GPLv3):
 
-The Wifi and WebUI is based on [this project.](https://github.com/luc-github/ESP3D-WEBUI)  
+- [**FluidNC**](https://github.com/bdring/FluidNC) by Bart Dring and contributors —
+  the CNC firmware this is forked from.
+- [**Grbl**](https://github.com/gnea/grbl) by Sungeun (Sonny) Jeon and Simen Svale
+  Skogsrud — the motion-control foundation FluidNC itself builds on.
+- The Wi-Fi / WebUI plumbing derives from [ESP3D-WebUI](https://github.com/luc-github/ESP3D-WEBUI).
+- The [Dune Weaver](https://github.com/tuanchris/dune-weaver) project — the sand table
+  this firmware is built to drive.
 
-## Discussion
+## License
 
-<img src="http://wiki.fluidnc.com/discord-logo_trans.png" width="180">
-
-We have a Discord server for the development this project. Ask for an invite
-
-
-## Donations
-
-This project requires a lot of work and often expensive items for testing. Please consider a safe, secure and highly appreciated donation via the PayPal link below or via the GitHub sponsor link at the top of the page.
-
-[![](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/donate/?hosted_button_id=8DYLB6ZYYDG7Y)
+GPLv3 — see [`LICENSE`](LICENSE). As a fork of FluidNC, all upstream copyrights and
+the GPLv3 terms are preserved; see [`AUTHORS`](AUTHORS).

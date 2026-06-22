@@ -1,4 +1,11 @@
-The following people have contributed to the development of FluidNC
+dune-weaver-firmware is a fork of FluidNC adapted for the Dune Weaver sand table.
+
+Fork maintainer:
+
+tuanchris  [Dune Weaver sand-table port: ThetaRho/.thr playback, playlists, LEDs,
+            scheduler, homing modes, HTTP/JSON API]
+
+The following people contributed to FluidNC and Grbl, on which this is based:
 
 Simen Svale Skogsrud  [Grbl]
 Sungeun K. Jeon for Gnea Research LLC  [Grbl]

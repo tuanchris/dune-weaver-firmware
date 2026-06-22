@@ -548,7 +548,7 @@ namespace WebUI {
                 return showFwInfoJSON(parameter, auth_level, out);
             }
 
-            LogStream s(out, "FW version: FluidNC ");
+            LogStream s(out, "FW version: dune-weaver-firmware ");
             s << git_info;
             // TODO: change grbl-embedded to FluidNC after fixing WebUI
             s << " # FW target:grbl-embedded  # FW HW:";

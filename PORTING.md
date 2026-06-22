@@ -28,11 +28,11 @@ Already in firmware (branch `thr-kinematics`):
   flash — and the Module system is explicitly designed for it (see
   `FluidNC/src/Module.h`).
 - The dune-weaver **React SPA build is ~3.6 MB** → can't live in 192 KB
-  littlefs. But that bundle was the problem, not flash-hosting: FluidNC's
-  own WebUI is `index.html.gz` (117 KB) in littlefs, and our purpose-built
-  SPA is **7.5 KB gzipped** (`sandtable_ui/`, served as
-  `FluidNC/data/index.html.gz`). So **the UI lives in flash**, like the
-  stock one — no SD dependency for the UI itself.
+  littlefs. A purpose-built ~7.5 KB SPA was prototyped to be flash-hosted
+  like FluidNC's stock WebUI, but the design ultimately went **headless**:
+  the board serves **no web UI**, only the HTTP/JSON API, and clients
+  (app/scripts) own the UI. (WebUI WebSockets raced motion and were
+  disabled.) The prototype SPA has been removed from the repo.
 - **Thumbnails (~38 MB) and patterns (~542 MB) live on SD**, fetched as
   `/sd/...` over HTTP — FluidNC's catch-all (`handle_not_found` →
   `myStreamFile`) already resolves the `sd` mount (`FluidPath.cpp:15`),
@@ -204,21 +204,12 @@ To port (in order):
 
    Pattern list is unpaginated (~1080 files → ~40 KB JSON, fine on the
    current heap; paginate if it grows).
-8. **Web UI** — DONE 2026-06-13 (`sandtable_ui/`). Self-contained
-   single-file SPA (vanilla HTML/CSS/JS, no build step), gzipped to
-   `FluidNC/data/index.html.gz` (**7.5 KB**, 6 % of littlefs) and served
-   from flash like the stock WebUI — no SD dependency for the UI, no
-   upstream patch (the `/sd/...` serving I'd thought needed a patch is
-   already handled by `FluidPath`). Phone-first dark UI: now-playing with
-   progress + pause/resume/stop/skip + speed, pattern grid with SD
-   thumbnails (`/sd/thumbs/<file>.png`) and graceful placeholders,
-   playlists, lights, quiet-hours/auto-home settings. Polls `$Sand/Status`
-   at 1 Hz; actions via the command map above. `sandtable_ui/mock.py`
-   simulates the firmware for hardware-free preview; `build.py` rebuilds
-   the gz. Verified end-to-end against the mock (idle + running, see
-   `preview_*.png`); **not yet flashed to the board** (USB was
-   disconnected overnight) — flash with
-   `python3 dwg_configs/upload_config.py FluidNC/data/index.html.gz /dev/cu.usbserial-8310 /littlefs/index.html.gz`.
+8. **Web UI** — DROPPED. A self-contained single-file SPA was prototyped
+   (`sandtable_ui/`, ~7.5 KB gzipped) to be flash-hosted like the stock
+   WebUI, but the design moved to **headless**: the board serves only the
+   HTTP/JSON API (`$Sand/*`, `/sand_*`, poll `$Sand/Status` ~1 Hz) and
+   clients own the UI. The prototype SPA and its mock/build scripts have
+   been removed from the repo.
 8. **MQTT/Home Assistant**: esp-mqtt (plain, no TLS) + HA discovery,
    trimmed to ~10 entities (state, current pattern, progress, speed,
    pause/stop/skip, playlist select). Host version has 30+.
