@@ -224,8 +224,20 @@ namespace {
         return err;
     }
 
+    // $Sand/Home -- home the table honoring $Sand/HomingMode (sensor $H vs
+    // crash-into-stop).  Same entry point as the /sand_home route and the boot
+    // startup line; flags the request and lets protocol_main_loop run it in the
+    // main task (homing must not run in the web/command task -- see Protocol.cpp).
+    Error sandHome(const char* value, AuthenticationLevel auth_level, Channel& out) {
+        protocol_do_start_home();
+        return Error::Ok;
+    }
+
     // Asynchronous so $Sand/Status reports while a pattern is running.
     UserCommand sandStatusCmd(NULL, "Sand/Status", sandStatus, nullptr, WG, false);
+    // Un-gated: the home request is just a flag; the main loop runs it only when
+    // Idle/Alarm, so it is safe to accept from any state.
+    UserCommand sandHomeCmd(NULL, "Sand/Home", sandHome, nullptr, WG, false);
     UserCommand sandPatternsCmd(NULL, "Sand/Patterns", sandPatterns, nullptr, WG, false);
     UserCommand sandPlaylistsCmd(NULL, "Sand/Playlists", sandPlaylists, nullptr, WG, false);
     UserCommand sandRunCmd(NULL, "Sand/Run", sandRun, nullptr, WG, false);
@@ -381,7 +393,7 @@ std::string SandApi::timeJson() {
 std::string SandApi::settingsJson() {
     // App-relevant settings, returned as strings (the app casts numeric ones).
     static const char* const keys[] = {
-        "THR/Feed",
+        "THR/Feed",         "Sand/HomingMode",  "Sand/ThetaOffset",
         "LED/Effect",      "LED/Palette",      "LED/Color",             "LED/Color2",
         "LED/Brightness",  "LED/Speed",        "LED/RunEffect",         "LED/IdleEffect",
         "LED/Direction",   "LED/Align",      "LED/BallSize",

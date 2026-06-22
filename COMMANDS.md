@@ -69,15 +69,37 @@ curl "$B/sand_resume"
 ## Homing
 
 ```bash
-curl "$B/sand_home"                       # sensor homing ($H) via the main loop (safe)
-curl "$B/command?plain=\$H"               # same, raw
+curl "$B/sand_home"                       # home honoring $Sand/HomingMode, via the main loop (safe)
+curl "$B/command?plain=\$Sand/Home"       # same, over /command (mode-aware)
+curl "$B/command?plain=\$H"               # force a sensor ($H) home, raw
 curl "$B/command?plain=\$X"               # unlock from Alarm without homing
+
+# Homing mode (persisted setting; default sensor):
+curl "$B/command?plain=\$Sand/HomingMode=crash"    # blind crash-into-stop homing
+curl "$B/command?plain=\$Sand/HomingMode=sensor"   # limit-switch $H homing
+curl "$B/command?plain=\$Sand/HomingMode"          # read current mode
+
+# Theta zero offset / "Sensor Offset" (degrees; persisted; -360..360; default 0):
+curl "$B/command?plain=\$Sand/ThetaOffset=90"      # pattern theta=0 sits 90 deg from home
+curl "$B/command?plain=\$Sand/ThetaOffset"         # read current offset
 ```
 
-- Auto-homes on every boot (config `macros: startup_line0: $H`; `after_homing`
-  re-centers to 0,0).
-- Sensor homing uses the limit switches (gpio.36 theta, gpio.35 rho).
-- Crash (sensorless) homing is **not implemented** in firmware.
+- `/sand_home`, `$Sand/Home` and the boot startup line all honor `$Sand/HomingMode`.
+- **Sensor** mode (default): the limit-switch `$H` cycle (gpio.36 theta, gpio.35 rho),
+  with `after_homing` re-centering to 0,0.
+- **Crash** mode: drives the rho (Y) carriage blindly into its physical center stop
+  (no switch, no stall detection — plain stepsticks), then declares that position
+  theta=0, rho=0. Theta is **not** moved, just zeroed in place. Jog feed is a fixed
+  gentle seek rate; overshoot is full rho travel + margin.
+- **Theta offset** (`$Sand/ThetaOffset`, degrees): applied at home time by **both**
+  modes — pattern theta=0 is placed that many degrees from the home reference (the
+  limit switch in sensor mode, the crash position in crash mode). Idle-gated;
+  re-applied on the next home (so change it, then re-home for it to take effect).
+  Honored on boot only via `startup_line0: $Sand/Home` (not raw `$H`).
+- For the **boot** auto-home to honor crash mode, set the startup line to the
+  mode-aware command in config.yaml: `macros: startup_line0: $Sand/Home`
+  (the older `startup_line0: $H` always does sensor homing).
+- `$Sand/HomingMode` is also returned by `GET /sand_settings`.
 
 ```bash
 # Goto an absolute theta (radians) and/or rho (0..1) - manual positioning between

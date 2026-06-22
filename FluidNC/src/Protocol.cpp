@@ -17,7 +17,8 @@
 #include "Planner.h"        // plan_get_current_block
 #include "MotionControl.h"  // PARKING_MOTION_LINE_NUMBER
 
-#include "SettingsDefinitions.h"  // gcode_echo
+#include "SettingsDefinitions.h"  // gcode_echo, homing_mode
+#include "System.h"               // set_motor_steps_from_mpos (crash home)
 #include "Machine/LimitPin.h"
 #include "Job.h"
 #include "Driver/restart.h"
@@ -81,7 +82,14 @@ static volatile float gotoFeed     = 0.0f;
 
 volatile bool runLimitLoop;  // Interface to show_limits()
 
+// Feed (mm/min) for the crash-home jog into the rho stop -- slow enough to be
+// gentle on the mechanism, matching a typical homing seek rate.
+static constexpr int CRASH_HOME_FEED_MM_MIN = 200;
+
+static constexpr float DEG_TO_RAD = 0.0174532925199432957f;
+
 static void protocol_exec_rt_suspend();
+static void protocol_run_crash_home(float theta_offset_rad);
 
 static char line[LINE_BUFFER_SIZE];     // Line to be executed. Zero-terminated.
 static char comment[LINE_BUFFER_SIZE];  // Line to be executed. Zero-terminated.
@@ -369,8 +377,23 @@ void protocol_main_loop() {
         // blocking homing loop is the only thing pumping segment prep.
         if (rtStartHome && (state_is(State::Idle) || state_is(State::Alarm))) {
             rtStartHome = false;
-            char line[] = "$H";
-            execute_line(line, allChannels, AuthenticationLevel::LEVEL_GUEST);
+            // Theta zero offset (UI "Sensor Offset"): pattern theta=0 sits this
+            // many radians from the home reference.  Applied to both modes.
+            float theta_offset_rad = theta_offset ? (theta_offset->get() * DEG_TO_RAD) : 0.0f;
+            if (homing_mode && homing_mode->get() == HomingCrash) {
+                protocol_run_crash_home(theta_offset_rad);
+            } else {
+                // Set the theta limit-switch home position so $H (and any
+                // after_homing recenter to X0) land theta=0 the offset away
+                // from the switch.  In-memory only; reloaded from config each
+                // boot, re-applied on every home.
+                if (config && config->_axes && config->_axes->_numberAxis > X_AXIS && config->_axes->_axis[X_AXIS] &&
+                    config->_axes->_axis[X_AXIS]->_homing) {
+                    config->_axes->_axis[X_AXIS]->_homing->_mpos = theta_offset_rad;
+                }
+                char line[] = "$H";
+                execute_line(line, allChannels, AuthenticationLevel::LEVEL_GUEST);
+            }
         }
 
         // Run a web-requested goto (/sand_goto) here in the main task: build an
@@ -671,10 +694,63 @@ void protocol_do_stop_job() {
 }
 
 // Sand-table UI home request.  Just flags it; protocol_main_loop runs the
-// blocking $H in the main task so it doesn't fight the main loop's segment
-// prep (see rtStartHome above).
+// blocking $H (or crash sequence) in the main task so it doesn't fight the main
+// loop's segment prep (see rtStartHome above).
 void protocol_do_start_home() {
     rtStartHome = true;
+}
+
+// Crash ("sensorless") homing for the ThetaRho table: no limit switch, no stall
+// detection (plain stepsticks).  Drive the rho (Y) carriage blindly into its
+// physical centre stop, then declare that position theta=0, rho=0.
+//
+// Runs ONLY in protocol_main_loop (the main task) for the same reason as $H: the
+// blocking buffer-synchronize below pumps segment prep, which must not race the
+// main loop's own prep (see rtStartHome).  We use a $J= jog, not G1, so motion
+// is applied to the Y MOTOR directly (bypassing the ThetaRho coupling) -- only
+// rho drives into the stop; theta is left in place and simply zeroed.
+static void protocol_run_crash_home(float theta_offset_rad) {
+    // Clear the power-on Unhomed alarm so jog motion is permitted.
+    if (state_is(State::Alarm)) {
+        char unlock[] = "$X";
+        execute_line(unlock, allChannels, AuthenticationLevel::LEVEL_GUEST);
+    }
+
+    // Overshoot the full rho travel so the carriage reaches the stop regardless
+    // of where it started.  Jog distance is in Y-motor mm (kinematics bypassed).
+    float travel = 50.0f;  // safe fallback if the axis/travel isn't configured
+    if (config && config->_axes && config->_axes->_numberAxis > Y_AXIS && config->_axes->_axis[Y_AXIS]) {
+        float mt = config->_axes->_axis[Y_AXIS]->_maxTravel;
+        if (mt > 0.0f) {
+            travel = mt;
+        }
+    }
+    float dist = travel * 1.15f + 5.0f;
+
+    // Y homes negative -> drive toward the rho=0 (centre) stop.
+    char jog[LINE_BUFFER_SIZE];
+    snprintf(jog, sizeof(jog), "$J=G91 Y-%.3f F%d", dist, CRASH_HOME_FEED_MM_MIN);
+    execute_line(jog, allChannels, AuthenticationLevel::LEVEL_GUEST);
+
+    // Wait for the carriage to reach (and skip steps against) the stop.
+    protocol_buffer_synchronize();
+    if (sys.abort) {
+        return;  // a reset/abort interrupted the crash; leave state as-is
+    }
+
+    // Declare this position theta=offset, rho=0 and mark both axes homed so the
+    // machine leaves Alarm and goto / patterns are allowed (mirrors
+    // Homing::set_mpos()).  theta_offset_rad places pattern theta=0 that many
+    // radians from the crash position.
+    float mpos[MAX_N_AXIS] = { 0.0f };
+    mpos[X_AXIS]           = theta_offset_rad;
+    set_motor_steps_from_mpos(mpos);
+    gc_sync_position();
+    plan_sync_position();
+    Machine::Homing::set_axis_homed(X_AXIS);
+    Machine::Homing::set_axis_homed(Y_AXIS);
+    set_state(State::Idle);
+    log_msg("Crash homed: theta=" << mpos[X_AXIS] << " rho=0");
 }
 
 // Sand-table goto request (called from the web/command task).  Stores the

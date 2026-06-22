@@ -76,7 +76,7 @@ the WebSocket for a *single* "active controller" that wants smooth high-rate liv
 | `GET /sand_status` | status object (schema below) |
 | `GET /sand_patterns` | JSON array of `.thr` paths. **If `/patterns/index.json` (a prebuilt manifest) exists, it is served verbatim** — a fast single-file read of the full recursive catalog (paths relative to `/patterns`, e.g. `custom_patterns/x.thr`; run via `$Sand/Run=/patterns/<path>`). Generate it on the host and upload to the card whenever patterns change (see COMMANDS.md). **Without a manifest** it falls back to a non-recursive top-level listing (subfolders omitted — enumerating the ~1000-file nested library on the slow SD froze the single-threaded server). Chunked/streamed |
 | `GET /sand_playlists` | JSON array of `.txt` files in the top level of `/playlists` (non-recursive) |
-| `GET /sand_settings` | JSON object of app settings (speed, LED, playlist, quiet hours), values as strings |
+| `GET /sand_settings` | JSON object of app settings (speed, homing mode, LED, playlist, quiet hours), values as strings |
 | `GET /sand_time` | wall clock `{epoch, synced, local, tz}`. `?epoch=<unix>` sets the clock (app auto-sync / AP mode); `?tz=<POSIX>` sets + persists the timezone. Also surfaced in `/sand_status` under `time` |
 
 These are read-only, fast, and skip the block-during-motion gate, so clients keep reading while a pattern
@@ -95,7 +95,10 @@ reliably over the (single-client) WebSocket. Pattern/playlist **contents** are f
 | `$Playlist/Skip` | abort current pattern, advance to next |
 | `$Playlist/List` | text listing + active playlist index/total/name |
 | `$Sand/Goto theta=<rad> rho=<0..1>` / `GET /sand_goto?theta=&rho=` | jog to an absolute θ (radians) and/or ρ (0..1); either or both axes (omitted axis stays put). For manual positioning **between patterns** — requires Idle (rejects with IdleError/HTTP 409 if a pattern is running or unhomed). ρ clamped to 0..1; uses the current feed; runs as a `G1` move (through ThetaRho kinematics) in the main loop — stop with `/sand_stop` |
-| `$H` | home (sets θ=0, normalizes; **send over WebSocket**) |
+| `$Sand/Home` / `GET /sand_home` | home honoring `$Sand/HomingMode`; runs in the main loop (safe over HTTP). **sensor** = limit-switch `$H`; **crash** = drive ρ (Y) blindly into the center stop then zero θ/ρ |
+| `$Sand/HomingMode=sensor\|crash` | persisted homing mode (NVS; default `sensor`). Honored by `/sand_home`, `$Sand/Home`, and the boot startup line (set `startup_line0: $Sand/Home`). Also returned by `GET /sand_settings` |
+| `$Sand/ThetaOffset=<deg>` | theta zero offset in degrees (UI "Sensor Offset"; NVS; -360..360; default 0). At home time (**both** modes) pattern θ=0 is placed this many degrees from the home reference (limit switch in sensor mode, crash position in crash mode). Idle-gated; takes effect on the next home. Honored on boot only via `startup_line0: $Sand/Home`. Returned by `GET /sand_settings` |
+| `$H` | force a sensor home (sets θ=0, normalizes; **send over WebSocket**) |
 | `!` / `~` | realtime feed-hold (pause) / cycle-start (resume) |
 | `0x18` (Ctrl-X) | realtime soft reset (loses position) |
 

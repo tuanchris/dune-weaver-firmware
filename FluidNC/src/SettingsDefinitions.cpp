@@ -36,7 +36,13 @@ const enum_opt_t messageLevels = {
 
 const enum_opt_t onoffOptions = { { "OFF", 0 }, { "ON", 1 } };
 
+const enum_opt_t homingModeOptions = { { "sensor", HomingSensor }, { "crash", HomingCrash } };
+
 EnumSetting* gcode_echo;
+
+EnumSetting* homing_mode;
+
+IntSetting* theta_offset;
 
 void make_coordinate(CoordIndex index, const char* name) {
     float coord_data[MAX_N_AXIS] = { 0.0 };
@@ -86,6 +92,14 @@ void make_settings() {
         new StringSetting("Message issued at startup", EXTENDED, WG, NULL, "Start/Message", "Grbl \\V [FluidNC \\B (\\R) \\H]", 0, 40);
 
     gcode_echo = new EnumSetting("GCode Echo Enable", WEBSET, WG, NULL, "GCode/Echo", 0, &onoffOptions);
+
+    // Sand-table homing mode: limit-switch $H ("sensor", default) vs blind
+    // crash-into-stop ("crash").  Read by the /sand_home handler in Protocol.cpp.
+    homing_mode = new EnumSetting("Sand homing mode", EXTENDED, WG, NULL, "Sand/HomingMode", HomingSensor, &homingModeOptions);
+
+    // Theta zero offset in degrees (UI "Sensor Offset"); applied at home time by
+    // both homing modes -- see protocol_main_loop in Protocol.cpp.
+    theta_offset = new IntSetting("Theta zero offset (deg)", EXTENDED, WG, NULL, "Sand/ThetaOffset", 0, -360, 360);
 
     // Some gcode senders expect Grbl to report certain numbered settings to improve
     // their reporting. The following macros set up various legacy numbered Grbl settings,

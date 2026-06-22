@@ -52,6 +52,11 @@ void protocol_do_motion_cancel();
 // concurrently from the web/polling task.  Ignored unless the machine is Idle.
 void protocol_request_goto(bool hasTheta, float theta, bool hasRho, float rho, float feed);
 
+// Sand-table home request (used by /sand_home, $Sand/Home and the boot
+// startup line).  Flags the request; protocol_main_loop runs the actual home
+// in the main task, honoring $Sand/HomingMode (sensor $H vs crash-into-stop).
+void protocol_do_start_home();
+
 extern volatile bool rtCycleStop;
 
 extern volatile bool runLimitLoop;
