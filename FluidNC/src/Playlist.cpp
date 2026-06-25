@@ -15,6 +15,7 @@
 #include "Kinematics/ThetaRho.h"  // clearFeedLive() when a run ends
 #include "Leds.h"                  // Still Sands LED-off during quiet hours
 #include "FluidPath.h"
+#include "TimeKeeper.h"            // Clock::isSet
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -28,6 +29,13 @@ namespace {
 
     uint32_t now_ms() {
         return xTaskGetTickCount() * portTICK_PERIOD_MS;
+    }
+
+    // True in any state where a job cannot be (re)started and a pending
+    // request must be rejected. (The homing path at runStep() deliberately
+    // uses a narrower check that omits ConfigAlarm.)
+    bool inAlarmState() {
+        return state_is(State::Alarm) || state_is(State::ConfigAlarm) || state_is(State::Critical);
     }
 
     // How long to wait for an injected command to take effect before
@@ -147,7 +155,7 @@ Error Playlist::requestRun(const char* name, Channel& out) {
         log_error_to(out, "Usage: $Playlist/Run=<name>");
         return Error::InvalidValue;
     }
-    if (state_is(State::Alarm) || state_is(State::ConfigAlarm) || state_is(State::Critical)) {
+    if (inAlarmState()) {
         log_error_to(out, "Machine is in alarm; home ($H) or unlock ($X) first");
         return Error::IdleError;
     }
@@ -189,7 +197,7 @@ Error Playlist::requestSingle(const char* patternPath, const char* clearMode, Ch
         log_error_to(out, "Usage: $Sand/Run=<file> [clear=none|adaptive|in|out|sideway|random]");
         return Error::InvalidValue;
     }
-    if (state_is(State::Alarm) || state_is(State::ConfigAlarm) || state_is(State::Critical)) {
+    if (inAlarmState()) {
         log_error_to(out, "Machine is in alarm; home ($H) or unlock ($X) first");
         return Error::IdleError;
     }
@@ -263,7 +271,7 @@ bool Playlist::quietNow(uint32_t now) {
     _last_quiet_check = now;
 
     time_t t = time(nullptr);
-    if (t < 1672531200) {  // clock still at the 1970 power-up default
+    if (!Clock::isSet()) {  // clock still at the 1970 power-up default
         if (!_warned_no_time) {
             _warned_no_time = true;
             log_warn("playlist: $Sands/Enabled is ON but the clock is not set;"
@@ -600,7 +608,7 @@ Error Playlist::pollLine(char* line) {
             break;
 
         case Phase::NextItem: {
-            if (state_is(State::Alarm) || state_is(State::ConfigAlarm) || state_is(State::Critical)) {
+            if (inAlarmState()) {
                 finish("canceled by alarm");
                 break;
             }
@@ -701,7 +709,7 @@ Error Playlist::pollLine(char* line) {
 
         case Phase::RunClear:
         case Phase::RunPattern: {
-            if (state_is(State::Alarm) || state_is(State::ConfigAlarm) || state_is(State::Critical)) {
+            if (inAlarmState()) {
                 // Also reached when the user sends a realtime reset mid-move
                 finish("canceled by alarm/reset");
                 break;

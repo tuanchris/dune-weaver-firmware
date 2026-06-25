@@ -33,6 +33,10 @@
 #include <cstdlib>
 #include <string>
 
+// Consumers treat the clock as "set" once it is past this epoch: the ESP32 RTC
+// starts at 1970 on power-up, and NTP / $Time/Set jump it past 2023.
+static constexpr time_t EPOCH_2023 = 1672531200;  // 2023-01-01 00:00:00 UTC
+
 // Persisted runtime TZ override ($Time/Zone), shared with the Clock:: API.
 // Non-empty wins over the config `time: tz:`.
 static StringSetting* s_tz_setting = nullptr;
@@ -55,7 +59,7 @@ public:
 
     virtual ~TimeKeeper() = default;
 
-    static bool valid() { return time(nullptr) > 1672531200; }  // 2023-01-01
+    static bool valid() { return Clock::isSet(); }
 
     void init() override {
         if (!s_tz_setting) {
@@ -113,7 +117,7 @@ private:
             return Error::InvalidValue;
         }
         time_t t = static_cast<time_t>(strtoll(value, NULL, 10));
-        if (t < 1672531200) {
+        if (t < EPOCH_2023) {
             log_error_to(out, "Epoch must be after 2023-01-01");
             return Error::InvalidValue;
         }
@@ -141,7 +145,7 @@ private:
 
 // ---- Clock:: wall-clock API (TimeKeeper.h) ----
 namespace Clock {
-    bool   isSet() { return time(nullptr) > 1672531200; }  // 2023-01-01
+    bool   isSet() { return time(nullptr) > EPOCH_2023; }
     time_t now() { return time(nullptr); }
 
     void localString(char* buf, size_t n) {
@@ -157,7 +161,7 @@ namespace Clock {
     }
 
     bool setEpoch(time_t t) {
-        if (t < 1672531200) {
+        if (t < EPOCH_2023) {
             return false;
         }
         struct timeval tv = { t, 0 };

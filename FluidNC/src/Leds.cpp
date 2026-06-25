@@ -42,19 +42,13 @@ namespace {
     enum_opt_t ledDirections = {
         { "cw", 0 }, { "ccw", 1 },
     };
-    // Same list plus "none" (no override) for the state hooks.
-    enum_opt_t ledHookEffects = {
-        { "off", 0 },        { "static", 1 },      { "rainbow", 2 },      { "breathe", 3 },
-        { "colorloop", 4 },  { "theater", 5 },     { "scan", 6 },         { "running", 7 },
-        { "sine", 8 },       { "gradient", 9 },    { "sinelon", 10 },     { "twinkle", 11 },
-        { "sparkle", 12 },   { "fire", 13 },       { "candle", 14 },      { "meteor", 15 },
-        { "bouncing", 16 },  { "wipe", 17 },       { "dualscan", 18 },    { "juggle", 19 },
-        { "multicomet", 20 },{ "glitter", 21 },    { "dissolve", 22 },    { "ripple", 23 },
-        { "drip", 24 },      { "lightning", 25 },  { "fireworks", 26 },   { "plasma", 27 },
-        { "heartbeat", 28 }, { "strobe", 29 },     { "police", 30 },      { "chase", 31 },
-        { "railway", 32 },   { "pacifica", 33 }, { "aurora", 34 },      { "pride", 35 },
-        { "colorwaves", 36 },{ "bpm", 37 },      { "ball", 38 },        { "none", 255 },
-    };
+    // Same list plus "none" (no override) for the state hooks. Derived from
+    // ledEffects so the two can never drift as effects are added.
+    enum_opt_t ledHookEffects = [] {
+        enum_opt_t m = ledEffects;
+        m["none"] = 255;  // Leds::EFFECT_NONE (no override)
+        return m;
+    }();
 
     // 16-entry packed-RGB gradient palettes (mostly the classic FastLED
     // tables).  Index 0 ("rainbow") is special-cased to the wheel(), so it

@@ -120,19 +120,6 @@ namespace SandStatus {
         return o;
     }
 
-    std::string encode_array(const std::vector<std::string>& items) {
-        std::string o;
-        o += '[';
-        for (size_t i = 0; i < items.size(); i++) {
-            if (i) {
-                o += ',';
-            }
-            append_escaped(o, items[i].c_str());
-        }
-        o += ']';
-        return o;
-    }
-
     std::string encode_object(const std::vector<std::pair<std::string, std::string>>& items) {
         std::string o;
         o += '{';

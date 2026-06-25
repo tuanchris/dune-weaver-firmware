@@ -208,11 +208,10 @@ namespace WebUI {
 
         Mdns::add("_http", "_tcp", _port);
         // Tag this service so a native app can identify a sand table among the
-        // _http._tcp services and learn the webui-v3 WebSocket port (http+2),
-        // which is the app's primary command/status transport.
+        // _http._tcp services. The table is headless and driven over stateless
+        // HTTP (WebSockets are disabled), so no socket port is advertised.
         Mdns::addTxt("_http", "_tcp", "model", "dune-weaver");
         Mdns::addTxt("_http", "_tcp", "api", "sandtable/1");
-        Mdns::addTxt("_http", "_tcp", "ws", std::to_string(_port + 2).c_str());
 
         HashFS::hash_all();
 

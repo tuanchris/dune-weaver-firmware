@@ -107,16 +107,6 @@ TEST(SandStatusEncode, FeedIsIntegerFormatted) {
     EXPECT_FALSE(has(encode(d), "\"feed\":100.0"));
 }
 
-TEST(SandStatusArray, EmptyAndPopulated) {
-    EXPECT_EQ("[]", encode_array({}));
-    EXPECT_EQ("[\"/a.thr\"]", encode_array({ "/a.thr" }));
-    EXPECT_EQ("[\"/a.thr\",\"/b.thr\"]", encode_array({ "/a.thr", "/b.thr" }));
-}
-
-TEST(SandStatusArray, EscapesEntries) {
-    EXPECT_EQ("[\"a\\\"b.thr\"]", encode_array({ "a\"b.thr" }));
-}
-
 TEST(SandStatusObject, EmptyAndPopulated) {
     EXPECT_EQ("{}", encode_object({}));
     EXPECT_EQ("{\"THR/Feed\":\"100\"}", encode_object({ { "THR/Feed", "100" } }));

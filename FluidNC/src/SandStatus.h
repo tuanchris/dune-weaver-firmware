@@ -57,9 +57,6 @@ namespace SandStatus {
     // Compact single-line JSON object for the status.
     std::string encode(const Data& d);
 
-    // JSON array of strings, e.g. ["/a.thr","/b.thr"].
-    std::string encode_array(const std::vector<std::string>& items);
-
     // JSON object of string key/value pairs, e.g. {"THR/Feed":"100"}.
     std::string encode_object(const std::vector<std::pair<std::string, std::string>>& items);
 
