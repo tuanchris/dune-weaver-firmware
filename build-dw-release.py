@@ -135,7 +135,13 @@ manifest["installable"]["choices"].append({
              "erase": True, "images": fresh},
             {"name": "firmware-update",
              "description": "Update firmware only, preserving the filesystem (config.yaml, patterns).",
-             "erase": False, "images": [MCU + "-firmware"]},
+             # Also rewrite otadata (boot_app0.bin @ 0xe000) so the bootloader
+             # selects ota_0/app0, where the firmware below is written. The
+             # partition table is dual-slot OTA; a board that previously took
+             # an OTA update (FluidNC OTA.cpp writes the inactive slot) has
+             # otadata pointing at app1, so a firmware-only write to app0 would
+             # otherwise leave it booting the stale slot.
+             "erase": False, "images": [MCU + "-bootapp", MCU + "-firmware"]},
             {"name": "filesystem-update",
              "description": "Replace the filesystem only, erasing previous filesystem data.",
              "erase": False, "images": [MCU + "-filesystem"]},

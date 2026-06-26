@@ -82,6 +82,7 @@
                 "description": "Update firmware only, preserving the filesystem (config.yaml, patterns).",
                 "erase": false,
                 "images": [
+                  "esp32-bootapp",
                   "esp32-firmware"
                 ]
               },
