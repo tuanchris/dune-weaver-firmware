@@ -49,6 +49,13 @@ namespace SandApi {
     // clock/tz for app auto-sync).
     std::string timeJson();
 
+    // SD readability probe: mounts the card and reads the root directory.
+    // Called once at boot (the verdict lands in the startup log, hence in
+    // /sand_bootlog) and cached; /sand_status reports it as "sd_ok" so the
+    // app can flag a dead/unseated card without a request failing first.
+    bool checkSd();
+    bool sdOk();
+
     // Apply live LED parameters from a "key=value key=value" string (keys:
     // effect palette color color2 brightness speed).  Works while a pattern
     // is running (in-memory; persisted to NVS at idle).  Backs both the

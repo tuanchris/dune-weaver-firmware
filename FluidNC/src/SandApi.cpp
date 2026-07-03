@@ -38,6 +38,9 @@
 
 #include <cstring>
 #include <cstdlib>
+#include <esp_system.h>     // esp_reset_reason() for the status "last_reset"
+#include <esp_timer.h>      // esp_timer_get_time() for the status "uptime"
+#include <esp_heap_caps.h>  // heap_caps_get_largest_free_block() for "heap_largest"
 #include <vector>
 
 namespace {
@@ -248,6 +251,35 @@ namespace {
     UserCommand sandGotoCmd(NULL, "Sand/Goto", sandGoto, nullptr, WG, false);
 }
 
+// esp_reset_reason() distinguishes crashes (panic/watchdog/brownout) from a
+// normal power-up; this is the app's only reboot witness on a headless table.
+static const char* resetReasonName() {
+    switch (esp_reset_reason()) {
+        case ESP_RST_POWERON:
+            return "power_on";
+        case ESP_RST_EXT:
+            return "external";
+        case ESP_RST_SW:
+            return "software";
+        case ESP_RST_PANIC:
+            return "panic";
+        case ESP_RST_INT_WDT:
+            return "int_wdt";
+        case ESP_RST_TASK_WDT:
+            return "task_wdt";
+        case ESP_RST_WDT:
+            return "wdt";
+        case ESP_RST_DEEPSLEEP:
+            return "deepsleep";
+        case ESP_RST_BROWNOUT:
+            return "brownout";
+        case ESP_RST_SDIO:
+            return "sdio";
+        default:
+            return "unknown";
+    }
+}
+
 // Shared status builder.  Defined outside the anonymous namespace so the web
 // server's /sand_status route can reuse it; it still sees the file-local
 // settingValue() helper above (internal linkage, visible for the rest of the TU).
@@ -326,6 +358,25 @@ std::string SandApi::statusJson() {
         }
     }
 
+    // Health block: SD readability (from the boot-time probe), why the last
+    // reboot happened, and uptime so the app can spot silent reboots between
+    // polls.  esp_timer_get_time is 64-bit us, so no millis()-style wrap.
+    d.has_sd     = config->_sdCard != nullptr;
+    d.sd_ok      = sdOk();
+    d.last_reset = resetReasonName();
+    d.uptime     = static_cast<long>(esp_timer_get_time() / 1000000);
+
+    // Heap trend: total flat + heap_largest decaying = fragmentation heading
+    // for an OOM panic; total declining = a real leak.  heapLowWater is
+    // maintained by the protocol loop (Protocol.cpp).
+    d.heap         = static_cast<long>(xPortGetFreeHeapSize());
+    d.heap_min     = static_cast<long>(heapLowWater);
+    d.heap_largest = static_cast<long>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+
+    // Firmware version so the app can offer updates and verify one took
+    // after POST /updatefw.
+    d.fw = git_info;
+
     // Splice in the wall-clock block (kept here so SandStatus stays time-free).
     std::string json = SandStatus::encode(d);
     if (!json.empty() && json.back() == '}') {
@@ -373,6 +424,31 @@ void SandApi::streamDirJson(const char* folder, const char* ext, const JsonSink&
     }
     buf.push_back(']');
     emit(buf.data(), buf.size());
+}
+
+static bool s_sd_ok = false;
+
+bool SandApi::checkSd() {
+    std::error_code ec;
+    FluidPath       root { "", "sd", ec };
+    if (ec) {
+        s_sd_ok = false;
+        log_error("SD check: mount failed (" << ec.message() << ")");
+        return false;
+    }
+    auto iter = stdfs::directory_iterator { root, ec };
+    if (ec) {
+        s_sd_ok = false;
+        log_error("SD check: cannot read root directory (" << ec.message() << ")");
+        return false;
+    }
+    s_sd_ok = true;
+    log_info("SD check: OK");
+    return true;
+}
+
+bool SandApi::sdOk() {
+    return s_sd_ok;
 }
 
 std::string SandApi::timeJson() {

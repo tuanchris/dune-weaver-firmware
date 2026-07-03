@@ -30,6 +30,10 @@
 #include "src/TimeKeeper.h"            // Clock:: for /sand_time
 #include "src/FluidPath.h"
 #include "src/JSONEncoder.h"
+#include "src/StartupLog.h"  // StartupLog::dump() for /sand_bootlog
+#include "src/RingLog.h"     // RingLog::dump() for /sand_log
+#include "src/Job.h"         // Job::active() to gate OTA while a pattern runs
+#include "src/Report.h"      // git_info for the /updatefw response
 
 #include "src/HashFS.h"
 #include <list>
@@ -53,6 +57,18 @@ namespace WebUI {
     const int ESP_ERROR_NOT_ENOUGH_SPACE = 5;
     const int ESP_ERROR_UPLOAD_CANCELLED = 6;
     const int ESP_ERROR_FILE_CLOSE       = 7;
+    const int ESP_ERROR_FILE_OP          = 8;
+
+    // Last upload failure detail, reported in the /files HTTP response by
+    // handleFileOps.  pushError only reaches the WebSocket, which is disabled
+    // on this headless build, so without this the app just sees "Upload failed".
+    static int         _upload_error_code = 0;
+    static std::string _upload_error_msg;
+
+    static void recordUploadError(int code, const std::string& msg) {
+        _upload_error_code = code;
+        _upload_error_msg  = msg;
+    }
 
     static const char LOCATION_HEADER[] = "Location";
 
@@ -151,6 +167,8 @@ namespace WebUI {
         _webserver->on("/sand_resume", HTTP_ANY, handleSandResume);
         _webserver->on("/sand_status", HTTP_ANY, handleSandStatus);
         _webserver->on("/sand_patterns", HTTP_ANY, handleSandPatterns);
+        _webserver->on("/sand_bootlog", HTTP_ANY, handleSandBootlog);
+        _webserver->on("/sand_log", HTTP_ANY, handleSandLog);
         _webserver->on("/sand_playlists", HTTP_ANY, handleSandPlaylists);
         _webserver->on("/sand_settings", HTTP_ANY, handleSandSettings);
         _webserver->on("/sand_time", HTTP_ANY, handleSandTime);
@@ -300,15 +318,18 @@ namespace WebUI {
 
         bool        isGzip = false;
         FileStream* file;
+        // catch (...) not just Error: FluidPath inside the FileStream ctor
+        // throws filesystem_error on an SD mount/stat hiccup, and uncaught it
+        // aborts the board (this runs in the web-poller task).
         try {
             file = new FileStream(path, "r", "");
-        } catch (const Error err) {
+        } catch (...) {
             try {
                 std::filesystem::path gzpath(fpath);
                 gzpath += ".gz";
                 file   = new FileStream(gzpath, "r", "");
                 isGzip = true;
-            } catch (const Error err) {
+            } catch (...) {
                 log_debug(path << " not found");
                 return false;
             }
@@ -386,6 +407,8 @@ namespace WebUI {
                          "Patterns   GET /sand_patterns\n"
                          "Playlists  GET /sand_playlists\n"
                          "Settings   GET /sand_settings\n"
+                         "Boot log   GET /sand_bootlog     (text; survives a panic reset)\n"
+                         "Log        GET /sand_log         (text; last ~8KB of runtime log)\n"
                          "\n"
                          "Home       GET /sand_home\n"
                          "Goto       GET /sand_goto?theta=<rad>&rho=<0..1>  (either/both; idle only)\n"
@@ -846,6 +869,52 @@ namespace WebUI {
     void Web_Server::handleSandPlaylists() {
         streamSandList("/playlists", ".txt");
     }
+
+    // Boot log over HTTP.  StartupLog lives in RTC RAM that survives resets:
+    // after a panic it still holds the previous boot's log (and dump() says
+    // so), which is the only on-device crash breadcrumb on this headless
+    // table.  Captured synchronously into a string - the default
+    // Channel::sendLine queues lines to the output task, which would race
+    // (and outlive) this HTTP response.
+    namespace {
+        class CaptureChannel : public Channel {
+        public:
+            std::string text;
+            CaptureChannel() : Channel("capture") {}
+            size_t write(uint8_t c) override {
+                text += (char)c;
+                return 1;
+            }
+            void sendLine(MsgLevel level, const char* line) override { addLine(line); }
+            void sendLine(MsgLevel level, const std::string* line) override {
+                addLine(line->c_str());
+                delete line;  // this overload passes ownership (see Channel.cpp)
+            }
+            void sendLine(MsgLevel level, const std::string& line) override { addLine(line.c_str()); }
+
+        private:
+            void addLine(const char* line) {
+                text += line;
+                text += '\n';
+            }
+        };
+    }
+    void Web_Server::handleSandBootlog() {
+        CaptureChannel cap;
+        StartupLog::dump(cap);
+        _webserver->sendHeader("Cache-Control", "no-store");
+        _webserver->send(200, "text/plain", cap.text.c_str());
+    }
+
+    // Rolling session log (RingLog): the last ~8 KB of runtime log lines,
+    // each prefixed with uptime seconds.  This is where playlist finish
+    // reasons and SD errors end up on a headless table.
+    void Web_Server::handleSandLog() {
+        std::string text;
+        RingLog::dump(text);
+        _webserver->sendHeader("Cache-Control", "no-store");
+        _webserver->send(200, "text/plain", text.c_str());
+    }
     void Web_Server::handleSandSettings() {
         _webserver->sendHeader("Cache-Control", "no-store");
         _webserver->send(200, "application/json", SandApi::settingsJson().c_str());
@@ -979,6 +1048,7 @@ namespace WebUI {
         if (is_authenticated() == AuthenticationLevel::LEVEL_GUEST) {
             _upload_status = UploadStatus::FAILED;
             log_info("Upload rejected");
+            recordUploadError(ESP_ERROR_AUTHENTICATION, "authentication failed");
             sendJSON(401, "{\"status\":\"Authentication failed!\"}");
             pushError(ESP_ERROR_AUTHENTICATION, "Upload rejected", 401);
         } else {
@@ -1006,7 +1076,7 @@ namespace WebUI {
 
     void Web_Server::sendJSON(int code, const char* s) {
         _webserver->sendHeader("Cache-Control", "no-cache");
-        _webserver->send(200, "application/json", s);
+        _webserver->send(code, "application/json", s);
     }
 
     void Web_Server::sendAuth(const char* status, const char* level, const char* user) {
@@ -1045,6 +1115,13 @@ namespace WebUI {
     }
 
     //Web Update handler
+    // OTA is blocked while motion or a job is running (an app-triggered
+    // auto-update must never kill a pattern mid-run), but stays available in
+    // Idle and Alarm/ConfigAlarm - a wedged board must remain updatable.
+    bool Web_Server::updateBlocked() {
+        return Job::active() || state_is(State::Cycle) || state_is(State::Homing) || state_is(State::Hold) || state_is(State::Jog);
+    }
+
     void Web_Server::handleUpdate() {
         AuthenticationLevel auth_level = is_authenticated();
         if (auth_level != AuthenticationLevel::LEVEL_ADMIN) {
@@ -1053,10 +1130,24 @@ namespace WebUI {
             return;
         }
 
-        sendStatus(200, std::to_string(int(_upload_status)).c_str());
+        // App contract ("status"): "ok" -> flashed, board reboots ~1s later
+        // (poll /sand_status until uptime resets and "fw" shows the new
+        // version); "ready"/"busy" -> probe result with no file attached
+        // (GET before uploading); "failed" -> upload rejected or bad image.
+        bool        ok    = _upload_status == UploadStatus::SUCCESSFUL;
+        bool        probe = _upload_status == UploadStatus::NONE;
+        bool        busy  = updateBlocked();
+        std::string s;
+        JSONencoder j(&s);
+        j.begin();
+        j.member("status", ok ? "ok" : probe ? (busy ? "busy" : "ready") : busy ? "busy" : "failed");
+        j.member("code", std::to_string(int(_upload_status)));
+        j.member("fw", git_info);
+        j.end();
+        sendJSON(ok ? 200 : busy ? 409 : probe ? 200 : 500, s);
 
         //if success restart
-        if (_upload_status == UploadStatus::SUCCESSFUL) {
+        if (ok) {
             delay_ms(1000);
             protocol_send_event(&fullResetEvent);
         } else {
@@ -1082,6 +1173,13 @@ namespace WebUI {
                 //Upload start
                 //**************
                 if (upload.status == UPLOAD_FILE_START) {
+                    if (updateBlocked()) {
+                        _upload_status = UploadStatus::FAILED;
+                        log_info("Update rejected - motion/job active");
+                        pushError(ESP_ERROR_UPLOAD, "Update rejected, machine is running");
+                        uploadCheck();
+                        return;
+                    }
                     log_info("Update Firmware");
                     _upload_status = UploadStatus::ONGOING;
                     std::string sizeargname(upload.filename.c_str());
@@ -1171,10 +1269,18 @@ namespace WebUI {
 
         std::string path("");
         std::string sstatus("Ok");
-        if ((_upload_status == UploadStatus::FAILED) || (_upload_status == UploadStatus::FAILED)) {
+        // Machine-readable failure detail for the response: HTTP status != 200
+        // plus an "error":{code,message} member whenever serror is non-empty.
+        std::string serror;
+        int         ecode = 0;
+        if (_upload_status == UploadStatus::FAILED) {
             sstatus = "Upload failed";
+            serror  = _upload_error_msg.empty() ? "upload failed" : _upload_error_msg;
+            ecode   = _upload_error_code;
         }
-        _upload_status      = UploadStatus::NONE;
+        _upload_status     = UploadStatus::NONE;
+        _upload_error_code = 0;
+        _upload_error_msg.clear();
         bool     list_files = true;
         uint64_t totalspace = 0;
         uint64_t usedspace  = 0;
@@ -1194,7 +1300,16 @@ namespace WebUI {
 
         FluidPath fpath { path, fs, ec };
         if (ec) {
-            sendJSON(200, "{\"status\":\"No SD card\"}");
+            std::string s;
+            JSONencoder j(&s);
+            j.begin();
+            j.member("status", "No SD card");
+            j.begin_member_object("error");
+            j.member("code", ESP_ERROR_FILE_CREATION);
+            j.member("message", std::string("filesystem inaccessible: ") + ec.message());
+            j.end_object();
+            j.end();
+            sendJSON(503, s);
             return;
         }
 
@@ -1209,6 +1324,8 @@ namespace WebUI {
                 } else {
                     sstatus = "Cannot delete ";
                     sstatus += filename + " " + ec.message();
+                    serror  = sstatus;
+                    ecode   = ESP_ERROR_FILE_OP;
                 }
             } else if (action == "deletedir") {
                 stdfs::path dirpath { fpath / filename };
@@ -1221,6 +1338,8 @@ namespace WebUI {
                     log_debug("remove_all returned " << count);
                     sstatus = "Cannot delete ";
                     sstatus += filename + " " + ec.message();
+                    serror  = sstatus;
+                    ecode   = ESP_ERROR_FILE_OP;
                 }
             } else if (action == "createdir") {
                 if (stdfs::create_directory(fpath / filename, ec)) {
@@ -1229,16 +1348,22 @@ namespace WebUI {
                 } else {
                     sstatus = "Cannot create ";
                     sstatus += filename + " " + ec.message();
+                    serror  = sstatus;
+                    ecode   = ESP_ERROR_FILE_OP;
                 }
             } else if (action == "rename") {
                 if (!_webserver->hasArg("newname")) {
                     sstatus = "Missing new filename";
+                    serror  = sstatus;
+                    ecode   = ESP_ERROR_FILE_OP;
                 } else {
                     std::string newname = std::string(_webserver->arg("newname").c_str());
                     std::filesystem::rename(fpath / filename, fpath / newname, ec);
                     if (ec) {
                         sstatus = "Cannot rename ";
                         sstatus += filename + " " + ec.message();
+                        serror  = sstatus;
+                        ecode   = ESP_ERROR_FILE_OP;
                     } else {
                         sstatus = filename + " renamed to " + newname;
                         HashFS::rename_file(fpath / filename, fpath / newname);
@@ -1258,6 +1383,10 @@ namespace WebUI {
 
         if (list_files) {
             auto iter = stdfs::directory_iterator { fpath, ec };
+            if (ec && serror.empty()) {
+                serror = "cannot list " + path + ": " + ec.message();
+                ecode  = ESP_ERROR_FILE_OP;
+            }
             if (!ec) {
                 j.begin_array("files");
                 for (auto const& dir_entry : iter) {
@@ -1284,8 +1413,22 @@ namespace WebUI {
 
         j.member("occupation", percent);
         j.member("status", sstatus);
+        if (!serror.empty()) {
+            j.begin_member_object("error");
+            j.member("code", ecode);
+            j.member("message", serror);
+            j.end_object();
+        }
         j.end();
-        sendJSON(200, s);
+
+        // Failures get a real HTTP error so a stateless client can react
+        // without parsing the human status text (the WebSocket error channel
+        // is disabled on this build).
+        int http = 200;
+        if (!serror.empty()) {
+            http = ecode == ESP_ERROR_AUTHENTICATION ? 401 : ecode == ESP_ERROR_NOT_ENOUGH_SPACE ? 507 : 500;
+        }
+        sendJSON(http, s);
     }
 
     void Web_Server::handle_direct_SDFileList() {
@@ -1303,11 +1446,21 @@ namespace WebUI {
         if (ec) {
             _upload_status = UploadStatus::FAILED;
             log_info("Upload filesystem inaccessible");
+            recordUploadError(ESP_ERROR_FILE_CREATION, std::string("filesystem inaccessible: ") + ec.message());
             pushError(ESP_ERROR_FILE_CREATION, "Upload rejected, filesystem inaccessible");
             return;
         }
 
-        auto space = stdfs::space(fpath);
+        // error_code overload: the throwing stdfs::space would abort the board
+        // on a flaky-SD statvfs failure (uncaught filesystem_error).
+        auto space = stdfs::space(fpath, ec);
+        if (ec) {
+            _upload_status = UploadStatus::FAILED;
+            log_info("Upload filesystem inaccessible");
+            recordUploadError(ESP_ERROR_FILE_CREATION, std::string("filesystem inaccessible: ") + ec.message());
+            pushError(ESP_ERROR_FILE_CREATION, "Upload rejected, filesystem inaccessible");
+            return;
+        }
         if (filesize && filesize > space.available) {
             // If the file already exists, maybe there will be enough space
             // when we replace it.
@@ -1315,6 +1468,7 @@ namespace WebUI {
             if (ec || (filesize > (space.available + existing_size))) {
                 _upload_status = UploadStatus::FAILED;
                 log_info("Upload not enough space");
+                recordUploadError(ESP_ERROR_NOT_ENOUGH_SPACE, "not enough space");
                 pushError(ESP_ERROR_NOT_ENOUGH_SPACE, "Upload rejected, not enough space");
                 return;
             }
@@ -1325,10 +1479,11 @@ namespace WebUI {
             try {
                 _uploadFile    = new FileStream(fpath, "w");
                 _upload_status = UploadStatus::ONGOING;
-            } catch (const Error err) {
+            } catch (...) {
                 _uploadFile    = nullptr;
                 _upload_status = UploadStatus::FAILED;
                 log_info("Upload failed - cannot create file");
+                recordUploadError(ESP_ERROR_FILE_CREATION, std::string("cannot create ") + filename + " (missing directory, bad name, or filesystem full)");
                 pushError(ESP_ERROR_FILE_CREATION, "File creation failed");
             }
         }
@@ -1341,11 +1496,13 @@ namespace WebUI {
             if (length != _uploadFile->write(buffer, length)) {
                 _upload_status = UploadStatus::FAILED;
                 log_info("Upload failed - file write failed");
+                recordUploadError(ESP_ERROR_FILE_WRITE, "file write failed (filesystem full or failing?)");
                 pushError(ESP_ERROR_FILE_WRITE, "File write failed");
             }
         } else {  //if error set flag UploadStatus::FAILED
             _upload_status = UploadStatus::FAILED;
             log_info("Upload failed - file not open");
+            recordUploadError(ESP_ERROR_FILE_WRITE, "file not open");
             pushError(ESP_ERROR_FILE_WRITE, "File not open");
         }
     }
@@ -1361,19 +1518,34 @@ namespace WebUI {
             _uploadFile = nullptr;
             log_debug("pathname " << pathname);
 
-            FluidPath filepath { pathname, "" };
+            // The delete above dropped the SD refcount, so this FluidPath
+            // re-mounts the card and can throw filesystem_error on a flaky
+            // card; bare, it would abort the board on every marginal upload.
+            std::error_code fp_ec;
+            FluidPath       filepath { pathname, "", fp_ec };
+            if (fp_ec) {
+                _upload_status = UploadStatus::FAILED;
+                log_info("Upload failed - filesystem inaccessible at close");
+                recordUploadError(ESP_ERROR_FILE_CLOSE, std::string("filesystem inaccessible at close: ") + fp_ec.message());
+                pushError(ESP_ERROR_FILE_CLOSE, "File close failed");
+                return;
+            }
 
             HashFS::rehash_file(filepath);
 
             // Check size
             if (filesize) {
-                uint32_t actual_size;
-                try {
-                    actual_size = stdfs::file_size(filepath);
-                } catch (const Error err) { actual_size = 0; }
+                uint32_t        actual_size;
+                std::error_code sz_ec;
+                actual_size = stdfs::file_size(filepath, sz_ec);
+                if (sz_ec) {
+                    actual_size = 0;
+                }
 
                 if (filesize != actual_size) {
                     _upload_status = UploadStatus::FAILED;
+                    recordUploadError(ESP_ERROR_UPLOAD,
+                                      "size mismatch - expected " + std::to_string(filesize) + " got " + std::to_string(actual_size));
                     pushError(ESP_ERROR_UPLOAD, "File upload mismatch");
                     log_info("Upload failed - size mismatch - exp " << filesize << " got " << actual_size);
                 }
@@ -1381,6 +1553,7 @@ namespace WebUI {
         } else {
             _upload_status = UploadStatus::FAILED;
             log_info("Upload failed - file not open");
+            recordUploadError(ESP_ERROR_FILE_CLOSE, "file not open at close");
             pushError(ESP_ERROR_FILE_CLOSE, "File close failed");
         }
         if (_upload_status == UploadStatus::ONGOING) {
@@ -1392,6 +1565,7 @@ namespace WebUI {
     }
     void Web_Server::uploadStop() {
         _upload_status = UploadStatus::FAILED;
+        recordUploadError(ESP_ERROR_UPLOAD_CANCELLED, "upload cancelled");
         log_info("Upload cancelled");
         if (_uploadFile) {
             std::filesystem::path filepath = _uploadFile->fpath();

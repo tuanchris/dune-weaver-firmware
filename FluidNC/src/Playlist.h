@@ -59,6 +59,7 @@
 #include "Config.h"
 #include "Module.h"
 #include "Channel.h"
+#include "FluidPath.h"
 
 #include <string>
 #include <vector>
@@ -234,6 +235,11 @@ private:
     std::vector<uint16_t>    _order;
     std::string              _playlist_name;
     std::string              _pending_clear;  // chosen clear file for current item
+    // Holds the SD mounted for the whole run.  Otherwise the mount refcount
+    // hits zero between patterns and FATFS + card structs are freed and
+    // re-malloc'd 2-4x per pattern - a heap-fragmentation driver and extra
+    // exposure to remount failures on a marginal card.
+    FluidPath _sd_hold;
     size_t                   _index            = 0;
     bool                     _single           = false;  // one-shot pattern run, not a playlist
     int                      _clear_override   = -1;     // CLEAR_* for this run, or -1 = use setting

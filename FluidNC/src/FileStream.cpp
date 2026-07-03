@@ -56,7 +56,15 @@ void FileStream::setup(const char* mode) {
         log_verbose("Cannot " << (opening ? "open" : "create") << " file " << _fpath.c_str());
         throw opening ? Error::FsFailedOpenFile : Error::FsFailedCreateFile;
     }
-    _size = stdfs::file_size(_fpath);
+    // error_code overload: on a marginal SD card fopen can succeed while the
+    // following stat fails; the throwing overload then raises a
+    // filesystem_error that several callers only catch as Error -> uncaught
+    // exception -> panic.  A 0 size on error is harmless (size() is advisory).
+    std::error_code ec;
+    _size = stdfs::file_size(_fpath, ec);
+    if (ec) {
+        _size = 0;
+    }
 }
 
 FileStream::FileStream(const char* filename, const char* mode, const char* fs) : Channel(filename), _fpath(filename, fs), _mode(mode) {

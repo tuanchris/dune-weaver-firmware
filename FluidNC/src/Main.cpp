@@ -18,6 +18,7 @@
 #    include "MotionControl.h"
 #    include "Platform.h"
 #    include "StartupLog.h"
+#    include "SandApi.h"  // SandApi::checkSd() boot probe
 #    include "Module.h"
 
 #    include "Driver/localfs.h"
@@ -82,6 +83,9 @@ void setup() {
 
             if (config->_sdCard != nullptr) {
                 config->_sdCard->init();
+                // Readability probe: verdict goes to the startup log (hence
+                // /sand_bootlog) and is cached for /sand_status "sd_ok".
+                SandApi::checkSd();
             }
         }
         for (size_t i = 0; i < MAX_N_I2C; i++) {

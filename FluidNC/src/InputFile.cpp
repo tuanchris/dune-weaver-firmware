@@ -19,7 +19,10 @@ Error InputFile::readLine(char* line, int maxlen) {
     int len = 0;
     int c;
     while ((c = read()) >= 0) {
-        if (len >= maxlen) {
+        // Reserve a slot for the terminator: with len == maxlen the EOF exit
+        // below would write line[maxlen], one past a maxlen-sized buffer
+        // (callers pass sizeof(buffer)).
+        if (len >= maxlen - 1) {
             return Error::LineLengthExceeded;
         }
         if (c == '\r') {
@@ -45,13 +48,10 @@ void InputFile::ack(Error status) {
             // Do not stop on unsupported commands because most senders do not stop.
             // Stop the file job on other errors
             notifyf("File job error", "Error:%d in %s at line: %d", status, name(), lineNumber());
-            _pending_error == status;
+            _pending_error = status;
         }
     }
 }
-
-#include <sstream>
-#include <iomanip>
 
 void InputFile::end_message() {
     _progress = "SD: ";
@@ -95,9 +95,13 @@ Error InputFile::pollLine(char* line) {
             size_t queued  = cap > avail ? cap - avail : 0;
             float percent_complete = SandStatus::executed_percent(position(), size(), _line_number, queued);
 
-            std::ostringstream s;
-            s << "SD:" << std::fixed << std::setprecision(2) << percent_complete << "," << path().c_str();
-            _progress = s.str();
+            // Fixed buffer + assign, not ostringstream: this runs for every
+            // .thr line (millions/day on a looping playlist) and the stream's
+            // several transient allocations were a leading heap-fragmentation
+            // driver.  assign() reuses _progress's existing capacity.
+            char prog[160];
+            snprintf(prog, sizeof(prog), "SD:%.2f,%s", percent_complete, path().c_str());
+            _progress.assign(prog);
         }
             return Error::Ok;
         case Error::Eof:

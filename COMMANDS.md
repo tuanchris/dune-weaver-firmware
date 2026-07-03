@@ -35,7 +35,18 @@ curl "$B/sand_patterns"      # serves /patterns/index.json manifest if present (
                              #   Run any pattern by full path: $Sand/Run=/patterns/sub/x.thr
 curl "$B/sand_playlists"     # JSON array of /playlists/*.txt
 curl "$B/sand_settings"      # JSON of all app settings (speed, LED, playlist, quiet hours)
+curl "$B/sand_bootlog"       # plain-text boot log ($SS); after a PANIC reset it still holds the
+                             #   previous boot's log (RTC RAM) -> the on-device crash breadcrumb
+curl "$B/sand_log"           # rolling session log (last ~8KB, [+uptime_s] prefixed): playlist end
+                             #   reasons, SD errors, alarms. RAM-only, lost on reboot
 ```
+
+`/sand_status` also reports health: `sd_ok` (boot-time SD readability probe; omitted
+if no SD configured), `last_reset` (`power_on|software|panic|task_wdt|brownout|…` —
+panic/wdt/brownout mean a crash), `uptime` (seconds; a drop between polls means
+the board silently rebooted), and heap telemetry: `heap` (free now), `heap_min`
+(low-water since boot), `heap_largest` (largest free block — heap flat while this
+decays = fragmentation heading for an OOM panic).
 
 `progress` is a `0..1` fraction, or `-1` when unknown. During a **pre-execution
 clear** `playlist.clearing` is `true` and `progress` tracks the *clear* file's own
@@ -320,11 +331,23 @@ curl -F "path=/patterns" -F "/patterns/index.jsonS=$(wc -c < /tmp/index.json)" \
      -F "f=@/tmp/index.json;filename=/patterns/index.json;type=application/json" "$B/upload"
 ```
 
+Upload/file-op failures return a real HTTP error (503 fs-inaccessible, 507 no space,
+500 other) with `error:{code,message}` in the JSON — see API.md "File-op errors".
+`fopen` won't create directories: `createdir` first when uploading into a new subfolder
+(`curl "$B/upload?action=createdir&filename=sub&path=/patterns"`).
+
 ---
 
 ## System
 
 ```bash
+# OTA firmware update (rejected with 409 while a pattern runs; works in Alarm)
+curl "$B/updatefw"                        # probe: {"status":"ready"|"busy","fw":"<version>"}
+curl -F "firmware.binS=$(wc -c < .pio/build/sandtable/firmware.bin)" \
+     -F "firmware.bin=@.pio/build/sandtable/firmware.bin;filename=firmware.bin" "$B/updatefw"
+#   "status":"ok" -> board reboots ~1s later; poll /sand_status until uptime resets,
+#   then check its "fw" field shows the new version.
+
 curl "$B/command?plain=\$Bye"             # reboot (board needs ~25-30s to rejoin WiFi)
 curl "$B/command?plain=\$/macros/startup_line0"   # read a config value at runtime
 #   NOTE: $/path=value runtime changes are NOT persisted; edit config.yaml to persist.

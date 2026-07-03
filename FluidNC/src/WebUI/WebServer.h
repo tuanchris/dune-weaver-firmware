@@ -102,6 +102,8 @@ namespace WebUI {
         static void handleSandStatus();
         static void streamSandList(const char* folder, const char* ext);
         static void handleSandPatterns();
+        static void handleSandBootlog();
+        static void handleSandLog();
         static void handleSandPlaylists();
         static void handleSandSettings();
         static void handleSandTime();
@@ -109,6 +111,7 @@ namespace WebUI {
         static void handleSandLed();
         static void LocalFSFileupload();
         static void handleFileList();
+        static bool updateBlocked();
         static void handleUpdate();
         static void WebUpdateUpload();
 

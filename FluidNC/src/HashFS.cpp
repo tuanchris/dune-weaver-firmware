@@ -30,6 +30,11 @@ static Error hashFile(const std::filesystem::path& ipath, std::string& str) {  /
     } catch (const Error err) {
         log_debug("Cannot hash file " << ipath);
         return Error::FsFailedOpenFile;
+    } catch (const std::exception& ex) {
+        // filesystem_error from a flaky SD stat/read; uncaught it would
+        // abort() the board (this runs in the web-poller task).
+        log_debug("Cannot hash file " << ipath << " " << ex.what());
+        return Error::FsFailedOpenFile;
     }
 
     str = '"';

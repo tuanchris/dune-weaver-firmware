@@ -49,9 +49,40 @@ TEST(SandStatusEncode, IdleDefaults) {
     EXPECT_TRUE(has(j, "\"active\":false"));
     // No LED block unless has_led
     EXPECT_FALSE(has(j, "\"led\":"));
+    // Health fields omitted at their defaults
+    EXPECT_FALSE(has(j, "\"sd_ok\":"));
+    EXPECT_FALSE(has(j, "\"last_reset\":"));
+    EXPECT_FALSE(has(j, "\"uptime\":"));
     // Well-formed object
     EXPECT_EQ('{', j.front());
     EXPECT_EQ('}', j.back());
+}
+
+TEST(SandStatusEncode, HealthFieldsWhenSet) {
+    Data d;
+    d.state        = "Idle";
+    d.has_sd       = true;
+    d.sd_ok        = false;
+    d.last_reset   = "panic";
+    d.uptime       = 4242;
+    d.heap         = 145000;
+    d.heap_min     = 98000;
+    d.heap_largest = 60000;
+    std::string j = encode(d);
+    EXPECT_TRUE(has(j, "\"sd_ok\":false"));
+    EXPECT_TRUE(has(j, "\"last_reset\":\"panic\""));
+    EXPECT_TRUE(has(j, "\"uptime\":4242"));
+    EXPECT_TRUE(has(j, "\"heap\":145000"));
+    EXPECT_TRUE(has(j, "\"heap_min\":98000"));
+    EXPECT_TRUE(has(j, "\"heap_largest\":60000"));
+    EXPECT_FALSE(has(j, "\"fw\":"));  // omitted while unset
+
+    d.fw = "v0.1.3 (test)";
+    EXPECT_TRUE(has(encode(d), "\"fw\":\"v0.1.3 (test)\""));
+    EXPECT_EQ('}', j.back());
+
+    d.sd_ok = true;
+    EXPECT_TRUE(has(encode(d), "\"sd_ok\":true"));
 }
 
 TEST(SandStatusEncode, RunningWithProgressAndPlaylist) {

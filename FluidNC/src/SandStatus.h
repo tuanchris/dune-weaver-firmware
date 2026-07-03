@@ -49,6 +49,22 @@ namespace SandStatus {
         bool        has_led        = false;
         const char* led_effect     = "off";
         int         led_brightness = 0;
+
+        bool has_sd = false;  // SD configured; sd_ok omitted from JSON otherwise
+        bool sd_ok  = false;  // boot-time readability check result
+
+        const char* last_reset = nullptr;  // reset-reason name, e.g. "panic"; omitted if null
+        long        uptime     = -1;       // seconds since boot; omitted if <0
+
+        // Heap health, all bytes, omitted if <0.  heap_largest (largest free
+        // block) is the fragmentation fingerprint: total staying flat while
+        // largest decays predicts an OOM panic hours ahead.
+        long heap         = -1;
+        long heap_min     = -1;
+        long heap_largest = -1;
+
+        const char* fw = nullptr;  // firmware version (git_info); omitted if null.
+        // Lets the app decide when to offer an update and verify one took.
     };
 
     // Append s to out as a JSON string literal, escaping as needed.

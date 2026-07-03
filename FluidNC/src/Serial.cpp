@@ -47,6 +47,7 @@
 #include "InputFile.h"
 #include "Main.h"        // display()
 #include "StartupLog.h"  // startupLog
+#include "RingLog.h"     // ringLog
 
 #include "Driver/fluidnc_gpio.h"
 
@@ -81,6 +82,7 @@ void heapCheckTask(void* pvParameters) {
 
 void AllChannels::init() {
     registration(&startupLog);  // Early startup messages for $SS
+    registration(&ringLog);     // Rolling session log for /sand_log; never deregistered
 }
 
 void AllChannels::ready() {

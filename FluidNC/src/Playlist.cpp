@@ -318,6 +318,9 @@ void Playlist::finish(const char* why) {
     _order.shrink_to_fit();
     _pending_clear.clear();
     _req_skip = false;
+    // Release the run-long SD hold (move-assign swaps _isSD into the
+    // temporary, whose destructor drops the refcount).
+    _sd_hold = FluidPath();
 }
 
 // Write the current state into the cross-task snapshot.  Runs in the
@@ -591,6 +594,16 @@ Error Playlist::pollLine(char* line) {
         _ov_pfs         = _req_ov_pfs;
         if (Job::active()) {
             protocol_send_event(&stopJobEvent);
+        }
+        // Keep the SD mounted for the whole run (released in finish()); see
+        // the _sd_hold comment in Playlist.h.  A failed mount is not fatal
+        // here - the pattern open will surface the error to the normal path.
+        {
+            std::error_code ec;
+            FluidPath       hold { "", "sd", ec };
+            if (!ec) {
+                _sd_hold = std::move(hold);
+            }
         }
         if (_single) {
             loadSingle(std::string(_req_name));  // synthetic one-item run, never fails

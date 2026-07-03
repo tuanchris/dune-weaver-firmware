@@ -78,6 +78,8 @@ the WebSocket for a *single* "active controller" that wants smooth high-rate liv
 | `GET /sand_playlists` | JSON array of `.txt` files in the top level of `/playlists` (non-recursive) |
 | `GET /sand_settings` | JSON object of app settings (speed, homing mode, LED, playlist, quiet hours), values as strings |
 | `GET /sand_time` | wall clock `{epoch, synced, local, tz}`. `?epoch=<unix>` sets the clock (app auto-sync / AP mode); `?tz=<POSIX>` sets + persists the timezone. Also surfaced in `/sand_status` under `time` |
+| `GET /sand_bootlog` | plain-text boot log (the `$SS` startup log). Stored in RTC RAM: after a **panic** reset it still holds the *previous* boot's log (first line says so), making it the on-device crash breadcrumb. Cleared by a power cycle |
+| `GET /sand_log` | plain-text rolling session log — the last ~8 KB of runtime log lines, each prefixed with `[+<uptime seconds>]`. This is where playlist end reasons ("playlist: … canceled by alarm"), SD errors, and alarms land on a headless table. RAM-only: lost on reboot (use `/sand_bootlog` + `last_reset` for crashes) |
 
 These are read-only, fast, and skip the block-during-motion gate, so clients keep reading while a pattern
 runs. The `$Sand/Status` / `$Sand/Patterns` / `$Sand/Playlists` **commands** return the same data but only
@@ -187,6 +189,19 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   //  counting down live; pause_total = that pause's full length in seconds; both -1
   //  when not pausing. Progress bar fill = (pause_total - pause_remaining) / pause_total.
   "led": { "effect": "rainbow", "brightness": 40 },  // omitted if no leds: config
+  "sd_ok": true,              // boot-time SD readability probe; omitted if no SD configured.
+  //  false = card didn't mount or root unreadable at boot (unseated/corrupt) -> surface
+  //  a "check SD card" banner. Re-tested only on reboot.
+  "last_reset": "power_on",   // why the board last rebooted: power_on|software|panic|
+  //  int_wdt|task_wdt|wdt|brownout|external|deepsleep|sdio|unknown. panic/wdt/brownout
+  //  mean a crash; pair with /sand_bootlog (panic preserves the previous boot's log).
+  "uptime": 86400,            // seconds since boot; a drop between polls = silent reboot
+  "heap": 145000,             // free heap bytes now
+  "heap_min": 98000,          // lowest free heap since boot (low-water mark)
+  "heap_largest": 60000,      // largest allocatable block; heap flat + this decaying
+  //  = fragmentation trending toward an OOM panic — alert well before it hits ~2 KB
+  "fw": "v0.1.2 (main-8035bb6e)",  // firmware version — compare against the app's
+  //  latest release to offer an update; re-read after POST /updatefw to verify
   "time": { "epoch": 1718971402, "synced": true, "local": "2026-06-21 14:03:22", "tz": "ICT-7" }
   //  synced=false means the clock isn't set (no NTP yet / no $Time/Set) -> quiet
   //  hours won't fire; the app can push time via GET /sand_time?epoch=<unix>.
@@ -208,6 +223,43 @@ fetches the `.thr` and renders the polar preview locally (no server-side thumbna
 `POST /upload` (SD) multipart: field `<filename>S` = size in bytes, field `<filename>` = file bytes;
 optional `?path=/patterns`. Returns JSON `{status, files:[{name,size,…}], path, total, used, occupation}`.
 Pre-checks free space. (Serial alternative: `$Xmodem/Receive=<path>` / `$Xmodem/Send=<path>`.)
+
+### File-op errors (upload, delete, createdir, rename, list)
+Success is HTTP **200** with `status` text. Any failure is a real HTTP error **plus** an
+`error` member: `{"status":"Upload failed", "error":{"code":"2","message":"<detail>"}}`
+(the file-ops encoder emits numbers as JSON strings — same as `occupation`).
+- **503** — filesystem inaccessible (SD unmounted/dead); body `status` is `No SD card`
+- **507** — not enough space
+- **401** — authentication (when auth is enabled)
+- **500** — everything else (create/write/rename/delete failed, size mismatch, …)
+
+`error.code`: 1 auth, 2 file-creation/fs-inaccessible, 3 write, 4 upload/size-mismatch,
+5 space, 6 cancelled, 7 close, 8 generic file op. `error.message` carries the actionable
+detail (e.g. `cannot create /patterns/sub/x.thr (missing directory, bad name, or
+filesystem full)`). Note: `fopen` won't create intermediate directories — `createdir`
+first when uploading into a new subfolder.
+
+## Firmware update (OTA)
+
+`POST /updatefw` multipart: field `<name>S` = size in bytes, field `<name>` = the
+`firmware.bin` (an ESP32 app image; it is written to the inactive OTA slot).
+`GET /updatefw` (no file) probes availability first.
+
+Response `{"status", "code", "fw"}`:
+- `"ok"` (HTTP 200) — flashed; the board reboots ~1 s after responding. Poll
+  `/sand_status` until `uptime` resets, then verify `fw` shows the new version
+  (~10–30 s WiFi rejoin).
+- `"ready"` / `"busy"` (200 / **409**) — probe result. **Updates are rejected while
+  motion or a job is running** so an app-triggered auto-update can never kill a
+  pattern mid-run; retry when idle. Updates DO work in Alarm/ConfigAlarm — a wedged
+  board must stay updatable.
+- `"failed"` (HTTP 500) — upload rejected or image invalid; `code` is the raw
+  UploadStatus enum (0 none, 1 failed, 2 cancelled, 3 successful, 4 ongoing).
+
+App auto-update flow: read `fw` from `/sand_status` → compare to latest release →
+`GET /updatefw` until `"ready"` → POST the image → poll `/sand_status` for the new
+`fw`. Note the response contract above applies from this firmware onward; a board
+still on an older build replies with the legacy `{"status":"<code>"}` body.
 
 ## Security / constraints
 - **No authentication** and **no CORS headers** in the `sandtable` build. Native apps are unaffected by

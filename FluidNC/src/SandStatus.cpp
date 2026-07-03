@@ -116,6 +116,35 @@ namespace SandStatus {
             o += '}';
         }
 
+        if (d.has_sd) {
+            o += ",\"sd_ok\":";
+            o += d.sd_ok ? "true" : "false";
+        }
+        if (d.last_reset && *d.last_reset) {
+            o += ',';
+            member_str(o, "last_reset", d.last_reset);
+        }
+        if (d.uptime >= 0) {
+            o += ",\"uptime\":";
+            append_int(o, static_cast<int>(d.uptime));
+        }
+        if (d.heap >= 0) {
+            o += ",\"heap\":";
+            append_int(o, static_cast<int>(d.heap));
+        }
+        if (d.heap_min >= 0) {
+            o += ",\"heap_min\":";
+            append_int(o, static_cast<int>(d.heap_min));
+        }
+        if (d.heap_largest >= 0) {
+            o += ",\"heap_largest\":";
+            append_int(o, static_cast<int>(d.heap_largest));
+        }
+        if (d.fw && *d.fw) {
+            o += ',';
+            member_str(o, "fw", d.fw);
+        }
+
         o += '}';
         return o;
     }
