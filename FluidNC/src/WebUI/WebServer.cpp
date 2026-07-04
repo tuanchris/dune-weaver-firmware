@@ -873,16 +873,19 @@ namespace WebUI {
     // Boot log over HTTP.  StartupLog lives in RTC RAM that survives resets:
     // after a panic it still holds the previous boot's log (and dump() says
     // so), which is the only on-device crash breadcrumb on this headless
-    // table.  Captured synchronously into a string - the default
+    // table.  Lines are streamed to the client as they arrive - accumulating
+    // the ~7 KB dump in a string and then send()'s copy of it cost ~15 KB of
+    // transient heap, a real dent in the ~35 KB free of a mid-pattern table.
+    // The capture is synchronous (sendLine overridden): the default
     // Channel::sendLine queues lines to the output task, which would race
     // (and outlive) this HTTP response.
     namespace {
-        class CaptureChannel : public Channel {
+        class StreamOutChannel : public Channel {
         public:
-            std::string text;
-            CaptureChannel() : Channel("capture") {}
+            StreamOutChannel() : Channel("capture") {}
             size_t write(uint8_t c) override {
-                text += (char)c;
+                char ch = (char)c;
+                Web_Server::sendChunk(&ch, 1);
                 return 1;
             }
             void sendLine(MsgLevel level, const char* line) override { addLine(line); }
@@ -894,26 +897,39 @@ namespace WebUI {
 
         private:
             void addLine(const char* line) {
-                text += line;
-                text += '\n';
+                Web_Server::sendChunk(line, strlen(line));
+                Web_Server::sendChunk("\n", 1);
             }
         };
     }
+    void Web_Server::sendChunk(const char* data, size_t len) {
+        _webserver->sendContent(data, len);
+    }
+
     void Web_Server::handleSandBootlog() {
-        CaptureChannel cap;
-        StartupLog::dump(cap);
         _webserver->sendHeader("Cache-Control", "no-store");
-        _webserver->send(200, "text/plain", cap.text.c_str());
+        _webserver->setContentLength(CONTENT_LENGTH_UNKNOWN);
+        _webserver->send(200, "text/plain", "");
+        StreamOutChannel out;
+        StartupLog::dump(out);
+        _webserver->sendContent("", 0);  // terminate the chunked response
     }
 
     // Rolling session log (RingLog): the last ~8 KB of runtime log lines,
     // each prefixed with uptime seconds.  This is where playlist finish
-    // reasons and SD errors end up on a headless table.
+    // reasons and SD errors end up on a headless table.  Snapshot into a
+    // static buffer (no heap - see RingLog::snapshot) and stream it out in
+    // bounded chunks.
     void Web_Server::handleSandLog() {
-        std::string text;
-        RingLog::dump(text);
+        static char snap[RingLog::kCapacity];
+        size_t      n = RingLog::snapshot(snap, sizeof(snap));
         _webserver->sendHeader("Cache-Control", "no-store");
-        _webserver->send(200, "text/plain", text.c_str());
+        _webserver->setContentLength(CONTENT_LENGTH_UNKNOWN);
+        _webserver->send(200, "text/plain", "");
+        for (size_t off = 0; off < n; off += 1024) {
+            _webserver->sendContent(snap + off, n - off < 1024 ? n - off : 1024);
+        }
+        _webserver->sendContent("", 0);  // terminate the chunked response
     }
     void Web_Server::handleSandSettings() {
         _webserver->sendHeader("Cache-Control", "no-store");

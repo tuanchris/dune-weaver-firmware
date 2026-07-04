@@ -8,10 +8,10 @@
 #include <mutex>
 
 namespace {
-    // 8 KB holds roughly the last 100-150 log lines - enough to see why a
-    // day-long playlist ended without competing with the heap the log exists
-    // to watch.
-    constexpr size_t kCap = 8192;
+    // kCapacity holds roughly the last 100-150 log lines - enough to see why
+    // a day-long playlist ended without competing with the heap the log
+    // exists to watch.
+    constexpr size_t kCap = RingLog::kCapacity;
 
     char       _buf[kCap];
     size_t     _head  = 0;  // next write index
@@ -48,9 +48,8 @@ void RingLog::print_msg(MsgLevel level, const char* msg) {
     ringPush('\n');
 }
 
-void RingLog::dump(std::string& out) {
+size_t RingLog::snapshot(char* out, size_t outlen) {
     std::lock_guard<std::mutex> lock(_mu);
-    out.reserve(out.size() + _count);
     size_t start = (_head + kCap - _count) % kCap;
     size_t i     = 0;
     // After a wrap the oldest entry is usually a partial line; skip to the
@@ -61,9 +60,11 @@ void RingLog::dump(std::string& out) {
         }
         ++i;
     }
-    for (; i < _count; ++i) {
-        out += _buf[(start + i) % kCap];
+    size_t n = 0;
+    for (; i < _count && n < outlen; ++i) {
+        out[n++] = _buf[(start + i) % kCap];
     }
+    return n;
 }
 
 RingLog ringLog;

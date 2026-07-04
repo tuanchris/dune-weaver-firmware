@@ -53,6 +53,10 @@ namespace WebUI {
         static long     get_client_ID();
         static uint16_t port() { return _port; }
 
+        // Raw chunk append to the in-flight chunked response; used by the
+        // bootlog/log streaming (their capture channel lives outside the class).
+        static void sendChunk(const char* data, size_t len);
+
         ~Web_Server();
 
     private:

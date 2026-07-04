@@ -22,13 +22,19 @@ public:
     RingLog() : Channel("Ring Log") {}
     virtual ~RingLog() = default;
 
+    static constexpr size_t kCapacity = 8192;
+
     // Raw protocol bytes ("ok", status frames) are not log lines; drop them.
     size_t write(uint8_t) override { return 1; }
 
     void print_msg(MsgLevel level, const char* msg) override;
 
-    // Append the buffered lines, oldest first, to out.
-    static void dump(std::string& out);
+    // Copy the buffered lines, oldest first (starting at a line boundary),
+    // into out (>= kCapacity bytes) and return the byte count.  A caller-owned
+    // buffer instead of a std::string: an 8 KB heap spike from dumping the log
+    // mid-pattern dropped a running table to 7 KB free (the reader nearly
+    // caused the OOM it was checking for).
+    static size_t snapshot(char* out, size_t outlen);
 };
 
 extern RingLog ringLog;
