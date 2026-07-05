@@ -39,6 +39,9 @@ curl "$B/sand_bootlog"       # plain-text boot log ($SS); after a PANIC reset it
                              #   previous boot's log (RTC RAM) -> the on-device crash breadcrumb
 curl "$B/sand_log"           # rolling session log (last ~8KB, [+uptime_s] prefixed): playlist end
                              #   reasons, SD errors, alarms. RAM-only, lost on reboot
+curl "$B/sand_coredump"      # last crash: task, PC, backtrace addrs (survives reboot; ?erase=1 clears)
+# decode: ~/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-addr2line \
+#           -pfiaC -e .pio/build/sandtable/firmware.elf <backtrace addrs>
 ```
 
 `/sand_status` also reports health: `sd_ok` (boot-time SD readability probe; omitted

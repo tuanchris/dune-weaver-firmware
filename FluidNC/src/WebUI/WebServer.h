@@ -108,6 +108,7 @@ namespace WebUI {
         static void handleSandPatterns();
         static void handleSandBootlog();
         static void handleSandLog();
+        static void handleSandCoredump();
         static void handleSandPlaylists();
         static void handleSandSettings();
         static void handleSandTime();

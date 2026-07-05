@@ -80,6 +80,7 @@ the WebSocket for a *single* "active controller" that wants smooth high-rate liv
 | `GET /sand_time` | wall clock `{epoch, synced, local, tz}`. `?epoch=<unix>` sets the clock (app auto-sync / AP mode); `?tz=<POSIX>` sets + persists the timezone. Also surfaced in `/sand_status` under `time` |
 | `GET /sand_bootlog` | plain-text boot log (the `$SS` startup log). Stored in RTC RAM: after a **panic** reset it still holds the *previous* boot's log (first line says so), making it the on-device crash breadcrumb. Cleared by a power cycle |
 | `GET /sand_log` | plain-text rolling session log — the last ~8 KB of runtime log lines, each prefixed with `[+<uptime seconds>]`. This is where playlist end reasons ("playlist: … canceled by alarm"), SD errors, and alarms land on a headless table. RAM-only: lost on reboot (use `/sand_bootlog` + `last_reset` for crashes) |
+| `GET /sand_coredump` | JSON crash report from the coredump flash partition, written on any panic **including a task-WDT hang** (the firmware panics deliberately after ~120 s of a wedged core task, so hangs self-reboot and self-document). `{present, task, pc, backtrace:[…], bt_corrupted, elf_sha256}` — decode with `xtensa-esp32-elf-addr2line -pfiaC -e firmware.elf <addrs>` against the matching build. `?erase=1` clears it. Persists across reboots until erased/overwritten |
 
 These are read-only, fast, and skip the block-during-motion gate, so clients keep reading while a pattern
 runs. The `$Sand/Status` / `$Sand/Patterns` / `$Sand/Playlists` **commands** return the same data but only

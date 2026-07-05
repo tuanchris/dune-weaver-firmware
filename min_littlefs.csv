@@ -1,6 +1,13 @@
 # Name,   Type, SubType, Offset,  Size, Flags
+# littlefs shrunk 192K->128K (holds config.yaml + a few small files; was 18%
+# used) to fit a 64K coredump partition in the universal 4MB layout. The
+# Arduino core has coredump-to-flash compiled in; with this partition every
+# panic (and task-WDT hang) writes a backtrace readable via /sand_coredump.
+# NOTE: boards flashed with the old table reformat littlefs on first boot of
+# this one (smaller partition) - re-upload config.yaml afterward.
 nvs,      data, nvs,     0x9000,  0x5000,
 otadata,  data, ota,     0xe000,  0x2000,
 app0,     app,  ota_0,   0x10000, 0x1E0000,
 app1,     app,  ota_1,   0x1F0000,0x1E0000,
-spiffs,   data, spiffs,  0x3D0000,0x30000,
+spiffs,   data, spiffs,  0x3D0000,0x20000,
+coredump, data, coredump,0x3F0000,0x10000,

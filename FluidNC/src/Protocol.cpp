@@ -24,6 +24,7 @@
 #include "Driver/restart.h"
 
 #include <freertos/semphr.h>
+#include <esp_task_wdt.h>  // task watchdog: a hung poller/protocol task panics (-> coredump + reboot) instead of bricking the table
 #include <mutex>
 
 volatile ExecAlarm lastAlarm;  // The most recent alarm code
@@ -178,8 +179,14 @@ char activeLine[Channel::maxLine];
 
 bool pollingPaused = false;
 void polling_loop(void* unused) {
+    // Watched by the task WDT: this task runs the web server, telnet, and
+    // playlist sequencing; when it wedged (HTTP refused, table dead until a
+    // power cycle) nothing recovered it.  A WDT panic self-reboots and, with
+    // the coredump partition, records where it hung.
+    esp_task_wdt_add(NULL);
     // Poll the input sources waiting for a complete line to arrive
     for (; true; /*feedLoopWDT(), */ vTaskDelay(0)) {
+        esp_task_wdt_reset();
         // Polling is paused when xmodem is using a channel for binary upload
         if (pollingPaused) {
             vTaskDelay(100);
@@ -256,12 +263,16 @@ void polling_loop(void* unused) {
 
 void stop_polling() {
     if (pollingTask) {
+        // Unsubscribe from the WDT first: a suspended task cannot feed it,
+        // and a long xmodem transfer must not trip a panic.
+        esp_task_wdt_delete(pollingTask);
         vTaskSuspend(pollingTask);
     }
 }
 
 void start_polling() {
     if (pollingTask) {
+        esp_task_wdt_add(pollingTask);  // re-watch after a stop_polling pause
         vTaskResume(pollingTask);
     } else {
         xTaskCreatePinnedToCore(polling_loop,      // task
@@ -335,11 +346,18 @@ int32_t  heapLowWaterReportTime = 0;
 void protocol_main_loop() {
     start_polling();
 
+    // Watched by the task WDT (see polling_loop): this task runs motion and
+    // the playlist-injected jobs; a deadlock here silently freezes the table.
+    // Long blocking waits (homing, buffer sync) feed it via
+    // protocol_exec_rt_system, which everything pumps while waiting.
+    esp_task_wdt_add(NULL);
+
     // ---------------------------------------------------------------------------------
     // Primary loop! Upon a system abort, this exits back to main() to reset the system.
     // This is also where the system idles while waiting for something to do.
     // ---------------------------------------------------------------------------------
     for (;; vTaskDelay(0)) {
+        esp_task_wdt_reset();
         if (activeChannel) {
             // The input polling task has collected a line of input
             if (gcode_echo->get()) {
@@ -1068,6 +1086,10 @@ static void protocol_do_late_reset() {
 }
 
 void protocol_exec_rt_system() {
+    // Feed the protocol task's WDT here too: blocking waits (homing, buffer
+    // sync, dwell) pump this while the main loop is not iterating.  Harmless
+    // no-op (ESP_ERR_NOT_FOUND) when called from an unwatched task.
+    esp_task_wdt_reset();
     if (rtSafetyDoor) {
         protocol_do_safety_door();
     }

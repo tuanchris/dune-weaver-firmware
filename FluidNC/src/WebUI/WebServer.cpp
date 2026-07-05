@@ -44,6 +44,7 @@ namespace WebUI {
 }
 
 #include <esp_ota_ops.h>
+#include <esp_core_dump.h>  // /sand_coredump crash summary
 
 //embedded response file if no files on LocalFS
 #include "NoFile.h"
@@ -169,6 +170,7 @@ namespace WebUI {
         _webserver->on("/sand_patterns", HTTP_ANY, handleSandPatterns);
         _webserver->on("/sand_bootlog", HTTP_ANY, handleSandBootlog);
         _webserver->on("/sand_log", HTTP_ANY, handleSandLog);
+        _webserver->on("/sand_coredump", HTTP_ANY, handleSandCoredump);
         _webserver->on("/sand_playlists", HTTP_ANY, handleSandPlaylists);
         _webserver->on("/sand_settings", HTTP_ANY, handleSandSettings);
         _webserver->on("/sand_time", HTTP_ANY, handleSandTime);
@@ -409,6 +411,7 @@ namespace WebUI {
                          "Settings   GET /sand_settings\n"
                          "Boot log   GET /sand_bootlog     (text; survives a panic reset)\n"
                          "Log        GET /sand_log         (text; last ~8KB of runtime log)\n"
+                         "Crash      GET /sand_coredump    (JSON; last panic backtrace; ?erase=1)\n"
                          "\n"
                          "Home       GET /sand_home\n"
                          "Goto       GET /sand_goto?theta=<rad>&rho=<0..1>  (either/both; idle only)\n"
@@ -913,6 +916,45 @@ namespace WebUI {
         StreamOutChannel out;
         StartupLog::dump(out);
         _webserver->sendContent("", 0);  // terminate the chunked response
+    }
+
+    // Crash report from the coredump flash partition: after any panic
+    // (including a task-WDT hang, which panics on purpose) the summary gives
+    // the crashing task, PC, and backtrace addresses.  Decode on the host:
+    //   xtensa-esp32-elf-addr2line -pfiaC -e firmware.elf <backtrace addrs>
+    // ?erase=1 clears the stored dump after retrieval.
+    void Web_Server::handleSandCoredump() {
+        _webserver->sendHeader("Cache-Control", "no-store");
+        if (_webserver->hasArg("erase")) {
+            esp_err_t err = esp_core_dump_image_erase();
+            sendStatus(err == ESP_OK ? 200 : 500, err == ESP_OK ? "erased" : "erase failed");
+            return;
+        }
+        std::string s;
+        JSONencoder j(&s);
+        j.begin();
+        esp_core_dump_summary_t sum;
+        if (esp_core_dump_get_summary(&sum) != ESP_OK) {
+            j.member("present", "false");
+            j.end();
+            sendJSON(200, s);
+            return;
+        }
+        char buf[16];
+        j.member("present", "true");
+        j.member("task", sum.exc_task);
+        snprintf(buf, sizeof(buf), "0x%08lx", static_cast<unsigned long>(sum.exc_pc));
+        j.member("pc", buf);
+        j.begin_array("backtrace");
+        for (uint32_t i = 0; i < sum.exc_bt_info.depth && i < sizeof(sum.exc_bt_info.bt) / sizeof(sum.exc_bt_info.bt[0]); ++i) {
+            snprintf(buf, sizeof(buf), "0x%08lx", static_cast<unsigned long>(sum.exc_bt_info.bt[i]));
+            j.string(buf);
+        }
+        j.end_array();
+        j.member("bt_corrupted", sum.exc_bt_info.corrupted ? "true" : "false");
+        j.member("elf_sha256", reinterpret_cast<const char*>(sum.app_elf_sha256));
+        j.end();
+        sendJSON(200, s);
     }
 
     // Rolling session log (RingLog): the last ~8 KB of runtime log lines,

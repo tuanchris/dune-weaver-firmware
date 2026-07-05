@@ -22,7 +22,8 @@
 #    include "Module.h"
 
 #    include "Driver/localfs.h"
-#    include "esp32-hal.h"  // disableCore0WDT
+#    include "esp32-hal.h"     // disableCore0WDT
+#    include <esp_task_wdt.h>  // esp_task_wdt_init: hang -> panic -> coredump + reboot
 
 #    include "src/ToolChangers/atc.h"
 
@@ -30,6 +31,12 @@ extern void make_user_commands();
 
 void setup() {
     disableCore0WDT();
+    // Task WDT: 120s, panic=true.  The poller and protocol tasks subscribe
+    // (Protocol.cpp); a wedged task then panics -> coredump partition captures
+    // the backtrace -> reboot -> last_reset:"task_wdt", instead of the table
+    // sitting dead until someone pulls power (18h of that, once).  120s is
+    // far above any legitimate stall (homing feeds via protocol_exec_rt_system).
+    esp_task_wdt_init(120, true);
     try {
         timing_init();
         uartInit();  // Setup serial port
