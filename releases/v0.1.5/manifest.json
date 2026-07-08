@@ -1,0 +1,103 @@
+{
+  "name": "Dune Weaver Firmware",
+  "version": "v0.1.5",
+  "source_url": "https://github.com/tuanchris/dune-weaver-firmware/tree/v0.1.5",
+  "release_url": "https://github.com/tuanchris/dune-weaver-firmware/releases/tag/v0.1.5",
+  "images": {
+    "esp32-bootloader": {
+      "size": 17568,
+      "offset": "0x1000",
+      "path": "bootloader.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "5b1b0cd6bcbfd6de6d388652a46e9b6e341f36adb9127d1e654d21dadeae74bd"
+      }
+    },
+    "esp32-partitions": {
+      "size": 3072,
+      "offset": "0x8000",
+      "path": "partitions.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "0a8b5720e7b77ff11f1462458c3a509dee79224e5279898f26d6a2e3ae0517b7"
+      }
+    },
+    "esp32-bootapp": {
+      "size": 8192,
+      "offset": "0xe000",
+      "path": "boot_app0.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"
+      }
+    },
+    "esp32-firmware": {
+      "size": 1644048,
+      "offset": "0x10000",
+      "path": "firmware.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "0506c32aa363ec4b6b6f8a554f906ad140e1b06ebde8872352a6efa5f58fee5a"
+      }
+    },
+    "esp32-filesystem": {
+      "size": 131072,
+      "offset": "0x3d0000",
+      "path": "littlefs.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "8549229d888d2f15ee74354c4e0a748199e9954c362347d45c44a505df401215"
+      }
+    }
+  },
+  "installable": {
+    "name": "installable",
+    "description": "Things you can install",
+    "choice-name": "Processor type",
+    "choices": [
+      {
+        "name": "esp32",
+        "description": "ESP32-WROOM (MKS-DLC32)",
+        "choice-name": "Installation type",
+        "choices": [
+          {
+            "name": "sandtable",
+            "description": "Dune Weaver sand table (WiFi + HTTP/JSON API)",
+            "choice-name": "Installation type",
+            "choices": [
+              {
+                "name": "fresh-install",
+                "description": "Complete install, erasing all previous data. Upload your table's config.yaml afterward.",
+                "erase": true,
+                "images": [
+                  "esp32-bootloader",
+                  "esp32-partitions",
+                  "esp32-bootapp",
+                  "esp32-firmware",
+                  "esp32-filesystem"
+                ]
+              },
+              {
+                "name": "firmware-update",
+                "description": "Update firmware only, preserving the filesystem (config.yaml, patterns).",
+                "erase": false,
+                "images": [
+                  "esp32-bootapp",
+                  "esp32-firmware"
+                ]
+              },
+              {
+                "name": "filesystem-update",
+                "description": "Replace the filesystem only, erasing previous filesystem data.",
+                "erase": false,
+                "images": [
+                  "esp32-filesystem"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
