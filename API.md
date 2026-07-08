@@ -223,7 +223,9 @@ fetches the `.thr` and renders the polar preview locally (no server-side thumbna
 ### Upload
 `POST /upload` (SD) multipart: field `<filename>S` = size in bytes, field `<filename>` = file bytes;
 optional `?path=/patterns`. Returns JSON `{status, files:[{name,size,…}], path, total, used, occupation}`.
-Pre-checks free space. (Serial alternative: `$Xmodem/Receive=<path>` / `$Xmodem/Send=<path>`.)
+Pre-checks free space. Missing parent folders are created automatically (a card prepared on a
+computer often lacks `/playlists` / `/patterns`). (Serial alternative: `$Xmodem/Receive=<path>` /
+`$Xmodem/Send=<path>`.)
 
 ### File-op errors (upload, delete, createdir, rename, list)
 Success is HTTP **200** with `status` text. Any failure is a real HTTP error **plus** an
@@ -237,8 +239,9 @@ Success is HTTP **200** with `status` text. Any failure is a real HTTP error **p
 `error.code`: 1 auth, 2 file-creation/fs-inaccessible, 3 write, 4 upload/size-mismatch,
 5 space, 6 cancelled, 7 close, 8 generic file op. `error.message` carries the actionable
 detail (e.g. `cannot create /patterns/sub/x.thr (missing directory, bad name, or
-filesystem full)`). Note: `fopen` won't create intermediate directories — `createdir`
-first when uploading into a new subfolder.
+filesystem full)`). Uploads create missing intermediate directories themselves; on older
+firmware `fopen` won't, so clients targeting them should `createdir` first when uploading
+into a new subfolder (`createdir` on an existing dir answers 500 — treat as success).
 
 ## Firmware update (OTA)
 

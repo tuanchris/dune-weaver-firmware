@@ -1509,6 +1509,15 @@ namespace WebUI {
             return;
         }
 
+        // FatFS fopen("w") does not create parent folders, so a card prepared
+        // on a computer (no /playlists, /patterns) fails every upload with
+        // "cannot create". Make the missing folders instead; a no-op when they
+        // already exist, and if it fails the FileStream open below reports it.
+        std::error_code mkdir_ec;
+        if (stdfs::create_directories(fpath.parent_path(), mkdir_ec)) {
+            HashFS::report_change();
+        }
+
         // error_code overload: the throwing stdfs::space would abort the board
         // on a flaky-SD statvfs failure (uncaught filesystem_error).
         auto space = stdfs::space(fpath, ec);
