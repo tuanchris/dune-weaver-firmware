@@ -403,7 +403,7 @@ namespace WebUI {
         _webserver->sendHeader("Cache-Control", "no-store");
         _webserver->send(200,
                          "text/plain",
-                         "FluidNC sand-table headless API\n"
+                         "Dune Weaver Firmware sand-table headless API\n"
                          "\n"
                          "Status     GET /sand_status      (poll ~1s; JSON)\n"
                          "Patterns   GET /sand_patterns\n"

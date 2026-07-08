@@ -96,7 +96,7 @@ namespace WebUI {
                 module->wifi_stats(j);
             }
 
-            std::string s("FluidNC ");
+            std::string s("dune-weaver-firmware ");
             s += git_info;
             j.id_value_object("FW version", s);
 

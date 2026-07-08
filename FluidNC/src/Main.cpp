@@ -54,7 +54,10 @@ void setup() {
         // Load settings from non-volatile storage
         settings_init();  // requires config
 
-        log_info("FluidNC " << git_info << " " << git_url);
+        // "Dune Weaver Firmware <ver>" — the web installer parses this banner
+        // for version/variant detection (it also still accepts the old
+        // "FluidNC <ver>" form printed by boards on <= v0.1.4).
+        log_info("Dune Weaver Firmware " << git_info << " " << git_url);
         log_info("Compiled with ESP32 SDK:" << esp_get_idf_version());
 
         if (localfs_mount()) {
