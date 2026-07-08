@@ -56,6 +56,13 @@ void FileStream::setup(const char* mode) {
         log_verbose("Cannot " << (opening ? "open" : "create") << " file " << _fpath.c_str());
         throw opening ? Error::FsFailedOpenFile : Error::FsFailedCreateFile;
     }
+    // Newlib's default stdio buffer (128B) makes FATFS read-modify-write
+    // sectors on nearly every fwrite. A 4KB buffer coalesces the odd-sized
+    // web-upload chunks into whole-sector sequential writes — the difference
+    // between minutes and tens of seconds for a multi-MB pattern upload.
+    if (strchr(mode, 'w') || strchr(mode, 'a')) {
+        setvbuf(_fd, nullptr, _IOFBF, 4096);
+    }
     // error_code overload: on a marginal SD card fopen can succeed while the
     // following stat fails; the throwing overload then raises a
     // filesystem_error that several callers only catch as Error -> uncaught

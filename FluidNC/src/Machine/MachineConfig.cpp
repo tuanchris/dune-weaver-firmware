@@ -180,7 +180,13 @@ namespace Machine {
 
             auto filesize = file.size();
             if (filesize <= 0) {
+                // Fall back to the builtin config — returning without loading
+                // one leaves the global `config` null and setup() crashes on
+                // first use (LoadProhibited boot loop on a truncated file).
                 log_config_error("Configuration file:" << filename << " is empty");
+                log_info("Using default configuration");
+                load_yaml(defaultConfig);
+                set_state(State::ConfigAlarm);
                 return;
             }
 
@@ -189,6 +195,9 @@ namespace Machine {
             auto actual      = file.read(buffer.get(), filesize);
             if (actual != filesize) {
                 log_config_error("Configuration file:" << filename << " read error");
+                log_info("Using default configuration");
+                load_yaml(defaultConfig);
+                set_state(State::ConfigAlarm);
                 return;
             }
             log_info("Configuration file:" << filename);
@@ -238,6 +247,7 @@ namespace Machine {
 
             // log_info("Heap size after configuation load is " << uint32_t(xPortGetFreeHeapSize()));
 
+            successful = true;
         } catch (const Configuration::ParseException& ex) {
             log_config_error("Configuration parse error on line " << ex.LineNumber() << ": " << ex.What());
         } catch (const AssertionFailed& ex) {
@@ -249,6 +259,16 @@ namespace Machine {
         } catch (...) {
             // Get rid of buffer and return
             log_config_error("Unknown error while processing config file");
+        }
+
+        // A parse abort leaves `config` half-built with afterParse() never run,
+        // so subsystem pointers are null and setup() crashes on first use —
+        // a boot loop on any bad config file. Reload the builtin default
+        // instead (guard: not when the default itself was the input).
+        if (!successful && input.data() != defaultConfig) {
+            log_info("Using default configuration");
+            load_yaml(defaultConfig);
+            set_state(State::ConfigAlarm);
         }
 
         std::atomic_thread_fence(std::memory_order::memory_order_seq_cst);

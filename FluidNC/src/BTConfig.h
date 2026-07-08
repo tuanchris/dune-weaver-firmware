@@ -11,7 +11,7 @@
 
 #include <BluetoothSerial.h>
 
-const char* const DEFAULT_BT_NAME = "FluidNC";
+const char* const DEFAULT_BT_NAME = "DuneWeaver";
 
 namespace WebUI {
     extern BluetoothSerial SerialBT;
