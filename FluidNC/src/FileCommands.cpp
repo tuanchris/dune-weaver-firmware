@@ -346,20 +346,48 @@ static Error listLocalFiles(const char* parameter, AuthenticationLevel auth_leve
 }
 
 static Error listFilesystemJSON(const char* fs, const char* value, AuthenticationLevel auth_level, Channel& out) {
+    // Optional pagination: "path|offset|limit". "|" cannot occur in a
+    // filesystem path, so a plain path keeps the original list-everything
+    // behavior. "offset" skips that many directory entries and "limit"
+    // caps the number of entries emitted; "count" in the reply is the
+    // total number of entries in the directory, so "path|0|0" is a cheap
+    // count-only probe. Entries are emitted in directory order.
+    std::string_view path { value ? value : "" };
+    std::string_view pageArgs;
+    uint32_t         offset = 0;
+    uint32_t         limit  = UINT32_MAX;
+    bool             paged  = string_util::split(path, pageArgs, '|');
+    if (paged) {
+        std::string_view limitArg;
+        string_util::split(pageArgs, limitArg, '|');
+        if (!pageArgs.empty() && !string_util::is_uint(pageArgs, offset)) {
+            return Error::InvalidValue;
+        }
+        if (!limitArg.empty() && !string_util::is_uint(limitArg, limit)) {
+            return Error::InvalidValue;
+        }
+    }
+
     try {
-        FluidPath fpath { value, fs };
+        FluidPath fpath { std::string(path), fs };
         auto      space = stdfs::space(fpath);
         auto      iter  = stdfs::directory_iterator { fpath };
 
         JSONencoder j(false, &out);
         j.begin();
 
+        uint32_t index = 0;
+        uint32_t shown = 0;
         j.begin_array("files");
         for (auto const& dir_entry : iter) {
-            j.begin_object();
-            j.member("name", dir_entry.path().filename());
-            j.member("size", dir_entry.is_directory() ? -1 : dir_entry.file_size());
-            j.end_object();
+            if (index >= offset && shown < limit) {
+                j.begin_object();
+                j.member("name", dir_entry.path().filename());
+                j.member("size", dir_entry.is_directory() ? -1 : dir_entry.file_size());
+                j.end_object();
+                ++shown;
+            }
+            ++index;
         }
         j.end_array();
 
@@ -367,7 +395,11 @@ static Error listFilesystemJSON(const char* fs, const char* value, Authenticatio
         auto freeBytes  = space.available;
         auto usedBytes  = totalBytes - freeBytes;
 
-        j.member("path", value);
+        j.member("path", std::string(path));
+        j.member("count", static_cast<int>(index));
+        if (paged) {
+            j.member("offset", static_cast<int>(offset));
+        }
         j.member("total", formatBytes(totalBytes));
         j.member("used", formatBytes(usedBytes + 1));
 

@@ -309,6 +309,13 @@ curl "$B/sand_time?tz=ICT-7"                       # set + persist POSIX timezon
 curl "$B/sd/patterns/star.thr"
 curl "$B/sd/playlists/evening.txt"
 
+# List one directory level (non-recursive; dirs have "size":-1).
+# Optional pagination: <path>|<offset>|<limit> — "count" in the reply is the
+# directory's total entry count, so |0|0 is a cheap count-only probe.
+# Entries come in directory order. (Serial: $SD/ListJSON=..., $LocalFS/ListJSON=...)
+curl "$B/command?commandText=%24SD/ListJSON=/patterns"
+curl "$B/command?commandText=%24SD/ListJSON=/patterns%7C100%7C50"   # entries 100-149
+
 # Upload to the SD card (multipart): field <name>S = size, field <name> = bytes
 curl -F "path=/patterns" -F "my.thrS=$(wc -c < my.thr)" \
      -F "my.thr=@my.thr;filename=my.thr" "$B/upload"
