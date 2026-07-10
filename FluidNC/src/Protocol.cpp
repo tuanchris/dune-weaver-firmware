@@ -734,16 +734,15 @@ static void protocol_run_crash_home(float theta_offset_rad) {
         execute_line(unlock, allChannels, AuthenticationLevel::LEVEL_GUEST);
     }
 
-    // Overshoot the full rho travel so the carriage reaches the stop regardless
-    // of where it started.  Jog distance is in Y-motor mm (kinematics bypassed).
-    float travel = 50.0f;  // safe fallback if the axis/travel isn't configured
+    // Jog the full rho travel so the carriage reaches the stop regardless of
+    // where it started.  Jog distance is in Y-motor mm (kinematics bypassed).
+    float dist = 50.0f;  // safe fallback if the axis/travel isn't configured
     if (config && config->_axes && config->_axes->_numberAxis > Y_AXIS && config->_axes->_axis[Y_AXIS]) {
         float mt = config->_axes->_axis[Y_AXIS]->_maxTravel;
         if (mt > 0.0f) {
-            travel = mt;
+            dist = mt;
         }
     }
-    float dist = travel * 1.15f + 5.0f;
 
     // Y homes negative -> drive toward the rho=0 (centre) stop.
     char jog[LINE_BUFFER_SIZE];
