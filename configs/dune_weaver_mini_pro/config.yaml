@@ -187,3 +187,7 @@ leds:
   num_leds: 49
   color_order: RGB
   frame_ms: 33
+time:
+  ntp: true
+  server: pool.ntp.org
+  tz: UTC0
