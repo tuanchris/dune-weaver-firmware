@@ -166,10 +166,20 @@ class Soak:
                 if not hold:
                     continue  # household: let it run; next Idle starts the next
                 if n % 2:
-                    # abort path: stop mid-pattern -> next (job-stack abort)
+                    # abort path: stop mid-pattern -> next (job-stack abort).
+                    # Retry until it takes - a single lost request (storm
+                    # window) otherwise leaves one pattern hogging the gate.
                     if STOP.wait(hold):
                         return
-                    self.get("/sand_stop")
+                    for _ in range(10):
+                        self.get("/sand_stop")
+                        if STOP.wait(2):
+                            return
+                        st = self.get_json("/sand_status")
+                        if st and not st.get("running"):
+                            break
+                    else:
+                        self.log("WARN", f"pattern {n} would not stop")
                 else:
                     # completion path: at 200% feed short patterns finish here;
                     # natural end -> Idle is a different transition than abort.
@@ -254,24 +264,38 @@ class Soak:
                 self.log("ALERT", f"last_reset changed to {reset}")
             prev_uptime = up
 
-            hl = st.get("heap_largest")
+            hl, hfree = st.get("heap_largest"), st.get("heap")
             if isinstance(hl, int):
                 self.heap_largest_samples.append(hl)
-                if hl < 20000:
-                    self.log("ALERT" if hl < 12000 else "WARN",
-                             f"heap_largest low: {hl} (heap={st.get('heap')}, min={st.get('heap_min')})")
+                # A single-sample fragmentation dip that self-recovers is
+                # survivable by construction (nothing failed to allocate);
+                # what predicts an OOM panic is SUSTAINED exhaustion - so a
+                # transient is a WARN and two consecutive lows (or truly
+                # exhausted total free heap) is the ALERT.
+                low_streak = (len(self.heap_largest_samples) >= 2
+                              and self.heap_largest_samples[-1] < 12000
+                              and self.heap_largest_samples[-2] < 12000)
+                if isinstance(hfree, int) and hfree < 12000:
+                    self.log("ALERT", f"free heap nearly exhausted: {hfree}")
+                elif low_streak:
+                    self.log("ALERT", f"heap_largest sustained low: {self.heap_largest_samples[-2:]}")
+                elif hl < 20000:
+                    self.log("WARN", f"heap_largest low: {hl} (heap={hfree}, min={st.get('heap_min')})")
 
     def heap_trend_verdict(self):
-        # Per-event leaks / fragmentation show as decay between the first and
-        # last samples; median-of-3 smooths run-vs-idle variance.
+        # Per-event leaks / fragmentation show as decay between the loaded
+        # steady state and the end of the run.  Skip the first samples: on a
+        # freshly booted board they capture the pristine pre-load heap, and
+        # the one-time transition to the loaded plateau reads as a huge fake
+        # "decay" (bit us: 43k boot-fresh -> 19k plateau, flat thereafter).
         s = self.heap_largest_samples
-        if len(s) < 8:
+        if len(s) < 12:
             return
-        first, last = statistics.median(s[:3]), statistics.median(s[-3:])
+        first, last = statistics.median(s[4:7]), statistics.median(s[-3:])
         if last < first * 0.75:
             self.log("ALERT", f"heap_largest decayed {first} -> {last} over the run (leak/fragmentation?)")
         else:
-            self.log("INFO", f"heap trend ok: heap_largest {first} -> {last}")
+            self.log("INFO", f"heap trend ok: heap_largest {first} -> {last} (loaded steady state)")
 
     def run(self, hours):
         pats = self.get_json("/sand_patterns", timeout=15)
@@ -288,8 +312,23 @@ class Soak:
         if self.p["feed_pct"]:
             # The gate owns the table: whatever was playing (a leftover
             # pattern would hog the whole window) is stopped so the driver
-            # can cycle patterns from the first minute.
+            # can cycle patterns from the first minute.  Then wait for a
+            # settled Idle before starting the clock - launching 17 s after
+            # a reboot (mid boot-auto-home, boot-pristine heap) both blocks
+            # the driver and poisons the heap-trend baseline.
             self.get("/sand_stop")
+            settled = False
+            for _ in range(60):
+                if STOP.wait(2):
+                    return 1
+                st = self.get_json("/sand_status")
+                if st and st.get("state") == "Idle" and not st.get("running"):
+                    settled = True
+                    break
+                self.get("/sand_stop")
+            if not settled:
+                self.log("ALERT", "table never settled to Idle before the gate; aborting")
+                return 1
             self.get(f"/sand_feed?pct={self.p['feed_pct']}")
             self.log("INFO", f"feed override {self.p['feed_pct']}% for the gate")
 
