@@ -22,6 +22,12 @@ namespace SandApi {
     // webui-v3 WebSocket).
     std::string statusJson();
 
+    // Lowercase STA MAC "aa:bb:cc:dd:ee:ff" — the table's stable hardware
+    // identity, so clients can dedupe a table across discovery paths (mDNS vs
+    // manual IP) and DHCP changes.  Surfaced in /sand_status ("mac") and the
+    // mDNS TXT record ("mac=").  Cached; always available (burned-in efuse).
+    const char* macAddress();
+
     // Stream a JSON array of the files in ONE SD folder (non-recursive), e.g.
     // "/patterns" or "/playlists", to `emit` in bounded-size chunks.  If `ext`
     // is given (e.g. ".thr") only files with that extension are listed (skips

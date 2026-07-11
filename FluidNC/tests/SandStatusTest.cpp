@@ -85,6 +85,27 @@ TEST(SandStatusEncode, HealthFieldsWhenSet) {
     EXPECT_TRUE(has(encode(d), "\"sd_ok\":true"));
 }
 
+TEST(SandStatusEncode, IdentityFieldsWhenSet) {
+    Data d;
+    d.state       = "Idle";
+    std::string j = encode(d);
+    EXPECT_FALSE(has(j, "\"mac\":"));       // omitted while unset
+    EXPECT_FALSE(has(j, "\"hostname\":"));  // omitted while unset
+
+    d.mac      = "a0:b1:c2:d3:e4:f5";
+    d.hostname = "DWMP";
+    j          = encode(d);
+    EXPECT_TRUE(has(j, "\"mac\":\"a0:b1:c2:d3:e4:f5\""));
+    EXPECT_TRUE(has(j, "\"hostname\":\"DWMP\""));
+
+    // Empty strings are treated like unset (e.g. hostname not yet applied).
+    d.mac      = "";
+    d.hostname = "";
+    j          = encode(d);
+    EXPECT_FALSE(has(j, "\"mac\":"));
+    EXPECT_FALSE(has(j, "\"hostname\":"));
+}
+
 TEST(SandStatusEncode, RunningWithProgressAndPlaylist) {
     Data d;
     d.state             = "Run";

@@ -38,7 +38,9 @@
 
 #include <cstring>
 #include <cstdlib>
-#include <esp_system.h>     // esp_reset_reason() for the status "last_reset"
+#include <cstdio>
+#include <WiFi.h>           // WiFi.getHostname() for the status "hostname"
+#include <esp_system.h>     // esp_reset_reason() for "last_reset", esp_read_mac() for "mac"
 #include <esp_timer.h>      // esp_timer_get_time() for the status "uptime"
 #include <esp_heap_caps.h>  // heap_caps_get_largest_free_block() for "heap_largest"
 #include <vector>
@@ -280,6 +282,17 @@ static const char* resetReasonName() {
     }
 }
 
+const char* SandApi::macAddress() {
+    // Burned-in STA MAC, independent of WiFi state (works in AP mode too).
+    static char mac[18] = { 0 };
+    if (!mac[0]) {
+        uint8_t m[6];
+        esp_read_mac(m, ESP_MAC_WIFI_STA);
+        snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5]);
+    }
+    return mac;
+}
+
 // Shared status builder.  Defined outside the anonymous namespace so the web
 // server's /sand_status route can reuse it; it still sees the file-local
 // settingValue() helper above (internal linkage, visible for the rest of the TU).
@@ -376,6 +389,11 @@ std::string SandApi::statusJson() {
     // Firmware version so the app can offer updates and verify one took
     // after POST /updatefw.
     d.fw = git_info;
+
+    // Stable identity: hardware MAC + configured hostname, so clients can
+    // dedupe this table across discovery paths and DHCP changes.
+    d.mac      = SandApi::macAddress();
+    d.hostname = WiFi.getHostname();
 
     // Splice in the wall-clock block (kept here so SandStatus stays time-free).
     std::string json = SandStatus::encode(d);

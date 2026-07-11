@@ -65,6 +65,11 @@ namespace SandStatus {
 
         const char* fw = nullptr;  // firmware version (git_info); omitted if null.
         // Lets the app decide when to offer an update and verify one took.
+
+        // Stable device identity, so clients can dedupe a table across
+        // discovery paths (mDNS vs manual IP) and across DHCP changes.
+        const char* mac      = nullptr;  // STA MAC "aa:bb:cc:dd:ee:ff"; omitted if null
+        const char* hostname = nullptr;  // network hostname (e.g. "DWMP"); omitted if null
     };
 
     // Append s to out as a JSON string literal, escaping as needed.

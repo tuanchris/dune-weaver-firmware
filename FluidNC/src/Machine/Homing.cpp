@@ -43,7 +43,8 @@ namespace Machine {
 
     uint32_t Homing::_runs;
 
-    AxisMask Homing::_unhomed_axes = 0;  // Bitmap of axes whose position is unknown
+    AxisMask Homing::_unhomed_axes     = 0;      // Bitmap of axes whose position is unknown
+    bool     Homing::_homed_since_boot = false;  // Any successful home ($H or crash) since power-up
 
     bool Homing::axis_is_homed(size_t axis) {
         return bitnum_is_false(_unhomed_axes, axis);
@@ -65,6 +66,13 @@ namespace Machine {
 
     AxisMask Homing::unhomed_axes() {
         return _unhomed_axes;
+    }
+
+    bool Homing::homed_since_boot() {
+        return _homed_since_boot;
+    }
+    void Homing::set_homed_since_boot() {
+        _homed_since_boot = true;
     }
 
     const char* Homing::_phaseNames[] = {
@@ -363,6 +371,9 @@ namespace Machine {
         Stepping::endLowLatency();
 
         if (!sys.abort) {
+            if (!unhomed_axes()) {
+                _homed_since_boot = true;  // position is now known; see homed_since_boot()
+            }
             set_state(unhomed_axes() ? State::Alarm : State::Idle);
             Stepper::go_idle();  // Set steppers to the settings idle state before returning.
         }

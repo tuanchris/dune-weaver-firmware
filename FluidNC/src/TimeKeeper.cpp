@@ -26,11 +26,14 @@
 #include "Module.h"
 #include "Settings.h"
 #include "Machine/MachineConfig.h"
+#include "Types.h"  // state_is, State
 
 #include <esp_sntp.h>
 #include <sys/time.h>
+#include <atomic>
 #include <ctime>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 // Consumers treat the clock as "set" once it is past this epoch: the ESP32 RTC
@@ -42,8 +45,24 @@ static constexpr time_t EPOCH_2023 = 1672531200;  // 2023-01-01 00:00:00 UTC
 static StringSetting* s_tz_setting = nullptr;
 static std::string    s_config_tz  = "UTC0";
 
+// A tz pushed while the machine is running can't be persisted immediately
+// (Setting writes are idle-gated -- no flash writes during motion), so it is
+// applied to the environment right away and parked here; TimePersist::poll()
+// writes it to NVS on the return to idle.  The buffer is written by the web
+// task and read by the polling task: writer fills the buffer before raising
+// the flag, reader copies it out before clearing.
+static char              s_pending_tz[65] = "";
+static std::atomic<bool> s_tz_pending { false };
+
 static void applyTz() {
-    const char* tz = (s_tz_setting && *s_tz_setting->get()) ? s_tz_setting->get() : s_config_tz.c_str();
+    const char* tz;
+    if (s_tz_pending) {
+        tz = *s_pending_tz ? s_pending_tz : s_config_tz.c_str();
+    } else if (s_tz_setting && *s_tz_setting->get()) {
+        tz = s_tz_setting->get();
+    } else {
+        tz = s_config_tz.c_str();
+    }
     setenv("TZ", tz, 1);
     tzset();
 }
@@ -127,11 +146,9 @@ private:
     }
 
     static Error setZone(const char* value, AuthenticationLevel auth_level, Channel& out) {
-        if (!value) {
-            value = "";
-        }
-        s_tz_setting->setStringValue(value);  // "" clears the override -> config tz
-        applyTz();
+        // "" clears the override -> config tz.  Clock::setTz applies the zone
+        // immediately and, mid-run, defers the NVS write to the return to idle.
+        Clock::setTz(value ? value : "");
         log_info_to(out, "TZ now " << getenv("TZ"));
         return Error::Ok;
     }
@@ -170,19 +187,48 @@ namespace Clock {
     }
 
     bool setTz(const char* z) {
-        if (s_tz_setting) {
-            s_tz_setting->setStringValue(z ? z : "");  // persist (time: module present)
-            applyTz();                                 // effective = setting else config tz
-        } else {
+        if (!s_tz_setting) {
             // No time: config section -> apply for this session only (the app
             // re-syncs tz/epoch on connect anyway).
             setenv("TZ", (z && *z) ? z : "UTC0", 1);
             tzset();
+            return true;
         }
+        if (s_tz_setting->setStringValue(z ? z : "") == Error::Ok) {
+            s_tz_pending = false;  // persisted; any parked mid-run value is stale
+        } else {
+            // Mid-run (Setting writes are idle-gated): apply now, persist on
+            // the return to idle (TimePersist::poll).
+            strlcpy(s_pending_tz, z ? z : "", sizeof(s_pending_tz));
+            s_tz_pending = true;
+        }
+        applyTz();  // effective = pending else setting else config tz
         return true;
     }
 }
 
+// Persists a mid-run tz push once the machine is idle again.  A plain Module
+// (not ConfigurableModule, which has no poll hook) so its poll() runs in the
+// main polling loop, where a flash write is safe to attempt.
+class TimePersist : public Module {
+public:
+    TimePersist(const char* name) : Module(name) {}
+    void poll() override {
+        if (!s_tz_pending || !(state_is(State::Idle) || state_is(State::Alarm))) {
+            return;
+        }
+        char val[sizeof(s_pending_tz)];
+        strlcpy(val, s_pending_tz, sizeof(val));
+        if (s_tz_setting && s_tz_setting->setStringValue(val) == Error::Ok) {
+            if (!strcmp(val, s_pending_tz)) {  // unless a newer push raced in
+                s_tz_pending = false;
+            }
+            applyTz();
+        }
+    }
+};
+
 namespace {
     ConfigurableModuleFactory::InstanceBuilder<TimeKeeper> registration("time");
+    ModuleFactory::InstanceBuilder<TimePersist>            persist_registration("time_persist", true);
 }

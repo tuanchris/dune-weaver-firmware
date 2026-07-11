@@ -6,11 +6,12 @@
 #include "QuietHours.h"
 
 #include "Machine/MachineConfig.h"
+#include "Machine/Homing.h"  // homed_since_boot() gates auto-play
 #include "Settings.h"
 #include "Serial.h"    // allChannels
 #include "Job.h"
 #include "System.h"    // state_is
-#include "Protocol.h"  // LINE_BUFFER_SIZE
+#include "Protocol.h"  // LINE_BUFFER_SIZE, protocol_do_start_home
 #include "FileStream.h"
 #include "Kinematics/ThetaRho.h"  // clearFeedLive() when a run ends
 #include "Leds.h"                  // Still Sands LED-off during quiet hours
@@ -42,6 +43,11 @@ namespace {
     // declaring the playlist broken (missing file, alarm, etc.)
     constexpr uint32_t INJECT_TIMEOUT_MS = 8000;
     constexpr uint32_t HOMING_TIMEOUT_MS = 120000;
+    // Auto-play fallback home: how long the machine may sit Idle-unhomed
+    // before auto-play requests a home itself.  Long enough for the config
+    // startup line ($H / $Sand/Home) to fire first, so tables that home at
+    // boot don't home twice.
+    constexpr uint32_t AUTOSTART_HOME_GRACE_MS = 5000;
     constexpr size_t   MAX_ITEMS         = 1024;
     constexpr size_t   MAX_PLAYLIST_FILE = 64 * 1024;
 
@@ -500,6 +506,43 @@ std::string Playlist::clearFileFor(const std::string& patternPath) {
     return chosen;
 }
 
+// Error capture: this channel discards its output, so error replies to
+// injected commands ("Failed to open file" from $SD/Run, "error:66") would
+// otherwise vanish.  Stash the most recent one for the inject-timeout log.
+void Playlist::captureError(const char* line) {
+    if (!line) {
+        return;
+    }
+    // log_error lines arrive as "[MSG:ERR: text]"; store just the text.
+    if (strncmp(line, "[MSG:ERR: ", 10) == 0) {
+        line += 10;
+    }
+    strlcpy(_last_err, line, sizeof(_last_err));
+    size_t n = strlen(_last_err);
+    if (n && _last_err[n - 1] == ']') {
+        _last_err[n - 1] = '\0';
+    }
+}
+
+void Playlist::sendLine(MsgLevel level, const char* line) {
+    if (line && (level == MsgLevelError || strncmp(line, "error:", 6) == 0)) {
+        captureError(line);
+    }
+    Channel::sendLine(level, line);
+}
+void Playlist::sendLine(MsgLevel level, const std::string* line) {
+    if (line && (level == MsgLevelError || strncmp(line->c_str(), "error:", 6) == 0)) {
+        captureError(line->c_str());
+    }
+    Channel::sendLine(level, line);  // base takes ownership of the pointer
+}
+void Playlist::sendLine(MsgLevel level, const std::string& line) {
+    if (level == MsgLevelError || strncmp(line.c_str(), "error:", 6) == 0) {
+        captureError(line.c_str());
+    }
+    Channel::sendLine(level, line);
+}
+
 // --- State machine: runs in the polling task via pollLine ---
 
 Error Playlist::pollLine(char* line) {
@@ -536,13 +579,30 @@ Error Playlist::pollLine(char* line) {
         }
     }
 
-    // Auto-play on boot: once we first reach Idle (i.e. after homing), kick off
-    // the configured playlist.  It then uses the normal $Playlist/* settings
-    // (mode, pause, shuffle, clear) like any other run.  One-shot per boot.
+    // Auto-play on boot: kick off the configured playlist on the first Idle
+    // after a SUCCESSFUL home.  Idle alone is not enough: with must_home
+    // false (all shipped configs) the machine boots straight to Idle with
+    // its position unknown, and the first pattern would run from wherever
+    // the ball happens to sit.  The boot home normally comes from the config
+    // startup line ($H / $Sand/Home); if none arrives within a grace period
+    // of continuous unhomed Idle, request one ourselves via
+    // protocol_do_start_home() (honors $Sand/HomingMode).  One-shot per boot.
     if (_autostart_pending && _phase == Phase::Off && !_req_run && !_req_stop && state_is(State::Idle)) {
-        _autostart_pending = false;
-        const char* name   = _autostart ? _autostart->get() : "";
-        if (name && *name) {
+        const char* name = _autostart ? _autostart->get() : "";
+        if (!name || !*name) {
+            _autostart_pending = false;  // nothing configured; disarm
+        } else if (!Machine::Homing::homed_since_boot()) {
+            if (!_autostart_idle_seen) {
+                _autostart_idle_seen = true;
+                _autostart_idle_ms   = now;
+            }
+            if (!_autostart_home_sent && now - _autostart_idle_ms >= AUTOSTART_HOME_GRACE_MS) {
+                _autostart_home_sent = true;
+                log_info("playlist: auto-play needs a homed table; requesting home");
+                protocol_do_start_home();
+            }
+        } else {
+            _autostart_pending = false;
             strlcpy(_req_name, name, sizeof(_req_name));
             _req_single = false;
             // Auto-play uses its own Autostart* settings, independent of the
@@ -555,6 +615,10 @@ Error Playlist::pollLine(char* line) {
             _req_run            = true;
             log_info("playlist: auto-play on boot -> " << name);
         }
+    } else if (_autostart_pending && !state_is(State::Idle)) {
+        // The Idle streak broke (boot home running, alarm, user motion);
+        // restart the grace clock on the next Idle.
+        _autostart_idle_seen = false;
     }
 
     if (_phase == Phase::Off && !_req_run && !_req_stop) {
@@ -671,11 +735,15 @@ Error Playlist::pollLine(char* line) {
             }
             if (!_single && _auto_home->get() > 0 && _since_home >= _auto_home->get()) {
                 log_info("playlist: homing after " << _since_home << " patterns");
-                snprintf(line, LINE_BUFFER_SIZE, "$H");
+                // Flag the home for the main loop rather than injecting a
+                // literal $H: this honors $Sand/HomingMode (crash tables have
+                // no switches for $H to find) and applies $Sand/ThetaOffset,
+                // exactly like /sand_home.
+                protocol_do_start_home();
                 _phase     = Phase::Homing;
                 _job_seen  = false;
                 _inject_ms = now;
-                return Error::Ok;
+                break;
             }
             if (!_clear_done) {
                 _pending_clear = clearFileFor(itemAt(_index));
@@ -683,9 +751,10 @@ Error Playlist::pollLine(char* line) {
                 if (!_pending_clear.empty()) {
                     log_info("playlist: clear pattern " << _pending_clear);
                     snprintf(line, LINE_BUFFER_SIZE, "$SD/Run=%s", _pending_clear.c_str());
-                    _phase     = Phase::RunClear;
-                    _job_seen  = false;
-                    _inject_ms = now;
+                    _phase       = Phase::RunClear;
+                    _job_seen    = false;
+                    _inject_ms   = now;
+                    _last_err[0] = '\0';  // capture only errors from THIS command
                     return Error::Ok;
                 }
             }
@@ -695,6 +764,7 @@ Error Playlist::pollLine(char* line) {
             _job_seen         = false;
             _inject_ms        = now;
             _pattern_start_ms = now;
+            _last_err[0]      = '\0';  // capture only errors from THIS command
             return Error::Ok;
         }
 
@@ -704,7 +774,9 @@ Error Playlist::pollLine(char* line) {
                 break;
             }
             if (!_job_seen) {
-                if (state_is(State::Homing)) {
+                // Sensor homing ($H) shows State::Homing; a crash home drives
+                // the rho stop as a jog and shows State::Jog.
+                if (state_is(State::Homing) || state_is(State::Jog)) {
                     _job_seen = true;
                 } else if (now - _inject_ms > INJECT_TIMEOUT_MS) {
                     finish("canceled: homing did not start");
@@ -747,6 +819,11 @@ Error Playlist::pollLine(char* line) {
                 if (Job::active()) {
                     _job_seen = true;
                 } else if (now - _inject_ms > INJECT_TIMEOUT_MS) {
+                    // Say WHICH file and WHY: the $SD/Run error reply went to
+                    // this output-discarding channel, so without re-logging it
+                    // here the serial log shows no reason at all.
+                    const std::string& fname = _phase == Phase::RunClear ? _pending_clear : itemAt(_index);
+                    log_error("playlist: " << fname << " did not start: " << (_last_err[0] ? _last_err : "no error reported"));
                     finish("canceled: file did not start (see log)");
                 }
                 break;

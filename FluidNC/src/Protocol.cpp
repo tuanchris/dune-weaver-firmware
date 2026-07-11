@@ -766,6 +766,7 @@ static void protocol_run_crash_home(float theta_offset_rad) {
     plan_sync_position();
     Machine::Homing::set_axis_homed(X_AXIS);
     Machine::Homing::set_axis_homed(Y_AXIS);
+    Machine::Homing::set_homed_since_boot();  // crash home succeeds without Homing::done()
     set_state(State::Idle);
     log_msg("Crash homed: theta=" << mpos[X_AXIS] << " rho=0");
 }

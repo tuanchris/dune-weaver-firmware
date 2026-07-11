@@ -38,12 +38,15 @@
     $Playlist/PauseFromStart=ON|OFF  measure the cadence from pattern start
     $Playlist/ClearPattern=none|adaptive|in|out|sideway|random
     $Playlist/AutoHome=<n>         home every n patterns; 0 disables
+                                   (honors $Sand/HomingMode + ThetaOffset)
 
   Mechanics: like Status_Outputs/Leds this is a Channel registered with
   allChannels, so the polling task ticks the state machine via
   pollLine().  Actions that start work are returned as command lines
-  ("$SD/Run=...", "$H") for the protocol task to execute with stock
-  semantics; the polling task itself only calls Job::abort(), which is
+  ("$SD/Run=...") for the protocol task to execute with stock
+  semantics; homes are requested via protocol_do_start_home() (the same
+  flag /sand_home uses) so they honor $Sand/HomingMode and run in the
+  main task.  The polling task itself only calls Job::abort(), which is
   the same task that does so for EOF/alarm unwinding in Protocol.cpp.
   Command handlers may run in other tasks and therefore only set
   request flags.
@@ -87,6 +90,14 @@ public:
     Error  pollLine(char* line) override;
     void   flushRx() override {}
     bool   lineComplete(char*, char) override { return false; }
+
+    // Output to this channel is discarded, which made injected-command
+    // failures invisible ("file did not start (see log)" with nothing in the
+    // log).  Capture error lines (e.g. "Failed to open file" from $SD/Run)
+    // so the inject-timeout path can log WHY.
+    void sendLine(MsgLevel level, const char* line) override;
+    void sendLine(MsgLevel level, const std::string* line) override;
+    void sendLine(MsgLevel level, const std::string& line) override;
     size_t timedReadBytes(char* buffer, size_t length, TickType_t timeout) override { return 0; }
 
     // Configuration handlers
@@ -199,11 +210,25 @@ private:
     EnumSetting* _autostart_clear   = nullptr;
 
     // True from boot until the auto-play playlist has been kicked off (on the
-    // first Idle after homing).  One-shot per boot.
+    // first Idle AFTER a successful home -- Homing::homed_since_boot(); Idle
+    // alone doesn't imply a known position with must_home false).  One-shot
+    // per boot.
     bool _autostart_pending = false;
+    // Fallback boot home: if the machine sits Idle-unhomed past a grace
+    // period (no startup_line0 home arrived), auto-play requests one itself.
+    bool     _autostart_home_sent  = false;  // one-shot per boot
+    bool     _autostart_idle_seen  = false;  // an unhomed-Idle streak is being timed
+    uint32_t _autostart_idle_ms    = 0;      // when that streak started
 
     bool _led_off_active = false;  // Still Sands has forced the LEDs off
     bool _quiet_held     = false;  // Still Sands has feed-held a pattern mid-run (FinishPattern=OFF)
+
+    // Last error line delivered to this channel (see sendLine above); cleared
+    // when a command is injected.  Written by the task running the injected
+    // line, read by the poller -- a fixed char buffer keeps the unsynchronized
+    // cross-task access harmless (worst case a garbled log string).
+    void captureError(const char* line);
+    char _last_err[96] = { 0 };
 
     // Active per-run overrides (-1 = inherit the global $Playlist/* setting),
     // copied from the staged _req_ov_* when a run starts.

@@ -144,6 +144,14 @@ namespace SandStatus {
             o += ',';
             member_str(o, "fw", d.fw);
         }
+        if (d.mac && *d.mac) {
+            o += ',';
+            member_str(o, "mac", d.mac);
+        }
+        if (d.hostname && *d.hostname) {
+            o += ',';
+            member_str(o, "hostname", d.hostname);
+        }
 
         o += '}';
         return o;

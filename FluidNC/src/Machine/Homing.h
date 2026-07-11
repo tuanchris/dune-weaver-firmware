@@ -12,6 +12,7 @@
 namespace Machine {
     class Homing : public Configuration::Configurable {
         static AxisMask _unhomed_axes;
+        static bool     _homed_since_boot;
 
     public:
         static enum Phase {
@@ -34,6 +35,13 @@ namespace Machine {
         static bool axis_is_homed(size_t axis);
         static void set_all_axes_homed();
         static void set_all_axes_unhomed();
+
+        // Whether any home has SUCCEEDED since power-up ($H via done(), or a
+        // crash home).  Distinct from unhomed_axes(): with must_home false the
+        // mask is empty from boot (and $X clears it), so an empty mask does
+        // not mean the position is known.  Auto-play gates on this.
+        static bool homed_since_boot();
+        static void set_homed_since_boot();
 
         Homing() = default;
 

@@ -9,7 +9,8 @@ def test_boot_log_is_clean(board):
 
         pytest.skip(f"machine not idle ({state}); not restarting it")
     boot = board.restart()
-    assert "Grbl 3.9" in boot, f"no FluidNC banner after $Bye:\n{boot}"
+    # Fork banner: "Grbl 0.1 [dune-weaver vX.Y.Z ...]"
+    assert "dune-weaver" in boot, f"no dune-weaver banner after $Bye:\n{boot}"
     errors = [l for l in boot.splitlines() if "[MSG:ERR" in l]
     assert not errors, f"boot errors: {errors}"
 
@@ -17,7 +18,8 @@ def test_boot_log_is_clean(board):
 def test_identity(board):
     text, status = board.cmd("$I")
     assert status == "ok"
-    assert "FluidNC v3.9" in text
+    # $I reports "[VER:0.1 dune-weaver-firmware vX.Y.Z (...):]"
+    assert "dune-weaver-firmware" in text
 
 
 def test_status_report_shape(board):

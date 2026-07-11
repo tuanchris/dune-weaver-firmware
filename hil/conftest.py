@@ -89,7 +89,17 @@ class Board:
         return False
 
     def wait_ready(self, attempts=5):
-        """Probe with $I until the command processor responds."""
+        """Wait out the boot home, then probe with $I until the command
+        processor responds.  startup_line0 homes on every boot and line
+        commands aren't processed until the machine is back at Idle --
+        only the realtime '?' status works during homing -- so poll the
+        state first (DWG's home + recenter takes ~25 s)."""
+        end = time.time() + 60.0
+        while time.time() < end:
+            s = self.status(timeout=2.0)
+            if s and s.startswith("Idle"):
+                break
+            time.sleep(1.0)
         for _ in range(attempts):
             self.drain(quiet=0.5, limit=3.0)
             _, status = self.cmd("$I", timeout=3.0)
