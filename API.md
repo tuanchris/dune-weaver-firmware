@@ -27,14 +27,16 @@ same command over the WebSocket is queued to `protocol_main_loop` and runs clean
 Advertised when connected in STA mode (`WebUI/Mdns.cpp`):
 
 - Service: **`_http._tcp.local`** on the HTTP port; hostname `<host>.local`.
-- TXT records identify a sand table and give the WebSocket port:
+- TXT records identify a sand table:
   - `model=dune-weaver`
   - `api=sandtable/1`
-  - `ws=<httpPort+2>`  (the webui-v3 socket)
+  - `mac=<aa:bb:cc:dd:ee:ff>` — lowercase STA MAC, the table's **stable hardware identity**
+    (same value as `/sand_status` `mac`)
 - Also advertises `_telnet._tcp` on port 23.
 
-App flow: browse `_http._tcp`, keep services whose TXT has `model=dune-weaver`, read `ws=` for the socket
-port, connect WebSocket to `ws://<host>:<ws>/`. Manual-IP entry is the fallback.
+App flow: browse `_http._tcp`, keep services whose TXT has `model=dune-weaver`, key saved tables by the
+`mac` TXT value (dedupes a discovered table against one saved by IP; survives DHCP changes and hostname
+edits). Manual-IP entry is the fallback — read `mac` from `/sand_status` there.
 
 ### WebSocket handshake (webui-v3)
 
@@ -77,7 +79,7 @@ the WebSocket for a *single* "active controller" that wants smooth high-rate liv
 | `GET /sand_patterns` | JSON array of `.thr` paths. **If `/patterns/index.json` (a prebuilt manifest) exists, it is served verbatim** — a fast single-file read of the full recursive catalog (paths relative to `/patterns`, e.g. `custom_patterns/x.thr`; run via `$Sand/Run=/patterns/<path>`). Generate it on the host and upload to the card whenever patterns change (see COMMANDS.md). **Without a manifest** it falls back to a non-recursive top-level listing (subfolders omitted — enumerating the ~1000-file nested library on the slow SD froze the single-threaded server). Chunked/streamed |
 | `GET /sand_playlists` | JSON array of `.txt` files in the top level of `/playlists` (non-recursive) |
 | `GET /sand_settings` | JSON object of app settings (speed, homing mode, LED, playlist, quiet hours), values as strings |
-| `GET /sand_time` | wall clock `{epoch, synced, local, tz}`. `?epoch=<unix>` sets the clock (app auto-sync / AP mode); `?tz=<POSIX>` sets + persists the timezone. Also surfaced in `/sand_status` under `time` |
+| `GET /sand_time` | wall clock `{epoch, synced, local, tz}`. `?epoch=<unix>` sets the clock (app auto-sync / AP mode); `?tz=<POSIX>` sets + persists the timezone. Safe mid-run: the zone applies immediately and the (idle-gated) NVS write is deferred to the return to idle. Also surfaced in `/sand_status` under `time` |
 | `GET /sand_bootlog` | plain-text boot log (the `$SS` startup log). Stored in RTC RAM: after a **panic** reset it still holds the *previous* boot's log (first line says so), making it the on-device crash breadcrumb. Cleared by a power cycle |
 | `GET /sand_log` | plain-text rolling session log — the last ~8 KB of runtime log lines, each prefixed with `[+<uptime seconds>]`. This is where playlist end reasons ("playlist: … canceled by alarm"), SD errors, and alarms land on a headless table. RAM-only: lost on reboot (use `/sand_bootlog` + `last_reset` for crashes) |
 | `GET /sand_coredump` | JSON crash report from the coredump flash partition, written on any panic **including a task-WDT hang** (the firmware panics deliberately after ~120 s of a wedged core task, so hangs self-reboot and self-document). `{present, task, pc, backtrace:[…], bt_corrupted, elf_sha256}` — decode with `xtensa-esp32-elf-addr2line -pfiaC -e firmware.elf <addrs>` against the matching build. `?erase=1` clears it. Persists across reboots until erased/overwritten |
@@ -140,7 +142,9 @@ live control during a pattern use:
 `$Sands/FinishPattern=ON|OFF` (ON=pause between patterns/finish current [default]; OFF=feed-hold mid-pattern and resume when the window ends). Quiet hours need a set clock (`time:`/NTP).
 
 `$Playlist/Autostart=<name>` auto-runs playlist `/playlists/<name>.txt` on every boot,
-once the table reaches Idle (after homing). Empty (default) disables it. The boot run
+once the table is Idle **and has homed successfully** (auto-play never starts from an
+unknown position; if no boot home arrives within ~5 s it requests one itself, honoring
+`$Sand/HomingMode`). Empty (default) disables it. The boot run
 uses its **own** parameters (independent of the manual-run `$Playlist/*` settings) so
 auto-play can behave differently:
 `$Playlist/AutostartMode=single|loop` · `$Playlist/AutostartShuffle=ON|OFF` ·
@@ -162,7 +166,35 @@ Prefer the JSON `GET /sand_time` for apps (read + `?epoch=` / `?tz=` to sync).
 `MPos:x,y,z` is motor-space; the app can convert X/Y → θ/ρ, or just poll `$Sand/Status` (already
 converted) at 1–2 Hz for the sand-specific JSON.
 
-### WiFi onboarding (used by the AP-mode page; ASCII SSIDs only over serial)
+### WiFi onboarding / setup portal
+
+Two ways to run the table, both driven by the same two NVS settings (`$WiFi/Mode` + `$Sta/SSID`):
+
+- **Home-WiFi mode** (`$WiFi/Mode=STA>AP`, the default): the table joins the LAN; the app finds it
+  via mDNS. If the join fails (wrong password, 2.4 GHz SSID missing, moved house) or no SSID is set,
+  the board falls back to its own AP (**fallback AP**) and serves a **captive setup portal**: joining
+  the `DuneWeaver` hotspot (password `12345678`) pops the phone's captive sheet with a chooser —
+  connect to home WiFi (scan, pick, password) or switch to standalone. A failed join's reason
+  (wrong password / network not found / timeout) is shown on the portal.
+- **Standalone mode** (`$WiFi/Mode=AP`): the AP is deliberate — the phone joins the hotspot and the
+  app drives the same HTTP API at `192.168.0.1`. In this mode the OS connectivity probes
+  (`/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`, `/connecttest.txt`) are answered with the
+  "internet OK" responses each OS expects, so phones stay on the hotspot without captive nagging.
+  (Android caveat: some builds still prefer cellular for a no-internet AP — the app should bind its
+  socket to the WiFi network when in hotspot mode.) Switching standalone→home-WiFi: open
+  `http://192.168.0.1/wifi` or use the routes below from the app.
+
+Portal routes (registered in **every** mode, so the app can also reconfigure a table over the LAN):
+
+| Endpoint | Returns / action |
+|----------|------------------|
+| `GET /` or `GET /wifi` | the setup portal page (self-contained HTML; root serves it in every mode — the plain-text API map is at `GET /help`) |
+| `GET /wifi_status` | `{mode:"sta"\|"fallback"\|"standalone", sta_ssid, ap_ssid, fail}` — `fail` is this boot's STA join failure reason (`""` if none) |
+| `GET /wifi_scan` | `{status:"scanning"}` while the async scan runs (poll ~1.5 s), then `{status:"ok", aps:[{ssid, rssi, secure}]}` — deduped per SSID, strongest signal kept, hidden SSIDs omitted. `?rescan=1` forces a fresh scan |
+| `POST /wifi_save` | form fields `ssid` (1–32 chars) + `password` (8–64 chars; open networks unsupported — `Sta/MinSecurity` defaults to WPA2). Persists credentials, forces `$WiFi/Mode=STA>AP`, replies `{status:"ok",reboot:1}`, then **reboots** (~0.5 s later). Success = table appears on the LAN; failure = fallback AP returns with `fail` set |
+| `POST /wifi_standalone` | persists `$WiFi/Mode=AP`. From the AP: applies **live** (no reboot, phone stays joined), replies `{reboot:0}`. From STA: replies `{reboot:1}` and reboots into the hotspot |
+
+Serial onboarding (used by the USB installer; ASCII SSIDs only over serial):
 `[ESP410]` (scan → `{"AP_LIST":[{SSID,SIGNAL,IS_PROTECTED},…]}`) · `$Sta/SSID=` · `$Sta/Password=` ·
 `$WiFi/Mode=STA>AP` · `$Bye` (reboot). Non-ASCII SSIDs only work over the HTTP/WS path, not serial.
 
@@ -203,6 +235,12 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   //  = fragmentation trending toward an OOM panic — alert well before it hits ~2 KB
   "fw": "v0.1.2 (main-8035bb6e)",  // firmware version — compare against the app's
   //  latest release to offer an update; re-read after POST /updatefw to verify
+  "mac": "a0:b1:c2:d3:e4:f5",  // lowercase STA MAC — the table's STABLE IDENTITY.
+  //  Key saved tables by this (not IP, not hostname): it dedupes a table added
+  //  by IP against the same one found via mDNS (whose TXT carries the same
+  //  value), and survives DHCP changes and hostname edits.
+  "hostname": "DWMP",          // network hostname (config.yaml hostname: / $Hostname);
+  //  a human-readable default name for a table added by bare IP
   "time": { "epoch": 1718971402, "synced": true, "local": "2026-06-21 14:03:22", "tz": "ICT-7" }
   //  synced=false means the clock isn't set (no NTP yet / no $Time/Set) -> quiet
   //  hours won't fire; the app can push time via GET /sand_time?epoch=<unix>.

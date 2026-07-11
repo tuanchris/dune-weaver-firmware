@@ -82,6 +82,7 @@ namespace WebUI {
 #endif
         static void handle_SSDP();
         static void handle_root();
+        static void handleHelp();
         static void handle_login();
         static void handle_not_found();
         static void _handle_web_command(bool);
@@ -114,6 +115,12 @@ namespace WebUI {
         static void handleSandTime();
         static void handleSandFeed();
         static void handleSandLed();
+        static void handleWifiPage();
+        static void handleWifiStatus();
+        static void handleWifiScan();
+        static void handleWifiSave();
+        static void handleWifiStandalone();
+        static void handleCaptiveProbe();
         static void LocalFSFileupload();
         static void handleFileList();
         static bool updateBlocked();

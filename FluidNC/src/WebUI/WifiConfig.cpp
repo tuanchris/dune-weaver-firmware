@@ -14,6 +14,7 @@
 #include "src/Main.h"
 
 #include "WebServer.h"             // Web_Server::port()
+#include "WifiConfig.h"            // provisioning interface for the captive portal
 #include "TelnetServer.h"          // TelnetServer::port()
 #include "NotificationsService.h"  // notificationsservice
 
@@ -178,6 +179,46 @@ namespace WebUI {
     static EnumSetting*     _sta_min_security;
     static PasswordSetting* _sta_password;
     static EnumSetting*     _wifi_ps_mode;
+
+    // Captive-portal state (see WifiConfig.h): why the AP is up, and why the
+    // last STA join failed.  Both are per-boot; a failed join after /wifi_save
+    // happens on the NEXT boot, which is also the boot whose fallback AP
+    // serves the portal, so RAM is the right lifetime.
+    static bool        _ap_is_fallback = false;
+    static std::string _sta_fail_reason;
+
+    bool wifi_ap_is_fallback() {
+        return _ap_is_fallback;
+    }
+    const char* wifi_sta_fail_reason() {
+        return _sta_fail_reason.c_str();
+    }
+    const char* wifi_sta_ssid() {
+        return _sta_ssid ? _sta_ssid->get() : "";
+    }
+    const char* wifi_ap_ssid() {
+        return _ap_ssid ? _ap_ssid->get() : "";
+    }
+
+    Error wifi_save_sta_credentials(const std::string& ssid, const std::string& password) {
+        Error err = _sta_ssid->setStringValue(ssid);
+        if (err != Error::Ok) {
+            return err;
+        }
+        err = _sta_password->setStringValue(password);
+        if (err != Error::Ok) {
+            return err;
+        }
+        return _mode->setStringValue("STA>AP");
+    }
+
+    Error wifi_set_standalone() {
+        Error err = _mode->setStringValue("AP");
+        if (err == Error::Ok) {
+            _ap_is_fallback = false;  // live flip: captive probes now answer "online"
+        }
+        return err;
+    }
 
     class WiFiConfig : public Module {
     private:
@@ -683,12 +724,15 @@ namespace WebUI {
                 switch (WiFi.status()) {
                     case WL_NO_SSID_AVAIL:
                         log_info("No SSID");
+                        _sta_fail_reason = "network not found - check the name, and note only 2.4 GHz networks work";
                         return false;
                     case WL_CONNECT_FAILED:
                         log_info("Connection failed");
+                        _sta_fail_reason = "the network refused the connection - usually a wrong password";
                         return false;
                     case WL_CONNECTED:
                         log_info("Connected - IP is " << IP_string(WiFi.localIP()));
+                        _sta_fail_reason.clear();
                         return true;
                     default:
                         if ((dot > 3) || (dot == 0)) {
@@ -703,6 +747,10 @@ namespace WebUI {
                 log_info(msg);
                 delay_ms(2000);  // Give it some time to connect
             }
+            // A wrong password on many routers shows up as an endless
+            // disconnect/retry loop rather than WL_CONNECT_FAILED, so the
+            // timeout hint mentions it too.
+            _sta_fail_reason = "timed out - check the password and that the table is in Wi-Fi range";
             return false;
         }
 
@@ -720,8 +768,11 @@ namespace WebUI {
             WiFi.enableAP(false);
 
             //SSID
+            _sta_fail_reason.clear();
             const char* SSID = _sta_ssid->get();
             if (strlen(SSID) == 0) {
+                // Unconfigured, not an error: the portal shows no failure
+                // banner on a fresh table.
                 log_info("STA SSID is not set");
                 return false;
             }
@@ -749,6 +800,7 @@ namespace WebUI {
                 return ConnectSTA2AP();
             } else {
                 log_info("Starting client failed");
+                _sta_fail_reason = "Wi-Fi radio failed to start";
                 return false;
             }
         }
@@ -965,6 +1017,7 @@ namespace WebUI {
                     if (StartSTA()) {
                         goto wifi_on;
                     } else {  // STA failed, reset
+                        _ap_is_fallback = true;  // captive portal serves the setup page
                         WiFi.mode(WIFI_OFF);
                         esp_wifi_restore();
                         delay_ms(100);

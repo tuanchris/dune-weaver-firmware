@@ -51,6 +51,10 @@ the board silently rebooted), and heap telemetry: `heap` (free now), `heap_min`
 (low-water since boot), `heap_largest` (largest free block — heap flat while this
 decays = fragmentation heading for an OOM panic).
 
+Identity: `mac` (lowercase STA MAC — the table's stable ID; also in the mDNS TXT
+record as `mac=`, so apps key saved tables by it) and `hostname` (the configured
+network name, e.g. `DWMP`).
+
 `progress` is a `0..1` fraction, or `-1` when unknown. During a **pre-execution
 clear** `playlist.clearing` is `true` and `progress` tracks the *clear* file's own
 0→1 — show a separate "Clearing…" bar that resets when the chosen pattern starts.
@@ -98,7 +102,8 @@ curl "$B/command?plain=\$Sand/ThetaOffset=90"      # pattern theta=0 sits 90 deg
 curl "$B/command?plain=\$Sand/ThetaOffset"         # read current offset
 ```
 
-- `/sand_home`, `$Sand/Home` and the boot startup line all honor `$Sand/HomingMode`.
+- `/sand_home`, `$Sand/Home`, playlist homes (`$Playlist/AutoHome`, the auto-play
+  fallback home) and the boot startup line all honor `$Sand/HomingMode`.
 - **Sensor** mode (default): the limit-switch `$H` cycle (gpio.36 theta, gpio.35 rho),
   with `after_homing` re-centering to 0,0.
 - **Crash** mode: drives the rho (Y) carriage blindly into its physical center stop
@@ -273,10 +278,13 @@ curl "$B/command?plain=\$Playlist/Shuffle=ON"               # ON | OFF
 curl "$B/command?plain=\$Playlist/PauseTime=30"             # seconds between patterns
 curl "$B/command?plain=\$Playlist/PauseFromStart=ON"        # measure cadence from start
 curl "$B/command?plain=\$Playlist/ClearPattern=adaptive"    # none|adaptive|in|out|sideway|random
-curl "$B/command?plain=\$Playlist/AutoHome=10"              # home every n patterns (0=off)
+curl "$B/command?plain=\$Playlist/AutoHome=10"              # home every n patterns (0=off; honors $Sand/HomingMode + ThetaOffset)
 curl "$B/command?plain=\$Playlist/Autostart=evening"       # auto-run /playlists/evening.txt on boot
 curl "$B/command?plain=\$Playlist/Autostart="             # (empty) disable auto-play on boot
-#   Autostart fires once per boot at the first Idle (after homing). The boot run uses its
+#   Autostart fires once per boot, and only after a SUCCESSFUL home (Idle alone is not
+#   enough: with must_home false the table boots Idle with its position unknown). The
+#   boot home normally comes from startup_line0; if none arrives within ~5 s of unhomed
+#   Idle, auto-play requests one itself (honoring $Sand/HomingMode). The boot run uses its
 #   OWN params (independent of the manual-run Playlist/* above); defaults loop/OFF/0/OFF/none:
 curl "$B/command?plain=\$Playlist/AutostartMode=loop"             # single | loop
 curl "$B/command?plain=\$Playlist/AutostartShuffle=ON"           # ON | OFF
@@ -297,6 +305,7 @@ curl "$B/command?plain=\$Sands/FinishPattern=OFF"           # ON=finish current 
 curl "$B/sand_time"                                # {epoch, synced, local, tz}; also in /sand_status.time
 curl "$B/sand_time?epoch=$(date +%s)"              # app auto-sync: push the current unix time
 curl "$B/sand_time?tz=ICT-7"                       # set + persist POSIX timezone (empty = config time:tz)
+#   tz is safe mid-run: applied immediately, NVS write deferred to the return to idle.
 #   config.yaml `time:` section sets ntp/server/tz; $Time/Show, $Time/Set=<epoch>, $Time/Zone=<POSIX> also work.
 ```
 
@@ -361,6 +370,33 @@ curl -F "firmware.binS=$(wc -c < .pio/build/sandtable/firmware.bin)" \
 curl "$B/command?plain=\$Bye"             # reboot (board needs ~25-30s to rejoin WiFi)
 curl "$B/command?plain=\$/macros/startup_line0"   # read a config value at runtime
 #   NOTE: $/path=value runtime changes are NOT persisted; edit config.yaml to persist.
+```
+
+---
+
+## WiFi setup / modes
+
+Two modes, keyed off `$WiFi/Mode`: **STA>AP** (default: join home WiFi; on failure
+fall back to the `DuneWeaver` hotspot, password `12345678`, which serves a **captive
+setup portal** at `http://192.168.0.1/`) and **AP** ("standalone": the hotspot IS the
+product — the app joins it and drives the API at `192.168.0.1`; captive probes answer
+"online" so phones stay put). See API.md → "WiFi onboarding / setup portal".
+
+```bash
+curl "$B/wifi_status"        # {"mode":"sta"|"fallback"|"standalone","sta_ssid":..,"ap_ssid":..,
+                             #  "fail":"<why this boot's join failed>"|""}
+curl "$B/wifi_scan"          # {"status":"scanning"} -> poll ~1.5s -> {"status":"ok","aps":[
+                             #  {"ssid":..,"rssi":..,"secure":0|1}]}; ?rescan=1 forces fresh
+# Set home-WiFi credentials (POST body, so any password chars are safe) and reboot:
+curl -X POST -d "ssid=MyNetwork" -d "password=hunter2秘密" "$B/wifi_save"
+#   -> {"status":"ok","reboot":1}; join fails -> hotspot returns, /wifi_status shows why
+# Switch to standalone hotspot mode (live from the AP; reboots if sent from the LAN):
+curl -X POST "$B/wifi_standalone"
+curl "$B/"                   # the portal page (root, every mode; also at /wifi)
+curl "$B/help"               # plain-text API map (moved off root in v0.1.8)
+# Old-school (also what the USB installer uses over serial):
+curl "$B/command?plain=\$Sta/SSID=MyNetwork"      # then $Sta/Password=..., then $Bye
+curl "$B/command?plain=\$WiFi/Mode=STA>AP"        # or =AP for standalone
 ```
 
 ---

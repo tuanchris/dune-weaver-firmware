@@ -51,8 +51,8 @@ Compass"**.)
 
 - **API rides command dispatch, not REST routes** (rebase-safe, serial-testable):
   `$Sand/*`, `$Playlist/*`, `$LED/*`, `$THR/Feed`, etc., plus a few `/sand_*` HTTP
-  action routes (`/sand_home|stop|pause|resume|feed|led`). `handle_root` serves a
-  plain API map.
+  action routes (`/sand_home|stop|pause|resume|feed|led`). `GET /` serves the WiFi
+  setup portal (every mode); the plain API map lives at `GET /help`.
 - **WebUI WebSockets are disabled** (`_socket_server = NULL`) — they raced motion and
   panicked the board. Drive everything over stateless HTTP (`/command` + `/sand_*`),
   poll `/sand_status` ~1 Hz.
@@ -77,8 +77,11 @@ Compass"**.)
 
 ## Gotchas (these bit us; don't repeat)
 
-- **Never `$SD/List=/patterns`** — the recursive listing of that deep SD tree hangs
-  the (single-threaded) web server; needs a physical reset. Use `/sand_patterns`.
+- **Never `$SD/List=/patterns`, and no `$SD/ListJSON` on it either** — any on-device
+  scan of that ~2000-entry tree can hang the web server / wedge an SD read mid-scan
+  → poller task-WDT reboot, after which the card fails init (`ESP_ERR_INVALID_CRC`)
+  until a **physical power cycle**. By design the host-pushed `/patterns/index.json`
+  manifest IS the catalog — use `/sand_patterns` (serves it verbatim; ignores `?path`).
 - **Never send raw realtime/control bytes in the `/command` query** (`%9F`, `%18`,
   etc.) — a high byte breaks URL parsing and wedges the web server. Use the dedicated
   routes or the WebSocket.
@@ -94,8 +97,10 @@ Compass"**.)
 (status JSON + progress math), `Playlist.{h,cpp}` + `PlaylistParse.{h,cpp}` (playlist
 state machine + clear policy, single-run `$Sand/Run … clear=`), `Leds.{h,cpp}`,
 `Kinematics/ThetaRho.cpp`, `InputFile.cpp` (progress), `Protocol.cpp` (homing event,
-job stack), `WebUI/WebServer.cpp` (routes). Configs: `dwg_configs/` (untracked,
-per-table + backups).
+job stack), `WebUI/WebServer.cpp` (routes), `WebUI/WifiConfig.{h,cpp}` +
+`WebUI/WifiPortalPage.h` (WiFi setup portal: fallback AP = captive setup page,
+`$WiFi/Mode=AP` = standalone hotspot answering OS probes as "online"; `/wifi_*`
+routes). Configs: `dwg_configs/` (untracked, per-table + backups).
 
 ## Docs — keep current
 

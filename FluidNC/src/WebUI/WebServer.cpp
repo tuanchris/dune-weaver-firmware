@@ -21,6 +21,8 @@
 #include "WSChannel.h"
 
 #include "WebClient.h"
+#include "WifiConfig.h"      // wifi_ap_is_fallback() etc. for the setup portal
+#include "WifiPortalPage.h"  // PAGE_WIFI_PORTAL
 
 #include "src/Protocol.h"  // protocol_send_event
 #include "src/SandApi.h"   // SandApi::statusJson() for /sand_status
@@ -147,6 +149,7 @@ namespace WebUI {
         //Web server handlers
         //trick to catch command line on "/" before file being processed
         _webserver->on("/", HTTP_ANY, handle_root);
+        _webserver->on("/help", HTTP_ANY, handleHelp);  // plain-text API map
 
         //Page not found handler
         _webserver->onNotFound(handle_not_found);
@@ -177,6 +180,15 @@ namespace WebUI {
         _webserver->on("/sand_feed", HTTP_ANY, handleSandFeed);
         _webserver->on("/sand_led", HTTP_ANY, handleSandLed);
 
+        // WiFi setup portal.  In AP mode handle_root serves the same page;
+        // these are registered in every mode so the app (or a browser on the
+        // LAN) can also switch a table between home-WiFi and standalone.
+        _webserver->on("/wifi", HTTP_ANY, handleWifiPage);
+        _webserver->on("/wifi_status", HTTP_ANY, handleWifiStatus);
+        _webserver->on("/wifi_scan", HTTP_ANY, handleWifiScan);
+        _webserver->on("/wifi_save", HTTP_ANY, handleWifiSave);
+        _webserver->on("/wifi_standalone", HTTP_ANY, handleWifiStandalone);
+
         //LocalFS
         _webserver->on("/files", HTTP_ANY, handleFileList, LocalFSFileupload);
 
@@ -192,10 +204,21 @@ namespace WebUI {
             // provided IP to all DNS request
             dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
             log_info("Captive Portal Started");
-            _webserver->on("/generate_204", HTTP_ANY, handle_root);
-            _webserver->on("/gconnectivitycheck.gstatic.com", HTTP_ANY, handle_root);
+            // OS connectivity probes.  handleCaptiveProbe answers them one of
+            // two ways: fallback AP (failed/unconfigured home-WiFi join) serves
+            // the setup portal so the phone pops the captive sheet; standalone
+            // AP ($WiFi/Mode=AP) answers what each OS expects from the real
+            // internet, so the phone treats the hotspot as online and keeps
+            // the app's traffic on it instead of nagging or preferring
+            // cellular.
+            _webserver->on("/generate_204", HTTP_ANY, handleCaptiveProbe);  // Android
+            _webserver->on("/gen_204", HTTP_ANY, handleCaptiveProbe);       // Android (alt)
+            _webserver->on("/gconnectivitycheck.gstatic.com", HTTP_ANY, handleCaptiveProbe);
+            _webserver->on("/hotspot-detect.html", HTTP_ANY, handleCaptiveProbe);  // iOS/macOS
+            _webserver->on("/ncsi.txt", HTTP_ANY, handleCaptiveProbe);             // Windows
+            _webserver->on("/connecttest.txt", HTTP_ANY, handleCaptiveProbe);      // Windows 10+
             //do not forget the / at the end
-            _webserver->on("/fwlink/", HTTP_ANY, handle_root);
+            _webserver->on("/fwlink/", HTTP_ANY, handleCaptiveProbe);
         }
 
 #if 0
@@ -232,6 +255,10 @@ namespace WebUI {
         // HTTP (WebSockets are disabled), so no socket port is advertised.
         Mdns::addTxt("_http", "_tcp", "model", "dune-weaver");
         Mdns::addTxt("_http", "_tcp", "api", "sandtable/1");
+        // Stable hardware identity (also "mac" in /sand_status), so apps can
+        // dedupe a discovered table against one saved by IP and follow DHCP
+        // address changes without relying on the user-editable hostname.
+        Mdns::addTxt("_http", "_tcp", "mac", SandApi::macAddress());
 
         HashFS::hash_all();
 
@@ -396,10 +423,18 @@ namespace WebUI {
     }
 
     void Web_Server::handle_root() {
+        // The home page is the WiFi setup portal in every mode: it's where
+        // the captive sheet lands in fallback AP, and in STA/standalone it's
+        // the human-facing "settings" page (the page reads /wifi_status and
+        // adapts).  Clients never machine-read "/" - they use /sand_*.
+        handleWifiPage();
+    }
+
+    void Web_Server::handleHelp() {
         // Headless sand-table build: no web UI is served.  The board is driven
         // entirely by the stateless HTTP API (and runs playlists autonomously
-        // once triggered), so a browser hitting the IP just gets this plain map
-        // of the API instead of a single-page app or the WebUI file manager.
+        // once triggered), so this plain map of the API is the only "docs"
+        // on-device.  It lives at /help; "/" serves the WiFi portal.
         _webserver->sendHeader("Cache-Control", "no-store");
         _webserver->send(200,
                          "text/plain",
@@ -421,6 +456,7 @@ namespace WebUI {
                          "Speed      GET /sand_feed?mm=<0..100000> | pct=<10..200> | d=up|down|reset\n"
                          "Time       GET /sand_time [?epoch=<unix>] [?tz=<POSIX>]   (read / app-sync clock)\n"
                          "LEDs       GET /sand_led?effect=|palette=|color=|color2=|brightness=|speed=\n"
+                         "WiFi       GET / or /wifi  (setup portal; /wifi_status /wifi_scan, POST /wifi_save /wifi_standalone)\n"
                          "\n"
                          "Run/playlist, LED & everything else: GET /command?plain=$...\n"
                          "  $SD/Run=/patterns/star.thr | $Playlist/Run=<name>\n"
@@ -450,7 +486,12 @@ namespace WebUI {
             return;
         }
 
-        if (WiFi.getMode() == WIFI_AP) {
+        if (WiFi.getMode() == WIFI_AP && wifi_ap_is_fallback()) {
+            // Provisioning AP: funnel every unknown URL to the setup portal.
+            // In standalone mode fall through to a plain 404 instead - the
+            // wildcard DNS sends random hostnames here, and answering them
+            // with a captive redirect would make the phone's OS re-flag the
+            // hotspot as captive.
             sendCaptivePortal();
             return;
         }
@@ -786,6 +827,171 @@ namespace WebUI {
         // Go to the main page
         _webserver->sendHeader(LOCATION_HEADER, "/did_restart");
         _webserver->send(302);
+    }
+
+    // ---- WiFi setup portal ------------------------------------------------
+
+    void Web_Server::handleWifiPage() {
+        _webserver->sendHeader("Cache-Control", "no-store");
+        _webserver->send(200, "text/html", PAGE_WIFI_PORTAL);
+    }
+
+    // OS connectivity probes (Android generate_204, iOS hotspot-detect,
+    // Windows ncsi/connecttest).  Fallback AP: serve the portal so the phone
+    // pops the setup sheet.  Standalone AP: answer exactly what each OS
+    // expects from the real internet so the hotspot reads as "online".
+    void Web_Server::handleCaptiveProbe() {
+        if (wifi_ap_is_fallback()) {
+            handleWifiPage();
+            return;
+        }
+        std::string uri(_webserver->uri().c_str());
+        if (uri.find("204") != std::string::npos) {
+            _webserver->send(204);
+        } else if (uri == "/ncsi.txt") {
+            _webserver->send(200, "text/plain", "Microsoft NCSI");
+        } else if (uri == "/connecttest.txt") {
+            _webserver->send(200, "text/plain", "Microsoft Connect Test");
+        } else {
+            _webserver->send(200, "text/html", "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+        }
+    }
+
+    void Web_Server::handleWifiStatus() {
+        const char* mode = "sta";
+        if (WiFi.getMode() != WIFI_STA) {  // AP, or AP_STA mid-scan
+            mode = wifi_ap_is_fallback() ? "fallback" : "standalone";
+        }
+        std::string s;
+        JSONencoder j(&s);
+        j.begin();
+        j.member("mode", mode);
+        j.member("sta_ssid", wifi_sta_ssid());
+        j.member("ap_ssid", wifi_ap_ssid());
+        j.member("fail", wifi_sta_fail_reason());
+        j.end();
+        sendJSON(200, s);
+    }
+
+    void Web_Server::handleWifiScan() {
+        int n = WiFi.scanComplete();
+        if (n >= 0 && _webserver->hasArg("rescan")) {
+            WiFi.scanDelete();
+            n = WIFI_SCAN_FAILED;
+        }
+        if (n == WIFI_SCAN_FAILED) {
+            // Async so this task never blocks.  In AP mode the scan briefly
+            // enables AP_STA; the wifi module's poll() drops back to AP when
+            // the scan completes.  The page polls until status flips to ok.
+            WiFi.scanNetworks(true);
+            sendJSON(200, "{\"status\":\"scanning\"}");
+            return;
+        }
+        if (n == WIFI_SCAN_RUNNING) {
+            sendJSON(200, "{\"status\":\"scanning\"}");
+            return;
+        }
+        std::string s;
+        JSONencoder j(&s);
+        j.begin();
+        j.member("status", "ok");
+        j.begin_array("aps");
+        for (int i = 0; i < n; ++i) {
+            std::string ssid(WiFi.SSID(i).c_str());
+            if (ssid.empty()) {  // hidden networks are useless in a picker
+                continue;
+            }
+            // Mesh/multi-AP networks appear once per node; keep one entry
+            // per SSID with the strongest signal.
+            bool dup = false;
+            for (int k = 0; k < i && !dup; ++k) {
+                dup = ssid == WiFi.SSID(k).c_str();
+            }
+            if (dup) {
+                continue;
+            }
+            int32_t best = WiFi.RSSI(i);
+            for (int k = i + 1; k < n; ++k) {
+                if (ssid == WiFi.SSID(k).c_str() && WiFi.RSSI(k) > best) {
+                    best = WiFi.RSSI(k);
+                }
+            }
+            j.begin_object();
+            j.member("ssid", ssid);
+            j.member("rssi", (int)best);
+            j.member("secure", WiFi.encryptionType(i) != WIFI_AUTH_OPEN ? 1 : 0);
+            j.end_object();
+        }
+        j.end_array();
+        j.end();
+        sendJSON(200, s);
+    }
+
+    void Web_Server::handleWifiSave() {
+        std::string ssid(_webserver->arg("ssid").c_str());
+        std::string password(_webserver->arg("password").c_str());
+        if (ssid.empty() || ssid.length() > 32) {
+            sendJSON(400, "{\"status\":\"error\",\"message\":\"SSID must be 1-32 characters\"}");
+            return;
+        }
+        if (password.length() < 8 || password.length() > 64) {
+            // WPA needs >= 8 chars and Sta/MinSecurity defaults to WPA2, so
+            // open networks aren't joinable anyway.
+            sendJSON(400, "{\"status\":\"error\",\"message\":\"Password must be 8-64 characters (open networks are not supported)\"}");
+            return;
+        }
+        Error err = wifi_save_sta_credentials(ssid, password);
+        if (err == Error::IdleError) {
+            // NVS writes are idle-gated and the boot auto-home is likely
+            // still running when a user reaches this from the captive sheet;
+            // the page retries until the table goes Idle.
+            sendJSON(503, "{\"status\":\"busy\"}");
+            return;
+        }
+        if (err != Error::Ok) {
+            std::string s;
+            JSONencoder j(&s);
+            j.begin();
+            j.member("status", "error");
+            j.member("message", errorString(err));
+            j.end();
+            sendJSON(500, s);
+            return;
+        }
+        sendJSON(200, "{\"status\":\"ok\",\"reboot\":1}");
+        // Give the TCP stack a moment to get the reply out before the restart
+        // drops the link; the page treats a lost reply as success, so this is
+        // best-effort.  The reboot lands in STA>AP: either it joins the home
+        // network or the portal comes back with the failure reason.
+        delay(500);
+        protocol_send_event(&fullResetEvent);
+    }
+
+    void Web_Server::handleWifiStandalone() {
+        // From STA mode the radio has to switch, which needs a restart; from
+        // the (already-up) AP the switch is live and the phone stays joined.
+        bool needReboot = WiFi.getMode() == WIFI_STA;
+
+        Error err = wifi_set_standalone();
+        if (err == Error::IdleError) {  // boot auto-home still running; page retries
+            sendJSON(503, "{\"status\":\"busy\"}");
+            return;
+        }
+        if (err != Error::Ok) {
+            std::string s;
+            JSONencoder j(&s);
+            j.begin();
+            j.member("status", "error");
+            j.member("message", errorString(err));
+            j.end();
+            sendJSON(500, s);
+            return;
+        }
+        sendJSON(200, needReboot ? "{\"status\":\"ok\",\"reboot\":1}" : "{\"status\":\"ok\",\"reboot\":0}");
+        if (needReboot) {
+            delay(500);
+            protocol_send_event(&fullResetEvent);
+        }
     }
 
     // Sand-table UI: clean stop (keeps position, no re-home) - see Cmd::StopJob.
