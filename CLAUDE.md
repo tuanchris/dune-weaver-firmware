@@ -46,6 +46,12 @@ Compass"**.)
 - **Testing convention**: put pure logic in std-only files so it's unit-testable in
   `[env:tests]` (e.g. `PlaylistParse`, `SandStatus`, `ThrTranslator`); keep I/O +
   machine state in the module. HIL tests: `python3 -m pytest hil -v`.
+- **Release gate** (before every release, ~10 min): `python3 soak/soak.py
+  --profile torture` — concurrent pollers + pattern cycling at 200% feed +
+  scans + LED writes + abort storms against a live table; exit 0 = ship.
+  Watch the `heap_largest` floor across releases (WARN <20k, alert <12k) —
+  decay there is the OOM-panic early warning. The `household` profile is an
+  optional long soak for structural changes only.
 
 ## Architecture / conventions
 
@@ -101,6 +107,13 @@ job stack), `WebUI/WebServer.cpp` (routes), `WebUI/WifiConfig.{h,cpp}` +
 `WebUI/WifiPortalPage.h` (WiFi setup portal: fallback AP = captive setup page,
 `$WiFi/Mode=AP` = standalone hotspot answering OS probes as "online"; `/wifi_*`
 routes). Configs: `dwg_configs/` (untracked, per-table + backups).
+
+**`libraries/WebServer/` is a vendored fork** of the Arduino WebServer (shadows the
+framework copy via `lib_extra_dirs`): shorter head-of-line waits, RST-close on
+accepted sockets, and liveness accessors for the accept-queue self-heal watchdog in
+`Web_Server::poll()` — an aborted-client storm (status poller racing an async WiFi
+scan) used to wedge the single-threaded server for minutes. Changes are tagged
+`DW fork:`; see `libraries/WebServer/README.md` before bumping the framework.
 
 ## Docs — keep current
 

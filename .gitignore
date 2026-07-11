@@ -39,3 +39,5 @@ release/
 # HIL test suite artifacts
 __pycache__/
 .pytest_cache/
+# soak/torture harness output (point-in-time logs, never committed)
+soak/logs/

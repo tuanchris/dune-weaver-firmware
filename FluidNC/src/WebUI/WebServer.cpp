@@ -883,7 +883,10 @@ namespace WebUI {
             // Async so this task never blocks.  In AP mode the scan briefly
             // enables AP_STA; the wifi module's poll() drops back to AP when
             // the scan completes.  The page polls until status flips to ok.
-            WiFi.scanNetworks(true);
+            // 120 ms/channel (default 300) — the radio is off-channel for the
+            // whole sweep, starving live HTTP clients; a shorter dwell cuts
+            // that window ~4 s -> ~1.5 s and still hears any joinable AP.
+            WiFi.scanNetworks(true, false, false, 120);
             sendJSON(200, "{\"status\":\"scanning\"}");
             return;
         }
@@ -1861,6 +1864,13 @@ namespace WebUI {
         }
     }
 
+    // Self-heal window: connections queuing this long with ZERO completed
+    // requests means the accept queue has rotted (an aborted-client storm —
+    // e.g. a status poller racing an async WiFi scan — fills it with
+    // connections whose clients gave up before we accepted them). Healthy
+    // traffic completes requests continuously, so this never fires under load.
+    static const uint32_t WEB_STALL_MS = 30000;
+
     void Web_Server::poll() {
         static uint32_t start_time = millis();
         if (WiFi.getMode() == WIFI_AP) {
@@ -1868,6 +1878,23 @@ namespace WebUI {
         }
         if (_webserver) {
             _webserver->handleClient();
+
+            // Watchdog: bounce the listener if demand exists but nothing has
+            // been served for WEB_STALL_MS. web_alive_ms = the last proof of
+            // life (a completed request, an idle accept queue, or a bounce).
+            static uint32_t web_alive_ms = millis();
+            const uint32_t  now          = millis();
+            const uint32_t  handled      = _webserver->lastHandledMillis();
+            if (handled && (int32_t)(handled - web_alive_ms) > 0) {
+                web_alive_ms = handled;
+            }
+            if (!_webserver->hasPendingClient()) {
+                web_alive_ms = now;  // no demand -> quiet, not stalled
+            } else if ((int32_t)(now - web_alive_ms) > (int32_t)WEB_STALL_MS) {
+                log_warn("Web server stalled with pending connections; restarting listener");
+                _webserver->restartListener();
+                web_alive_ms = now;
+            }
         }
         if (_socket_server && _setupdone) {
             _socket_server->loop();
