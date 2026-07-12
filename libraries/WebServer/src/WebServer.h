@@ -181,6 +181,7 @@ protected:
   virtual size_t _currentClientWrite_P(PGM_P b, size_t l) { return _currentClient.write_P( b, l ); }
   void _addRequestHandler(RequestHandler* handler);
   void _handleRequest();
+  void _lingerAbort(); // DW fork: RST-close the current client (abort paths only)
   void _finalizeResponse();
   bool _parseRequest(WiFiClient& client);
   void _parseArguments(String data);

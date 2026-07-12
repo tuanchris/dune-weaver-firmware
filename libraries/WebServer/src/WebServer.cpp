@@ -287,14 +287,6 @@ void WebServer::handleClient() {
 
     log_v("New client: client.localIP()=%s", _currentClient.localIP().toString().c_str());
 
-    // DW fork: close with RST instead of an orderly FIN. An aborted client
-    // (the app's fetch timeouts) otherwise leaves the socket in TIME_WAIT for
-    // 2*MSL (~2 min) holding an lwIP PCB; a burst of aborts exhausts the pool
-    // and the server stops accepting until it drains. For a LAN appliance API
-    // losing graceful close is the right trade.
-    struct linger l = { 1, 0 };
-    _currentClient.setSocketOption(SOL_SOCKET, SO_LINGER, &l, sizeof(l));
-
     _currentStatus = HC_WAIT_READ;
     _statusChange = millis();
   }
@@ -323,10 +315,14 @@ void WebServer::handleClient() {
 //             _statusChange = millis();
 //             keepCurrentClient = true;
 //           }
+        } else {
+          _lingerAbort(); // DW fork: unparseable request, no response owed
         }
       } else { // !_currentClient.available()
         if (millis() - _statusChange <= HTTP_MAX_DATA_WAIT) {
           keepCurrentClient = true;
+        } else {
+          _lingerAbort(); // DW fork: client never sent a request
         }
         callYield = true;
       }
@@ -361,6 +357,18 @@ void WebServer::close() {
 
 void WebServer::stop() {
   close();
+}
+
+// DW fork: mark the current client so its close sends RST instead of an
+// orderly FIN. ABORT PATHS ONLY — a client that never completed a request
+// (fetch-abort storms, garbage bytes) has nothing owed to it, and an orderly
+// close would park the socket in TIME_WAIT for 2*MSL (~2 min) holding an lwIP
+// PCB; a burst of aborts exhausts the pool and the server stops accepting
+// until it drains. NEVER call this after a served response: linger-0 close is
+// tcp_abort, which discards any response bytes still in the send buffer.
+void WebServer::_lingerAbort() {
+  struct linger l = { 1, 0 };
+  _currentClient.setSocketOption(SOL_SOCKET, SO_LINGER, &l, sizeof(l));
 }
 
 // DW fork: recover from a rotted accept queue (see Web_Server::poll()'s

@@ -110,10 +110,11 @@ routes). Configs: `dwg_configs/` (untracked, per-table + backups).
 
 **`libraries/WebServer/` is a vendored fork** of the Arduino WebServer (shadows the
 framework copy via `lib_extra_dirs`): shorter head-of-line waits, RST-close on
-accepted sockets, and liveness accessors for the accept-queue self-heal watchdog in
-`Web_Server::poll()` — an aborted-client storm (status poller racing an async WiFi
-scan) used to wedge the single-threaded server for minutes. Changes are tagged
-`DW fork:`; see `libraries/WebServer/README.md` before bumping the framework.
+ABORTED clients only (never after a served response — linger-0 close discards
+unflushed response bytes), and liveness accessors for the accept-queue self-heal
+watchdog in `Web_Server::poll()` — an aborted-client storm (status poller racing an
+async WiFi scan) used to wedge the single-threaded server for minutes. Changes are
+tagged `DW fork:`; see `libraries/WebServer/README.md` before bumping the framework.
 
 ## Docs — keep current
 
