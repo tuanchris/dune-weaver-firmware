@@ -93,7 +93,7 @@ reliably over the (single-client) WebSocket. Pattern/playlist **contents** are f
 | Command | Action |
 |---------|--------|
 | `$SD/Run=/patterns/<file>.thr` | run a pattern (`.thr` translated on the fly by ThetaRho kinematics) |
-| `$Sand/Run=/patterns/<file>.thr [clear=<mode>]` | run a pattern, optionally preceded by a clear ("pre-execution"). `clear=none\|adaptive\|in\|out\|sideway\|random` (default none); `adaptive` picks in/out from the pattern's first rho. Sequenced by the firmware (clear→pattern, then stop); aborts any running job first. Requires a `playlist:` config section (the clear files live there). |
+| `$Sand/Run=/patterns/<file>.thr [clear=<mode>]` | run a pattern, optionally preceded by a clear ("pre-execution"). `clear=none\|adaptive\|in\|out\|sideway\|random` (default none); `adaptive` picks in/out from the pattern's first rho. Sequenced by the firmware (clear→pattern, then stop); aborts any running job first. Requires a `playlist:` config section (the clear files live there). Filenames may contain spaces; `clear=` must be the **last** token (everything before it is the path). |
 | `$SD/Show=/patterns/<file>.thr` | dump file contents (preview; requires Idle/Alarm) |
 | `$Playlist/Run=<name>` | run playlist `/playlists/<name>.txt` |
 | `$Playlist/Stop` | stop after the current pattern |

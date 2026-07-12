@@ -138,3 +138,62 @@ TEST(ParseClearMode, UnknownOrEmptyLeavesModeUntouched) {
     EXPECT_FALSE(parse_clear_mode(nullptr, m));
     EXPECT_EQ(42, m);
 }
+
+TEST(ParseRunArgs, PlainPath) {
+    std::string path, clear;
+    EXPECT_TRUE(parse_run_args("/patterns/star.thr", path, clear));
+    EXPECT_EQ("/patterns/star.thr", path);
+    EXPECT_EQ("", clear);
+}
+
+TEST(ParseRunArgs, PathWithClear) {
+    std::string path, clear;
+    EXPECT_TRUE(parse_run_args("/patterns/star.thr clear=adaptive", path, clear));
+    EXPECT_EQ("/patterns/star.thr", path);
+    EXPECT_EQ("adaptive", clear);
+}
+
+// The customer-reported bug: filenames with spaces were truncated at the
+// first space ("/patterns/13b Battlesbury (C C).thr" -> "/patterns/13b").
+TEST(ParseRunArgs, SpacedFilename) {
+    std::string path, clear;
+    EXPECT_TRUE(parse_run_args("/patterns/13b Battlesbury (C C).thr", path, clear));
+    EXPECT_EQ("/patterns/13b Battlesbury (C C).thr", path);
+    EXPECT_EQ("", clear);
+}
+
+TEST(ParseRunArgs, SpacedFilenameWithClear) {
+    std::string path, clear;
+    EXPECT_TRUE(parse_run_args("/patterns/19 Itsyourmove (E) (C NW).thr clear=adaptive", path, clear));
+    EXPECT_EQ("/patterns/19 Itsyourmove (E) (C NW).thr", path);
+    EXPECT_EQ("adaptive", clear);
+}
+
+TEST(ParseRunArgs, SurroundingWhitespaceTrimmed) {
+    std::string path, clear;
+    EXPECT_TRUE(parse_run_args("  /patterns/a b.thr   clear=in \r", path, clear));
+    EXPECT_EQ("/patterns/a b.thr", path);
+    EXPECT_EQ("in", clear);
+}
+
+// "clear" inside a filename must not be mistaken for the trailing token
+TEST(ParseRunArgs, ClearLikeFilename) {
+    std::string path, clear;
+    EXPECT_TRUE(parse_run_args("/patterns/clear_from_in_mini.thr", path, clear));
+    EXPECT_EQ("/patterns/clear_from_in_mini.thr", path);
+    EXPECT_EQ("", clear);
+}
+
+TEST(ParseRunArgs, BogusClearModePassedThroughForValidation) {
+    std::string path, clear;
+    EXPECT_TRUE(parse_run_args("/patterns/x.thr clear=bogus", path, clear));
+    EXPECT_EQ("/patterns/x.thr", path);
+    EXPECT_EQ("bogus", clear);  // caller rejects it via parse_clear_mode
+}
+
+TEST(ParseRunArgs, EmptyOrClearOnlyIsAnError) {
+    std::string path, clear;
+    EXPECT_FALSE(parse_run_args("", path, clear));
+    EXPECT_FALSE(parse_run_args("   \t ", path, clear));
+    EXPECT_FALSE(parse_run_args("clear=adaptive", path, clear));
+}

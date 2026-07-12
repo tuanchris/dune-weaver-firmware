@@ -106,4 +106,27 @@ namespace PlaylistParse {
         }
         return false;
     }
+
+    bool parse_run_args(const std::string& value, std::string& path, std::string& clear_mode) {
+        path.clear();
+        clear_mode.clear();
+
+        size_t end = value.find_last_not_of(" \t\r");
+        if (end == std::string::npos) {
+            return false;
+        }
+        size_t begin = value.find_first_not_of(" \t\r");
+
+        size_t last_ws = value.find_last_of(" \t", end);
+        size_t tok     = last_ws == std::string::npos || last_ws < begin ? begin : last_ws + 1;
+        if (value.compare(tok, 6, "clear=") == 0) {
+            clear_mode = value.substr(tok + 6, end - (tok + 6) + 1);
+            if (tok == begin) {
+                return false;  // "clear=<mode>" with no path
+            }
+            end = value.find_last_not_of(" \t\r", last_ws);
+        }
+        path = value.substr(begin, end - begin + 1);
+        return true;
+    }
 }

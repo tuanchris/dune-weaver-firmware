@@ -83,9 +83,14 @@ class Soak:
         self.last_ok = time.time()  # any successful request, any thread
         self.counters = {"requests": 0, "failures": 0, "patterns": 0,
                          "scans": 0, "led": 0, "pauses": 0, "reboots": 0,
-                         "storm_aborts": 0}
+                         "storm_aborts": 0, "no_start": 0}
         self.lock = threading.Lock()
         self.patterns = []
+        # A no-start can be a lost request (storm window), but a pattern that
+        # never starts across the whole run is a firmware bug (e.g. the
+        # spaced-filename truncation in $Sand/Run) — that fails the gate.
+        self.no_start_names = set()
+        self.started_names = set()
         self.heap_largest_samples = []
 
     def log(self, level, msg):
@@ -161,6 +166,7 @@ class Soak:
             st = self.get_json("/sand_status")
             if st and st.get("running"):
                 n = self.counters["patterns"] = self.counters["patterns"] + 1
+                self.started_names.add(p)
                 self.log("INFO", f"pattern {n}: {p}{clear}")
                 hold = self.p["pattern_hold_s"]
                 if not hold:
@@ -195,6 +201,8 @@ class Soak:
                     else:
                         self.get("/sand_stop")
             else:
+                self.counters["no_start"] += 1
+                self.no_start_names.add(p)
                 self.log("WARN", f"pattern did not start: {p}{clear}")
 
     def chaos(self):
@@ -350,12 +358,17 @@ class Soak:
             self.get("/sand_stop")
             self.get("/sand_feed?d=reset")
         self.heap_trend_verdict()
+        never = sorted(self.no_start_names - self.started_names)
+        if never:
+            self.log("ALERT", f"{len(never)} pattern(s) never started all run: "
+                              + ", ".join(never[:5])
+                              + ("..." if len(never) > 5 else ""))
         c = self.counters
         verdict = "FAIL" if ALERTS else "CLEAN"
         self.log("INFO", f"soak end [{verdict}] [{self.profile}]: {c['requests']} requests "
                          f"({c['failures']} failed), {c['patterns']} patterns, "
                          f"{c['scans']} scans, {c['led']} led, {c['pauses']} pauses, "
-                         f"{c['storm_aborts']} storm aborts, "
+                         f"{c['storm_aborts']} storm aborts, {c['no_start']} no-starts, "
                          f"{c['reboots']} reboots, {len(ALERTS)} alerts")
         return 1 if ALERTS else 0
 

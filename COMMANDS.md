@@ -70,7 +70,9 @@ curl "$B/command?plain=\$SD/Run=/patterns/star.thr"
 # Run with a pre-execution clear (clear sequenced first, then the pattern)
 #   clear = none | adaptive | in | out | sideway | random   (adaptive picks in/out
 #   from the pattern's first rho).  Needs a playlist: config section.
+#   Filenames may contain spaces (%20 in the URL); clear= must be the LAST token.
 curl "$B/command?plain=\$Sand/Run=/patterns/star.thr%20clear=adaptive"
+curl "$B/command?plain=\$Sand/Run=/patterns/13b%20Battlesbury%20(C%20C).thr%20clear=adaptive"
 
 # Clean stop (decel to Idle, keeps position, no re-home needed).
 # Stops the WHOLE sequence: if a pre-execution clear or a playlist is running,

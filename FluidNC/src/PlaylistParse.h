@@ -54,4 +54,13 @@ namespace PlaylistParse {
     // CLEAR_* value.  Returns false (leaving mode untouched) for an empty or
     // unrecognized name so callers can report a usage error.
     bool parse_clear_mode(const char* name, int& mode);
+
+    // Split a $Sand/Run value into the pattern path and optional clear mode.
+    // Filenames may contain spaces ("/patterns/13b Battlesbury (C C).thr"),
+    // so the path is NOT the first token: the optional "clear=<mode>" must be
+    // the LAST whitespace-delimited token, and everything before it, trimmed,
+    // is the path.  Returns false when no path remains (empty value, or a
+    // bare "clear=<mode>").  clear_mode is left empty when the token is
+    // absent; its value is not validated here (see parse_clear_mode).
+    bool parse_run_args(const std::string& value, std::string& path, std::string& clear_mode);
 }
