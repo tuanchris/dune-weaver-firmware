@@ -10,6 +10,11 @@ namespace WebUI {
     class Mdns : public Module {
         static EnumSetting* _enable;
 
+        // mDNS runs whenever WiFi is up -- STA (home network) or AP (hotspot).
+        // Upstream gated this to STA; the sand table's hotspot is a primary
+        // mode, so the table must stay discoverable + identity-taggable there.
+        static bool active();
+
     public:
         Mdns(const char* name) : Module(name) {}
 

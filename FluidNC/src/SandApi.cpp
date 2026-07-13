@@ -326,6 +326,7 @@ std::string SandApi::statusJson() {
         d.playlist_pause_remaining   = rs.pause_remaining;
         d.playlist_pause_total       = rs.pause_total;
         d.playlist_name              = rs.name;
+        d.playlist_next              = rs.next;
         d.playlist_clearing          = rs.clearing;
         d.quiet                      = rs.quiet;
     }
@@ -482,7 +483,8 @@ std::string SandApi::settingsJson() {
         "LED/Direction",   "LED/Align",      "LED/BallSize",
         "LED/BallBg",      "LED/BallBright", "LED/BallBgBright",
         "Playlist/Mode",   "Playlist/Shuffle", "Playlist/PauseTime",    "Playlist/PauseFromStart",
-        "Playlist/ClearPattern", "Playlist/AutoHome", "Playlist/Autostart",
+        "Playlist/ClearPattern", "Playlist/ClearIn", "Playlist/ClearOut", "Playlist/ClearSpeed",
+        "Playlist/AutoHome", "Playlist/Autostart",
         "Playlist/AutostartMode", "Playlist/AutostartShuffle", "Playlist/AutostartPause",
         "Playlist/AutostartPauseFromStart", "Playlist/AutostartClear",
         "Sands/Enabled",   "Sands/Slots",   "Sands/LedOff",   "Sands/FinishPattern",

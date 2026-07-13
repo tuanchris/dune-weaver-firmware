@@ -8,10 +8,15 @@
 namespace WebUI {
     EnumSetting* Mdns::_enable;
 
+    bool Mdns::active() {
+        auto mode = WiFi.getMode();
+        return _enable && _enable->get() && (mode == WIFI_STA || mode == WIFI_AP || mode == WIFI_AP_STA);
+    }
+
     void Mdns::init() {
         _enable = new EnumSetting("mDNS enable", WEBSET, WA, NULL, "MDNS/Enable", true, &onoffOptions);
 
-        if (WiFi.getMode() == WIFI_STA && _enable->get()) {
+        if (active()) {
             if (mdns_init()) {
                 log_error("Cannot start mDNS");
                 return;
@@ -29,17 +34,17 @@ namespace WebUI {
         mdns_free();
     }
     void Mdns::add(const char* service, const char* proto, int port) {
-        if (WiFi.getMode() == WIFI_STA && _enable->get()) {
+        if (active()) {
             mdns_service_add(NULL, service, proto, port, NULL, 0);
         }
     }
     void Mdns::addTxt(const char* service, const char* proto, const char* key, const char* value) {
-        if (WiFi.getMode() == WIFI_STA && _enable->get()) {
+        if (active()) {
             mdns_service_txt_item_set(service, proto, key, value);
         }
     }
     void Mdns::remove(const char* service, const char* proto) {
-        if (WiFi.getMode() == WIFI_STA && _enable->get()) {
+        if (active()) {
             mdns_service_remove(service, proto);
         }
     }

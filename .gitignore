@@ -41,3 +41,5 @@ __pycache__/
 .pytest_cache/
 # soak/torture harness output (point-in-time logs, never committed)
 soak/logs/
+# per-table configs + backups (device-specific, never committed)
+dwg_configs/

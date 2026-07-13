@@ -69,7 +69,7 @@ curl "$B/command?plain=\$SD/Run=/patterns/star.thr"
 
 # Run with a pre-execution clear (clear sequenced first, then the pattern)
 #   clear = none | adaptive | in | out | sideway | random   (adaptive picks in/out
-#   from the pattern's first rho).  Needs a playlist: config section.
+#   from the pattern's first rho, never sideway).  Needs a playlist: config section.
 #   Filenames may contain spaces (%20 in the URL); clear= must be the LAST token.
 curl "$B/command?plain=\$Sand/Run=/patterns/star.thr%20clear=adaptive"
 curl "$B/command?plain=\$Sand/Run=/patterns/13b%20Battlesbury%20(C%20C).thr%20clear=adaptive"
@@ -279,7 +279,10 @@ curl "$B/command?plain=\$Playlist/Mode=loop"                 # single | loop
 curl "$B/command?plain=\$Playlist/Shuffle=ON"               # ON | OFF
 curl "$B/command?plain=\$Playlist/PauseTime=30"             # seconds between patterns
 curl "$B/command?plain=\$Playlist/PauseFromStart=ON"        # measure cadence from start
-curl "$B/command?plain=\$Playlist/ClearPattern=adaptive"    # none|adaptive|in|out|sideway|random
+curl "$B/command?plain=\$Playlist/ClearPattern=adaptive"    # none|adaptive|in|out|sideway|random (adaptive picks in/out, never sideway)
+curl "$B/command?plain=\$Playlist/ClearIn=/patterns/clear_from_in.thr"    # clear-from-in file; empty = config default
+curl "$B/command?plain=\$Playlist/ClearOut=/patterns/clear_from_out.thr"  # clear-from-out file; empty = config default
+curl "$B/command?plain=\$Playlist/ClearSpeed=800"          # feed (motor mm/min) for clear moves; 0 = use $THR/Feed
 curl "$B/command?plain=\$Playlist/AutoHome=10"              # home every n patterns (0=off; honors $Sand/HomingMode + ThetaOffset)
 curl "$B/command?plain=\$Playlist/Autostart=evening"       # auto-run /playlists/evening.txt on boot
 curl "$B/command?plain=\$Playlist/Autostart="             # (empty) disable auto-play on boot
@@ -372,6 +375,25 @@ curl -F "firmware.binS=$(wc -c < .pio/build/sandtable/firmware.bin)" \
 curl "$B/command?plain=\$Bye"             # reboot (board needs ~25-30s to rejoin WiFi)
 curl "$B/command?plain=\$/macros/startup_line0"   # read a config value at runtime
 #   NOTE: $/path=value runtime changes are NOT persisted; edit config.yaml to persist.
+```
+
+---
+
+## Lock (API password, off by default)
+
+When `$Sand/Password` is set, **control** routes need the key (`?key=` or an
+`X-Sand-Key` header) and answer **401** without it; **reads stay open**
+(`/sand_status`, `/sand_patterns`, logs, `/wifi_status`, file downloads). Telnet
+refuses clients while locked; ArduinoOTA needs the same password (applies on next
+boot). Serial over USB is never gated — that's the recovery path. Full route
+split: API.md → "Security / constraints".
+
+```bash
+curl "$B/command?plain=\$Sand/Password=hunter2"   # set (idle-gated; last open call)
+curl "$B/sand_home?key=hunter2"                   # key as query arg
+curl -H "X-Sand-Key: hunter2" "$B/command?plain=\$Sand/Status"   # key as header
+curl "$B/command?plain=\$Sand/Password=&key=hunter2"             # clear the lock
+# forgot it? over USB serial: $Sand/Password       (prints it; or =...  to reset)
 ```
 
 ---

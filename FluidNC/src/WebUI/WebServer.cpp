@@ -36,6 +36,8 @@
 #include "src/RingLog.h"     // RingLog::dump() for /sand_log
 #include "src/Job.h"         // Job::active() to gate OTA while a pattern runs
 #include "src/Report.h"      // git_info for the /updatefw response
+#include "src/SettingsDefinitions.h"  // sand_password ($Sand/Password API lock)
+#include <esp_task_wdt.h>             // feed the WDT during long /sd/ file streams
 
 #include "src/HashFS.h"
 #include <list>
@@ -117,6 +119,28 @@ namespace WebUI {
 
         //create instance
         _webserver = new WebServer(_port);
+
+        // Low-heap guard (DW fork): when free heap drops under the floor,
+        // requests get a cheap 503 "busy: low memory" instead of running a
+        // handler that would stall the single-threaded server mid-allocation
+        // (observed: heap dips to ~7 KB during boot auto-play wedged /command
+        // writes and then the whole server).  The floor sits under the 15 KB
+        // heapWarnThreshold so it only trips in genuinely dangerous territory.
+        // Exemptions keep the app's lifeline and the safety controls working:
+        // the ~1 Hz status poll, and stop/pause/resume (trivial handlers that
+        // just post a protocol event).
+        _webserver->setLowHeapGuard(10000, [](const String& uri) {
+            return uri == "/sand_status" || uri == "/sand_stop" || uri == "/sand_pause" || uri == "/sand_resume";
+        });
+        // Request trace, debug level only ($Message/Level=Debug to enable):
+        // every request logged with the heap state.  This is the tool that
+        // found the 2026-07-12 preview-sync crash (dead clients grinding the
+        // send path) -- silent in normal operation, priceless when hunting a
+        // heap drain or a wedge, so it stays behind the debug gate.
+        _webserver->onRequestTrace([](const char* uri) {
+            log_debug("http " << uri << " heap " << xPortGetFreeHeapSize() << " big "
+                              << heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        });
 #ifdef ENABLE_AUTHENTICATION
         //here the list of headers to be recorded
         const char* headerkeys[]   = { "Cookie" };
@@ -126,7 +150,7 @@ namespace WebUI {
 #endif
 
         //here the list of headers to be recorded
-        const char* headerkeys[]   = { "If-None-Match" };
+        const char* headerkeys[]   = { "If-None-Match", "X-Sand-Key" };
         size_t      headerkeyssize = sizeof(headerkeys) / sizeof(char*);
         _webserver->collectHeaders(headerkeys, headerkeyssize);
 
@@ -375,11 +399,38 @@ namespace WebUI {
         }
         _webserver->send(200, getContentType(path), "");
 
-        // This depends on the fact that FileStream inherits from Stream
-        // The Arduino implementation of WiFiClient::write(Stream*) just
-        // reads repetitively from the stream in 1360-byte chunks and
-        // sends the data over the TCP socket. so nothing special.
-        _webserver->client().write(*file);
+        // Stream the file in explicit chunks instead of the opaque
+        // WiFiClient::write(Stream&) loop.  Two reasons, both learned from
+        // the app's preview sync pulling multi-hundred-KB /sd/ files while a
+        // pattern ran:
+        //  - a transfer that is making real progress can legitimately take
+        //    longer than the 120 s task WDT (SD contention + WiFi pacing),
+        //    and the whole response runs inside the poller task -- feed the
+        //    WDT per chunk so "slow but alive" is not a panic;
+        //  - a client that stalls or vanishes mid-download must end the
+        //    transfer at the FIRST short write, not burn a full send-wait on
+        //    every remaining chunk.
+        {
+            static char buf[1360];
+            WiFiClient  out       = _webserver->client();
+            size_t      remaining = file->size();
+            uint32_t    chunks    = 0;
+            while (remaining) {
+                size_t want = remaining < sizeof(buf) ? remaining : sizeof(buf);
+                size_t n    = file->readBytes(buf, want);
+                if (!n) {
+                    break;  // short file / SD read error; nothing more to send
+                }
+                if (out.write(reinterpret_cast<const uint8_t*>(buf), n) != n) {
+                    break;  // client stalled or gone; stop paying for it
+                }
+                remaining -= n;
+                esp_task_wdt_reset();
+                if ((++chunks & 63) == 0) {
+                    delay(1);  // let IDLE/lwip breathe on very long transfers
+                }
+            }
+        }
 
         delete file;
         return true;
@@ -461,7 +512,10 @@ namespace WebUI {
                          "Run/playlist, LED & everything else: GET /command?plain=$...\n"
                          "  $SD/Run=/patterns/star.thr | $Playlist/Run=<name>\n"
                          "  $Sand/Run=/patterns/star.thr clear=adaptive  (clear then run)\n"
-                         "  $LED/Effect=rainbow | $LED/Brightness=80   (needs leds: in config)\n");
+                         "  $LED/Effect=rainbow | $LED/Brightness=80   (needs leds: in config)\n"
+                         "\n"
+                         "Lock: $Sand/Password=<pw> makes control routes need ?key=<pw> or an\n"
+                         "X-Sand-Key header (401 without); reads above stay open. Empty = off.\n");
     }
 
     // Handle filenames and other things that are not explicitly registered
@@ -547,6 +601,40 @@ namespace WebUI {
     }
 #endif
 
+    // ---- Sand API password ($Sand/Password) --------------------------------
+    // Empty (default) = open, exactly as before.  Non-empty locks the CONTROL
+    // routes only -- reads (/sand_status, /sand_patterns, logs, /wifi_status)
+    // stay open so pollers keep working without the key.  The key rides
+    // ?key=<pw> or an X-Sand-Key header (collected above).  Serial is never
+    // gated; telnet (TelnetServer.cpp) and ArduinoOTA (OTA.cpp) honor the
+    // same setting, or the HTTP lock would be trivially bypassed on the LAN.
+    bool Web_Server::sandKeyOk() {
+        const char* pw = sand_password ? sand_password->get() : "";
+        if (!pw || !*pw) {
+            return true;
+        }
+        String supplied = _webserver->header("X-Sand-Key");
+        if (supplied.length() == 0) {
+            supplied = _webserver->arg("key");
+        }
+        // Constant-time compare: don't leak the match length through timing.
+        size_t  pl   = strlen(pw);
+        size_t  sl   = supplied.length();
+        uint8_t diff = (pl == sl) ? 0 : 1;
+        for (size_t i = 0; i < pl; ++i) {
+            diff |= (uint8_t)pw[i] ^ (uint8_t)(i < sl ? supplied[i] : 0);
+        }
+        return diff == 0;
+    }
+
+    bool Web_Server::requireSandKey() {
+        if (sandKeyOk()) {
+            return true;
+        }
+        sendStatus(401, "password required (send ?key= or X-Sand-Key)");
+        return false;
+    }
+
     // WebUI sends a PAGEID arg to identify the websocket it is using
     int Web_Server::getPageid() {
         if (_webserver->hasArg("PAGEID")) {
@@ -589,6 +677,9 @@ namespace WebUI {
         _webserver->send(hasError ? 500 : 200, "text/plain", hasError ? "WebSocket dead" : "");
     }
     void Web_Server::_handle_web_command(bool silent) {
+        if (!requireSandKey()) {  // $ commands are the whole control surface
+            return;
+        }
         AuthenticationLevel auth_level = is_authenticated();
         if (_webserver->hasArg("cmd")) {  // WebUI3
 
@@ -803,6 +894,9 @@ namespace WebUI {
     }
     // This page issues a feedhold to pause the motion then retries the WebUI reload
     void Web_Server::handleFeedholdReload() {
+        if (!requireSandKey()) {
+            return;
+        }
         protocol_send_event(&feedHoldEvent);
         //        delay(100);
         //        delay(100);
@@ -812,6 +906,9 @@ namespace WebUI {
     }
     // This page issues a feedhold to pause the motion then retries the WebUI reload
     void Web_Server::handleCyclestartReload() {
+        if (!requireSandKey()) {
+            return;
+        }
         protocol_send_event(&cycleStartEvent);
         //        delay(100);
         //        delay(100);
@@ -821,6 +918,9 @@ namespace WebUI {
     }
     // This page issues a feedhold to pause the motion then retries the WebUI reload
     void Web_Server::handleRestartReload() {
+        if (!requireSandKey()) {
+            return;
+        }
         protocol_send_event(&rtResetEvent);
         //        delay(100);
         //        delay(100);
@@ -931,6 +1031,12 @@ namespace WebUI {
     }
 
     void Web_Server::handleWifiSave() {
+        // The fallback provisioning AP is exempt: the captive portal page has
+        // no key field, and joining that AP already implies proximity.  In
+        // STA/standalone modes, changing the WiFi config is a control op.
+        if (!wifi_ap_is_fallback() && !requireSandKey()) {
+            return;
+        }
         std::string ssid(_webserver->arg("ssid").c_str());
         std::string password(_webserver->arg("password").c_str());
         if (ssid.empty() || ssid.length() > 32) {
@@ -971,6 +1077,9 @@ namespace WebUI {
     }
 
     void Web_Server::handleWifiStandalone() {
+        if (!wifi_ap_is_fallback() && !requireSandKey()) {  // see handleWifiSave
+            return;
+        }
         // From STA mode the radio has to switch, which needs a restart; from
         // the (already-up) AP the switch is live and the phone stays joined.
         bool needReboot = WiFi.getMode() == WIFI_STA;
@@ -999,6 +1108,9 @@ namespace WebUI {
 
     // Sand-table UI: clean stop (keeps position, no re-home) - see Cmd::StopJob.
     void Web_Server::handleSandStop() {
+        if (!requireSandKey()) {
+            return;
+        }
         // Stop the clear->pattern / playlist sequence first, so the state
         // machine goes Off instead of treating the aborted job's return to
         // Idle as normal completion and advancing to the pattern / next item.
@@ -1014,6 +1126,9 @@ namespace WebUI {
     // positioning between patterns: /sand_goto?theta=<rad>&rho=<0..1> (either or
     // both).  Requires idle (no pattern running); the jog runs in the main loop.
     void Web_Server::handleSandGoto() {
+        if (!requireSandKey()) {
+            return;
+        }
         bool  hasTheta = _webserver->hasArg("theta");
         bool  hasRho   = _webserver->hasArg("rho");
         float theta    = hasTheta ? _webserver->arg("theta").toFloat() : 0.0f;
@@ -1028,6 +1143,9 @@ namespace WebUI {
         }
     }
     void Web_Server::handleSandHome() {
+        if (!requireSandKey()) {
+            return;
+        }
         protocol_send_event(&startHomeEvent);
         _webserver->send(200, "text/plain", "ok");
     }
@@ -1036,10 +1154,16 @@ namespace WebUI {
     // event to the main loop (feed hold / cycle start), so they work mid-motion
     // and never touch the block-during-motion gate or any WebSocket.
     void Web_Server::handleSandPause() {
+        if (!requireSandKey()) {
+            return;
+        }
         protocol_send_event(&feedHoldEvent);
         _webserver->send(200, "text/plain", "ok");
     }
     void Web_Server::handleSandResume() {
+        if (!requireSandKey()) {
+            return;
+        }
         protocol_send_event(&cycleStartEvent);
         _webserver->send(200, "text/plain", "ok");
     }
@@ -1135,6 +1259,9 @@ namespace WebUI {
     void Web_Server::handleSandCoredump() {
         _webserver->sendHeader("Cache-Control", "no-store");
         if (_webserver->hasArg("erase")) {
+            if (!requireSandKey()) {  // reading the dump is open; erasing is not
+                return;
+            }
             esp_err_t err = esp_core_dump_image_erase();
             sendStatus(err == ESP_OK ? 200 : 500, err == ESP_OK ? "erased" : "erase failed");
             return;
@@ -1193,6 +1320,10 @@ namespace WebUI {
     //   GET /sand_time?tz=<POSIX>            -> set + persist the timezone
     void Web_Server::handleSandTime() {
         _webserver->sendHeader("Cache-Control", "no-store");
+        // Reading the clock is open; setting it (epoch/tz) is a control op.
+        if ((_webserver->hasArg("tz") || _webserver->hasArg("epoch")) && !requireSandKey()) {
+            return;
+        }
         if (_webserver->hasArg("tz")) {
             Clock::setTz(_webserver->arg("tz").c_str());
         }
@@ -1212,6 +1343,9 @@ namespace WebUI {
     // mm sets the actual speed ($THR/Feed) directly; pct scales it. Both are
     // reported back by /sand_status (feed, feed_override).
     void Web_Server::handleSandFeed() {
+        if (!requireSandKey()) {
+            return;
+        }
         if (_webserver->hasArg("mm")) {
             if (Kinematics::ThetaRho::setFeedLive(_webserver->arg("mm").toInt()) != Error::Ok) {
                 _webserver->send(400, "text/plain", "mm out of range (0..100000)");
@@ -1239,6 +1373,9 @@ namespace WebUI {
     // Sand-table UI: live LED control (works mid-pattern, no flash write).
     //   /sand_led?effect=fire&palette=ocean&brightness=120&color=FF0000&speed=80
     void Web_Server::handleSandLed() {
+        if (!requireSandKey()) {
+            return;
+        }
         _webserver->sendHeader("Cache-Control", "no-store");
         Leds* leds = Leds::instance();
         if (!leds) {
@@ -1312,7 +1449,7 @@ namespace WebUI {
     void Web_Server::fileUpload(const char* fs) {
         HTTPUpload& upload = _webserver->upload();
         //this is only for admin and user
-        if (is_authenticated() == AuthenticationLevel::LEVEL_GUEST) {
+        if (is_authenticated() == AuthenticationLevel::LEVEL_GUEST || !sandKeyOk()) {
             _upload_status = UploadStatus::FAILED;
             log_info("Upload rejected");
             recordUploadError(ESP_ERROR_AUTHENTICATION, "authentication failed");
@@ -1396,6 +1533,10 @@ namespace WebUI {
             _webserver->send(403, "text/plain", "Not allowed, log in first!\n");
             return;
         }
+        if (!requireSandKey()) {  // firmware flash is the most privileged op
+            _upload_status = UploadStatus::NONE;
+            return;
+        }
 
         // App contract ("status"): "ok" -> flashed, board reboots ~1s later
         // (poll /sand_status until uptime resets and "fw" shows the new
@@ -1428,7 +1569,7 @@ namespace WebUI {
         static uint32_t maxSketchSpace = 0;
 
         //only admin can update FW
-        if (is_authenticated() != AuthenticationLevel::LEVEL_ADMIN) {
+        if (is_authenticated() != AuthenticationLevel::LEVEL_ADMIN || !sandKeyOk()) {
             _upload_status = UploadStatus::FAILED;
             log_info("Upload rejected");
             sendAuthFailed();
@@ -1526,7 +1667,7 @@ namespace WebUI {
 
     void Web_Server::handleFileOps(const char* fs) {
         //this is only for admin and user
-        if (is_authenticated() == AuthenticationLevel::LEVEL_GUEST) {
+        if (is_authenticated() == AuthenticationLevel::LEVEL_GUEST || !sandKeyOk()) {
             _upload_status = UploadStatus::NONE;
             sendAuthFailed();
             return;

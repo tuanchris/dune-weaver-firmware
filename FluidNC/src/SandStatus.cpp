@@ -98,6 +98,8 @@ namespace SandStatus {
         append_int(o, d.playlist_total);
         o += ',';
         member_str(o, "name", d.playlist_name.c_str());
+        o += ',';
+        member_str(o, "next", d.playlist_next.c_str());  // truthful "up next" (shuffle-aware); "" = unknown
         o += ",\"clearing\":";
         o += d.playlist_clearing ? "true" : "false";
         o += ",\"quiet\":";

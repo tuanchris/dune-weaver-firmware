@@ -50,6 +50,23 @@ TEST(ParsePlaylist, PatternNamesWithSpaces) {
     EXPECT_EQ("/patterns/03 pnuttrellis (E) (N N).thr", items[0]);
 }
 
+TEST(CleanLine, TrimsCommentsAndAddsLeadingSlash) {
+    EXPECT_EQ("/patterns/star.thr", clean_line("/patterns/star.thr"));
+    EXPECT_EQ("/patterns/ibex.thr", clean_line("  patterns/ibex.thr  "));            // trimmed + leading slash
+    EXPECT_EQ("/patterns/spiral.thr", clean_line("/patterns/spiral.thr  # the good one"));  // comment stripped
+}
+
+TEST(CleanLine, BlankOrCommentOnlyIsEmpty) {
+    EXPECT_EQ("", clean_line(""));
+    EXPECT_EQ("", clean_line("   \t\r"));
+    EXPECT_EQ("", clean_line("# comment only"));
+    EXPECT_EQ("", clean_line("   # indented comment"));
+}
+
+TEST(CleanLine, KeepsSpacesInsideFilename) {
+    EXPECT_EQ("/patterns/03 pnuttrellis (E) (N N).thr", clean_line("patterns/03 pnuttrellis (E) (N N).thr"));
+}
+
 TEST(FirstRho, SimplePattern) {
     EXPECT_FLOAT_EQ(0.25f, first_rho("1.5 0.25\n2.0 0.5\n"));
 }
@@ -101,10 +118,13 @@ TEST(ChooseClear, AdaptiveMatchesDuneWeaverPolicy) {
     EXPECT_EQ(Clear::FromIn, choose_clear(CLEAR_ADAPTIVE, 1.0f, 0));
 }
 
-TEST(ChooseClear, AdaptiveUnknownRhoFallsBackToRandom) {
-    EXPECT_EQ(Clear::FromIn, choose_clear(CLEAR_ADAPTIVE, -1.0f, 0));
-    EXPECT_EQ(Clear::FromOut, choose_clear(CLEAR_ADAPTIVE, -1.0f, 1));
-    EXPECT_EQ(Clear::Sideway, choose_clear(CLEAR_ADAPTIVE, -1.0f, 2));
+TEST(ChooseClear, AdaptiveUnknownRhoPicksRadialClearNeverSideway) {
+    // Unknown rho falls back to a random pick, but adaptive only ever uses
+    // the two radial clears -- the sideway clear is never chosen here.
+    EXPECT_EQ(Clear::FromOut, choose_clear(CLEAR_ADAPTIVE, -1.0f, 0));
+    EXPECT_EQ(Clear::FromIn, choose_clear(CLEAR_ADAPTIVE, -1.0f, 1));
+    EXPECT_EQ(Clear::FromOut, choose_clear(CLEAR_ADAPTIVE, -1.0f, 2));
+    EXPECT_EQ(Clear::FromIn, choose_clear(CLEAR_ADAPTIVE, -1.0f, 3));
 }
 
 TEST(ParseClearMode, KnownNamesCaseInsensitive) {

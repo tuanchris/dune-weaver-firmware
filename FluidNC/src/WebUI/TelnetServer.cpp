@@ -6,7 +6,8 @@
 #include "TelnetServer.h"
 
 #include "Mdns.h"
-#include "src/Report.h"  // report_init_message()
+#include "src/Report.h"               // report_init_message()
+#include "src/SettingsDefinitions.h"  // sand_password ($Sand/Password API lock)
 
 #include <WiFi.h>
 
@@ -76,6 +77,16 @@ namespace WebUI {
             WiFiClient* tcpClient = new WiFiClient(_wifiServer->available());
             if (!tcpClient) {
                 log_error("Creating telnet client failed");
+            }
+            // $Sand/Password: telnet has no key mechanism and would bypass
+            // the HTTP lock entirely, so a locked table refuses telnet
+            // clients.  USB serial stays open for recovery.
+            if (sand_password && *sand_password->get()) {
+                log_info("Telnet from " << tcpClient->remoteIP() << " refused ($Sand/Password is set)");
+                tcpClient->print("access denied: $Sand/Password is set; use HTTP with the key, or USB serial\r\n");
+                tcpClient->stop();
+                delete tcpClient;
+                return;
             }
             log_debug("Telnet from " << tcpClient->remoteIP());
             TelnetClient* tnc = new TelnetClient(tcpClient);

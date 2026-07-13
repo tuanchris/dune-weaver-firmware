@@ -125,6 +125,21 @@ public:
   unsigned long lastHandledMillis() const { return _lastHandledMs; }
   bool hasPendingClient() { return _server.hasClient(); }
   void restartListener(); // flush a rotted accept queue; handlers survive
+
+  // DW fork: low-heap guard. When free heap is below floorBytes, requests are
+  // answered 503 before their handler runs (a handler whose allocations fail
+  // mid-flight stalls the single-threaded server and queued clients pin even
+  // more memory). exempt(uri) returning true bypasses the guard for cheap
+  // must-work routes (status poll, stop). floorBytes 0 disables (default).
+  void setLowHeapGuard(uint32_t floorBytes, bool (*exempt)(const String& uri)) {
+    _lowHeapFloor = floorBytes;
+    _lowHeapExempt = exempt;
+  }
+
+  // DW fork: per-request trace hook, called at the top of _handleRequest()
+  // (before the low-heap guard, so shed requests are traced too).  Diagnosis
+  // aid for heap-drain hunts: the FluidNC side logs uri + heap per request.
+  void onRequestTrace(void (*fn)(const char* uri)) { _onRequestTrace = fn; }
   HTTPUpload& upload() { return *_currentUpload; }
   HTTPRaw& raw() { return *_currentRaw; }
 
@@ -177,11 +192,30 @@ public:
   }
 
 protected:
-  virtual size_t _currentClientWrite(const char* b, size_t l) { return _currentClient.write( b, l ); }
-  virtual size_t _currentClientWrite_P(PGM_P b, size_t l) { return _currentClient.write_P( b, l ); }
+  // DW fork: abort the client on a short/failed write.  WiFiClient::write
+  // already blocks up to HTTP_MAX_SEND_WAIT waiting for the reader; a short
+  // return means the client stalled or vanished mid-response (e.g. the app
+  // cancelling a preview download).  Without this, EVERY remaining chunk of
+  // the response burns another full send-wait on the same dead socket -- a
+  // 50 KB chunked response = minutes of blockage in the single-threaded
+  // poller (observed: 30 s deaf spells via the stall watchdog, and a 120 s
+  // task-WDT panic).  RST (not FIN) is correct mid-response: the response is
+  // already broken and linger-0 skips TIME_WAIT.  After stop(), the write
+  // calls of the rest of the response return immediately.
+  virtual size_t _currentClientWrite(const char* b, size_t l) {
+    size_t w = _currentClient.write( b, l );
+    if (w != l) { _abortDeadClient(); }
+    return w;
+  }
+  virtual size_t _currentClientWrite_P(PGM_P b, size_t l) {
+    size_t w = _currentClient.write_P( b, l );
+    if (w != l) { _abortDeadClient(); }
+    return w;
+  }
   void _addRequestHandler(RequestHandler* handler);
   void _handleRequest();
   void _lingerAbort(); // DW fork: RST-close the current client (abort paths only)
+  void _abortDeadClient(); // DW fork: RST + stop a client that stalled mid-response
   void _finalizeResponse();
   bool _parseRequest(WiFiClient& client);
   void _parseArguments(String data);
@@ -214,6 +248,9 @@ protected:
   HTTPClientStatus _currentStatus;
   unsigned long _statusChange;
   unsigned long _lastHandledMs; // DW fork: see lastHandledMillis()
+  uint32_t    _lowHeapFloor = 0;                            // DW fork: see setLowHeapGuard()
+  bool        (*_lowHeapExempt)(const String& uri) = nullptr; // DW fork
+  void        (*_onRequestTrace)(const char* uri) = nullptr;  // DW fork: see onRequestTrace()
   boolean     _nullDelay;
 
   RequestHandler*  _currentHandler;

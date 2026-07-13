@@ -93,7 +93,7 @@ reliably over the (single-client) WebSocket. Pattern/playlist **contents** are f
 | Command | Action |
 |---------|--------|
 | `$SD/Run=/patterns/<file>.thr` | run a pattern (`.thr` translated on the fly by ThetaRho kinematics) |
-| `$Sand/Run=/patterns/<file>.thr [clear=<mode>]` | run a pattern, optionally preceded by a clear ("pre-execution"). `clear=none\|adaptive\|in\|out\|sideway\|random` (default none); `adaptive` picks in/out from the pattern's first rho. Sequenced by the firmware (clear→pattern, then stop); aborts any running job first. Requires a `playlist:` config section (the clear files live there). Filenames may contain spaces; `clear=` must be the **last** token (everything before it is the path). |
+| `$Sand/Run=/patterns/<file>.thr [clear=<mode>]` | run a pattern, optionally preceded by a clear ("pre-execution"). `clear=none\|adaptive\|in\|out\|sideway\|random` (default none); `adaptive` picks in/out from the pattern's first rho (never sideway). Clear moves honor `$Playlist/ClearSpeed` (0 = same as `$THR/Feed`) and the `$Playlist/ClearIn\|ClearOut` file overrides. Sequenced by the firmware (clear→pattern, then stop); aborts any running job first. Requires a `playlist:` config section (the clear files live there). Filenames may contain spaces; `clear=` must be the **last** token (everything before it is the path). |
 | `$SD/Show=/patterns/<file>.thr` | dump file contents (preview; requires Idle/Alarm) |
 | `$Playlist/Run=<name>` | run playlist `/playlists/<name>.txt` |
 | `$Playlist/Stop` | stop after the current pattern |
@@ -136,7 +136,10 @@ live control during a pattern use:
 
 ### Playlist / quiet-hours settings (NVS)
 `$Playlist/Mode=single|loop` · `$Playlist/Shuffle=ON|OFF` · `$Playlist/PauseTime=<sec>` ·
-`$Playlist/PauseFromStart=ON|OFF` · `$Playlist/ClearPattern=none|adaptive|in|out|sideway|random` ·
+`$Playlist/PauseFromStart=ON|OFF` · `$Playlist/ClearPattern=none|adaptive|in|out|sideway|random`
+(`adaptive` chooses in/out only, never sideway) ·
+`$Playlist/ClearIn=<sd path>` · `$Playlist/ClearOut=<sd path>` (clear-from-in/-out pattern files;
+empty = the `playlist:` config default) · `$Playlist/ClearSpeed=<mm/min>` (feed for clear moves; 0 = use `$THR/Feed`) ·
 `$Playlist/AutoHome=<n>` · `$Playlist/Autostart=<name>` · `$Sands/Enabled=ON|OFF` · `$Sands/Slots=HH:MM-HH:MM@days,...`
 `$Sands/LedOff=ON|OFF` (turn LEDs off during quiet hours; works headless/idle) ·
 `$Sands/FinishPattern=ON|OFF` (ON=pause between patterns/finish current [default]; OFF=feed-hold mid-pattern and resume when the window ends). Quiet hours need a set clock (`time:`/NTP).
@@ -213,7 +216,13 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   "file": "/sd/patterns/star.thr",
   "progress": 0.425,          // 0..1 fraction of executed motion, or -1 if unknown
   "playlist": { "active": true, "index": 2, "total": 10, "name": "evening",
+                "next": "/patterns/owl.thr",
                 "clearing": false, "quiet": false, "pause_remaining": -1, "pause_total": -1 },
+  //  next = the pattern the table will actually play after the current one,
+  //  resolved from the firmware's internal (possibly shuffled) order. ALWAYS use
+  //  this for an "up next" display — deriving it from the playlist file's line
+  //  order is wrong whenever shuffle is on. "" = unknown: last pattern of a loop
+  //  pass (the next pass reshuffles when it starts) — show nothing or "reshuffling".
   //  clearing=true means a pre-execution clear is running before the chosen
   //  pattern; progress then tracks the CLEAR file's own 0..1 progress (file is the
   //  clear pattern). Render it as a separate "Clearing…" bar that resets when the
@@ -281,6 +290,13 @@ filesystem full)`). Uploads create missing intermediate directories themselves; 
 firmware `fopen` won't, so clients targeting them should `createdir` first when uploading
 into a new subfolder (`createdir` on an existing dir answers 500 — treat as success).
 
+### Low-memory load shedding (any route)
+When free heap drops below ~10 KB, EVERY route except `/sand_status`, `/sand_stop`,
+`/sand_pause`, and `/sand_resume` answers **503** plain-text `busy: low memory` instead of
+running its handler (a stalled handler used to wedge the whole single-threaded server).
+Clients should back off and retry in a few seconds; the status poll keeps working so the
+app can tell the table is still alive.
+
 ## Firmware update (OTA)
 
 `POST /updatefw` multipart: field `<name>S` = size in bytes, field `<name>` = the
@@ -304,6 +320,41 @@ App auto-update flow: read `fw` from `/sand_status` → compare to latest releas
 still on an older build replies with the legacy `{"status":"<code>"}` body.
 
 ## Security / constraints
-- **No authentication** and **no CORS headers** in the `sandtable` build. Native apps are unaffected by
+
+### API password (`$Sand/Password`)
+
+Off by default (empty value = everything open, the historical behavior). Setting a
+password locks the network **control** surfaces; reads stay open so status pollers
+need no credentials.
+
+- **Set / change / clear**: `$Sand/Password=<pw>` (1–32 chars) over `/command` or
+  serial; `$Sand/Password=` clears. Idle-gated like all NVS settings. Once set,
+  changing it requires the key (it rides `/command`). USB **serial is never
+  gated** — a lost password is read or cleared over USB.
+- **Sending the key**: `?key=<pw>` query arg or `X-Sand-Key: <pw>` header on the
+  request. Wrong/missing key → **`401`** `{"status":"password required (send ?key= or
+  X-Sand-Key)"}`.
+- **Locked routes** (when a password is set): `/command`, `/command_silent`, all
+  action routes (`/sand_home|stop|pause|resume|goto|feed|led`), the
+  `/feedhold_reload`/`/cyclestart_reload`/`/restart_reload` trio, file ops + uploads
+  (`/files`, `/upload`), firmware update (`/updatefw`), `/sand_time` **with**
+  `epoch`/`tz` args, `/sand_coredump?erase=1`, and `/wifi_save`/`/wifi_standalone`
+  in STA/standalone modes (the fallback provisioning AP is exempt so the captive
+  portal keeps working).
+- **Open routes**: `/`, `/help`, `/sand_status`, `/sand_patterns`, `/sand_playlists`,
+  `/sand_settings` (never includes the password), `/sand_bootlog`, `/sand_log`,
+  `/sand_coredump` (read), `/sand_time` (read), `/wifi_status`, `/wifi_scan`, and
+  plain file downloads (e.g. `GET /config.yaml`).
+- **Telnet** (port 23) refuses clients while a password is set — it has no key
+  mechanism and would bypass the lock.
+- **ArduinoOTA** (port 3232) requires the same password (`espota --auth`); it reads
+  the setting at boot, so a password change applies to OTA after the next reboot.
+
+Scope: this is a LAN convenience lock (plain HTTP, no TLS — the key is visible to
+anyone sniffing the LAN). It keeps guests and stray scripts from driving the table;
+it is not a defense against a hostile network.
+
+### Other constraints
+- **No CORS headers** in the `sandtable` build. Native apps are unaffected by
   CORS; a browser/Electron app on another origin would need CORS added to `WebServer.cpp`.
 - WebSocket v3 is single-client; design the app to hold one connection per table.

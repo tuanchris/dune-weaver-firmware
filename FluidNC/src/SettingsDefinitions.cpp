@@ -44,6 +44,8 @@ EnumSetting* homing_mode;
 
 IntSetting* theta_offset;
 
+StringSetting* sand_password;
+
 void make_coordinate(CoordIndex index, const char* name) {
     float coord_data[MAX_N_AXIS] = { 0.0 };
     auto  coord                  = new Coordinates(name);
@@ -100,6 +102,11 @@ void make_settings() {
     // Theta zero offset in degrees (UI "Sensor Offset"); applied at home time by
     // both homing modes -- see protocol_main_loop in Protocol.cpp.
     theta_offset = new IntSetting("Theta zero offset (deg)", EXTENDED, WG, NULL, "Sand/ThetaOffset", 0, -360, 360);
+
+    // Sand API password (see SettingsDefinitions.h).  Enforced by the HTTP
+    // control routes (WebServer.cpp), telnet accept (TelnetServer.cpp) and
+    // ArduinoOTA (OTA.cpp); deliberately NOT in /sand_settings' key list.
+    sand_password = new StringSetting("API password (empty = open)", EXTENDED, WG, NULL, "Sand/Password", "", 0, 32);
 
     // Some gcode senders expect Grbl to report certain numbered settings to improve
     // their reporting. The following macros set up various legacy numbered Grbl settings,

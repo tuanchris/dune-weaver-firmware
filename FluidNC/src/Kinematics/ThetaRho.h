@@ -71,6 +71,14 @@ namespace Kinematics {
         static void  clearFeedLive();  // drop the override back to $THR/Feed (run ended)
         static int   effectiveFeed();  // live override or the persisted setting; -1 if no module
 
+        // Dedicated feed (mm/min) for the clear pattern that precedes a real
+        // pattern.  While armed (>=0) it takes precedence over the base/live
+        // feed for every .thr move, so the clear can run at its own speed; the
+        // Playlist arms it before injecting the clear job and disarms it (pass
+        // <0) the moment the clear finishes, so the pattern itself runs at the
+        // normal feed.  In-memory only, no NVS write.  Static + null-safe.
+        static void setClearFeed(int mm_per_min);
+
         // Current ball angle as a fraction of a full turn, [0,1).  Lets the
         // LED "ball" effect track the ball's angular position.  -1 if no
         // ThetaRho kinematics is configured.
@@ -102,6 +110,9 @@ namespace Kinematics {
         // write mid-motion); -1 = unset.  Cleared in end_job().
         static ThetaRho* _instance;
         static int       _live_feed;
+        // Clear-pattern feed override; -1 = unset.  Set by Playlist::setClearFeed
+        // for the duration of a clear job (see setClearFeed above).
+        static int       _clear_feed;
 
         // Per-job translation state
         std::string    _job_name;                // channel name of the active .thr job

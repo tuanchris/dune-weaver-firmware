@@ -37,6 +37,9 @@
     $Playlist/PauseTime=<sec>      wait between patterns
     $Playlist/PauseFromStart=ON|OFF  measure the cadence from pattern start
     $Playlist/ClearPattern=none|adaptive|in|out|sideway|random
+    $Playlist/ClearIn=<sd path>    clear-from-in pattern file (empty = config default)
+    $Playlist/ClearOut=<sd path>   clear-from-out pattern file (empty = config default)
+    $Playlist/ClearSpeed=<mm/min>  feed for clear moves; 0 = use $THR/Feed
     $Playlist/AutoHome=<n>         home every n patterns; 0 disables
                                    (honors $Sand/HomingMode + ThetaOffset)
 
@@ -63,9 +66,11 @@
 #include "Module.h"
 #include "Channel.h"
 #include "FluidPath.h"
+#include "PlaylistParse.h"  // clean_line, CLEAR_*
 
 #include <string>
 #include <vector>
+#include <cstdint>  // SIZE_MAX
 
 class IntSetting;
 class EnumSetting;
@@ -145,6 +150,10 @@ public:
         int  pause_total     = -1;  // full duration of that pause, seconds; -1 if not pausing (for a progress bar)
         char name[64]     = {};
         char current[160] = {};
+        // Resolved upcoming pattern (the shuffle permutation is internal, so
+        // this is the only truthful "up next").  "" = unknown: last pattern
+        // of a pass (next pass not yet shuffled) or a single run.
+        char next[160] = {};
     };
     static bool runtimeStatus(RuntimeStatus& out);
 
@@ -181,7 +190,14 @@ private:
     std::string clearFileFor(const std::string& patternPath);
     void        finish(const char* why);
 
-    const std::string& itemAt(size_t idx) { return _items[_order[idx]]; }
+    // Read the pattern path for the CURRENT logical position (_order[_index])
+    // back off the SD playlist file into _current_path.  We keep only the
+    // shuffled index array in RAM, not the paths, so this is where the one
+    // line we need is fetched -- called once per pattern advance (between
+    // patterns, machine idle).  false on a file/read error.  Single runs
+    // ($Sand/Run) hold their one path in _current_path already, so it's a
+    // no-op for those.
+    bool resolveCurrent();
 
     // Configuration
     std::string _folder     = "/playlists";
@@ -195,6 +211,12 @@ private:
     IntSetting*  _pause_time       = nullptr;
     EnumSetting* _pause_from_start = nullptr;
     EnumSetting* _clear_mode       = nullptr;
+    // App-configurable clear pattern files (override the config.yaml
+    // clear_from_in/clear_from_out; default to those when unset/empty) and a
+    // dedicated feed for clear moves ($Playlist/ClearSpeed; 0 = same as $THR/Feed).
+    StringSetting* _clear_in_set   = nullptr;
+    StringSetting* _clear_out_set  = nullptr;
+    IntSetting*    _clear_speed    = nullptr;
     IntSetting*  _auto_home        = nullptr;
     EnumSetting*   _sands_enabled  = nullptr;
     StringSetting* _sands_slots    = nullptr;
@@ -253,11 +275,25 @@ private:
     // override (a PlaylistParse CLEAR_* value, or -1 to use the NVS setting).
     volatile bool _req_single         = false;
     volatile int  _req_clear_override = -1;
+    // Staged before _req_run: don't stopJobEvent an active job when starting
+    // this run.  Set only by the boot autostart, whose trigger can race the
+    // after_homing recenter macro being nested as a Job by $H -- aborting it
+    // skipped the X0 Y0 recenter and patterns started from the switch.
+    volatile bool _req_no_abort       = false;
 
     // State machine (polling task only)
     Phase                 _phase = Phase::Off;
-    std::vector<std::string> _items;
+    // The playlist's pattern paths are NOT held in RAM -- only this shuffled
+    // permutation of valid-line indices [0.._order.size()).  The path for the
+    // current position is read back off the SD file on demand (resolveCurrent
+    // -> _current_path).  This is what keeps a 188-entry playlist to a few
+    // hundred bytes instead of a multi-KB buffer the fragmented heap couldn't
+    // allocate.
     std::vector<uint16_t>    _order;
+    std::string              _playlist_path;   // SD path of the playlist .txt (for resolveCurrent); "" for single runs
+    std::string              _current_path;    // resolved pattern path for _index (kept in sync by resolveCurrent)
+    std::string              _next_path;       // resolved path for _index+1 ("up next"); "" = end of pass / single run
+    size_t                   _resolved_index = SIZE_MAX;  // _index that _current_path currently reflects
     std::string              _playlist_name;
     std::string              _pending_clear;  // chosen clear file for current item
     // Holds the SD mounted for the whole run.  Otherwise the mount refcount
@@ -297,4 +333,5 @@ private:
     volatile uint32_t _pub_pause_total_ms = 0;  // full pause duration, for the status progress bar
     char          _pub_name[64]     = {};
     char          _pub_current[160] = {};
+    char          _pub_next[160]    = {};
 };

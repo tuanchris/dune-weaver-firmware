@@ -32,6 +32,7 @@ namespace Kinematics {
 
     ThetaRho* ThetaRho::_instance = nullptr;
     int       ThetaRho::_live_feed = -1;
+    int       ThetaRho::_clear_feed = -1;
 
     void ThetaRho::init() {
         log_info("Kinematic system: " << name());
@@ -151,12 +152,22 @@ namespace Kinematics {
         return positive_mod_2pi(mpos[X_AXIS]) / TWO_PI;
     }
 
-    // Effective base feed: the in-memory live override if set, else $THR/Feed.
+    // Effective feed: the clear-pattern override wins while a clear job runs,
+    // then the in-memory live override, then the persisted $THR/Feed.
     int ThetaRho::effectiveFeed() {
         if (!_instance || !_instance->_feed_setting) {
             return -1;
         }
+        if (_clear_feed >= 0) {
+            return _clear_feed;
+        }
         return _live_feed >= 0 ? _live_feed : _instance->_feed_setting->get();
+    }
+
+    // Arm/disarm the clear-pattern feed override (mm/min; <0 disarms).  In
+    // memory only, so it is safe to call from the poller mid-motion.
+    void ThetaRho::setClearFeed(int mm_per_min) {
+        _clear_feed = mm_per_min >= 0 ? mm_per_min : -1;
     }
 
     // Set the base feed (mm/min) live.  Idle: persist to $THR/Feed (and drop

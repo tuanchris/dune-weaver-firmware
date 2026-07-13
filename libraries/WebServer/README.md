@@ -18,6 +18,24 @@ Local changes (all tagged `DW fork:` in the sources):
 - `WebServer.{h,cpp}`: `lastHandledMillis()` + `hasPendingClient()` liveness
   accessors for the self-heal watchdog in `Web_Server::poll()`
   (`FluidNC/src/WebUI/WebServer.cpp`).
+- `WebServer.{h,cpp}`: `setLowHeapGuard(floorBytes, exempt)` — when free heap is
+  under the floor, `_handleRequest()` answers **503 "busy: low memory"** before
+  the route handler runs. A handler whose allocations fail mid-flight stalls the
+  single-threaded server and the queued clients pin even more memory (observed
+  as a total HTTP outage at ~7 KB free while pings still answered). The exempt
+  callback keeps must-work routes live; registration (floor 10 KB, exempting
+  `/sand_status` + stop/pause/resume) is in `Web_Server::begin()`.
+- `WebServer.{h,cpp}`: `_currentClientWrite{,_P}()` check the write result and
+  RST+stop the client on a short write (`_abortDeadClient()`). A client that
+  stalls or vanishes mid-response (the app cancelling a preview download)
+  otherwise costs a full `HTTP_MAX_SEND_WAIT` per REMAINING chunk of the
+  response — a 50 KB chunked reply = minutes of poller blockage (observed as
+  repeating 30 s HTTP deaf spells via the stall watchdog, and one 120 s
+  task-WDT panic with the heap staircasing down as blocked clients piled up).
+  RST mid-response is safe: the response is already broken.
+- `WebServer.{h,cpp}`: `onRequestTrace(fn)` — optional per-request hook (uri)
+  called at the top of `_handleRequest()`, before the low-heap guard. Used for
+  heap-drain diagnosis from the FluidNC side; no-op unless registered.
 
 When bumping the Arduino framework, re-vendor from the new version and re-apply the
 `DW fork:` blocks.

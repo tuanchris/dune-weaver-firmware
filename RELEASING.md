@@ -5,7 +5,22 @@ env (MKS-DLC32, 4M flash). Releases are published as **GitHub Release assets** o
 `tuanchris/dune-weaver-firmware`: the flat `.bin` images plus a `manifest.json`
 that a web installer consumes.
 
-## Cut a release
+## Cut a release (automated)
+
+Pushing a **`v*`** tag triggers the **Release** workflow
+(`.github/workflows/release.yml`), which runs `build-dw-release.py` on a clean
+ubuntu runner and publishes the staged assets as a GitHub Release:
+
+```sh
+git tag -a v0.1.11 -m "Dune Weaver Firmware v0.1.11"
+git push origin v0.1.11
+```
+
+Release notes are auto-generated from the commit log. The manual steps below are
+the equivalent local flow (useful for a dry run, or if the runner's bundled
+mklittlefs ever breaks).
+
+## Cut a release (manual)
 
 1. **Tag the commit** (the firmware bakes its version from `git describe`, so tag
    first):

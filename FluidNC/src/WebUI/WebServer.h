@@ -94,6 +94,11 @@ namespace WebUI {
         }
         static void handle_Websocket_Event(uint8_t num, uint8_t type, uint8_t* payload, size_t length);
         static void handle_Websocketv3_Event(uint8_t num, uint8_t type, uint8_t* payload, size_t length);
+        // Sand API password ($Sand/Password): sandKeyOk() is true when no
+        // password is set or the request carries it (?key= / X-Sand-Key);
+        // requireSandKey() additionally answers 401 when it is not.
+        static bool sandKeyOk();
+        static bool requireSandKey();
         static void handleReloadBlocked();
         static void handleFeedholdReload();
         static void handleCyclestartReload();

@@ -31,9 +31,19 @@ namespace PlaylistParse {
         Sideway,
     };
 
-    // Parse playlist file content: one SD-relative pattern path per line,
-    // '#' starts a comment, surrounding whitespace is trimmed, a leading
-    // '/' is added when missing.  At most max_items entries are returned.
+    // Clean one raw playlist line into a pattern path: strip a '#' comment,
+    // trim surrounding whitespace, add a leading '/' when missing.  Returns
+    // "" when the line is blank or comment-only (caller skips it).  This is
+    // the whole per-line policy -- the Playlist module keeps ONLY a shuffled
+    // array of line indices in RAM and reads the one line it needs back off
+    // the SD card on demand (see Playlist::resolveCurrent), so a 188-entry
+    // playlist costs a few hundred bytes instead of kilobytes of pattern
+    // paths (which OOM'd the board building a big contiguous buffer).
+    std::string clean_line(const std::string& raw);
+
+    // Parse whole playlist file content into cleaned paths.  Test/reference
+    // helper only -- the firmware never holds the whole file or all paths in
+    // RAM; it streams line-by-line (see Playlist::loadPlaylist).
     std::vector<std::string> parse_playlist(const std::string& content, size_t max_items);
 
     // First rho of a .thr pattern, skipping the up-to-two "0 0" preamble
@@ -44,9 +54,11 @@ namespace PlaylistParse {
 
     // Clear-pattern policy.  first_rho is the upcoming pattern's first
     // rho (or negative when unknown); rnd supplies the randomness for
-    // CLEAR_RANDOM and the unknown-rho fallback.  A pattern starting
-    // near the center is preceded by a clear that ends at the center
-    // (clear-from-out), and vice versa.
+    // CLEAR_RANDOM and the unknown-rho adaptive fallback.  A pattern
+    // starting near the center is preceded by a clear that ends at the
+    // center (clear-from-out), and vice versa.  Adaptive only ever
+    // returns FromIn/FromOut -- the sideway clear is reachable only via
+    // the explicit CLEAR_SIDEWAY and CLEAR_RANDOM modes.
     Clear choose_clear(int clear_mode, float first_rho, uint32_t rnd);
 
     // Map a clear-mode name ("none"|"adaptive"|"in"|"out"|"sideway"|"side"

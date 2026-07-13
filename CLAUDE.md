@@ -96,6 +96,14 @@ Compass"**.)
   (long early-line values broke XModem parsing).
 - **Runtime `$/path=value` config changes do NOT persist** — config.yaml is reloaded
   fresh each boot; edit the file to persist.
+- **Never hold all playlist pattern paths in RAM.** A big playlist (188+ entries) as
+  a contiguous buffer / vector-of-strings needs a multi-KB allocation the fragmented
+  ESP32 heap often can't satisfy → `std::bad_alloc` → `terminate()` → `abort()`/reboot
+  (hit us building the whole path list at boot auto-play). `Playlist` keeps ONLY the
+  shuffled `_order` array of line indices; the path for the current item is read back
+  off the SD `.txt` on demand (`Playlist::resolveCurrent` via `scanValidLines`), once
+  per pattern advance. Anything that touches the SD in the poller must also degrade
+  gracefully (catch `std::exception`), never let an allocation failure escape.
 
 ## Key files
 
@@ -111,10 +119,13 @@ routes). Configs: `dwg_configs/` (untracked, per-table + backups).
 **`libraries/WebServer/` is a vendored fork** of the Arduino WebServer (shadows the
 framework copy via `lib_extra_dirs`): shorter head-of-line waits, RST-close on
 ABORTED clients only (never after a served response — linger-0 close discards
-unflushed response bytes), and liveness accessors for the accept-queue self-heal
+unflushed response bytes), liveness accessors for the accept-queue self-heal
 watchdog in `Web_Server::poll()` — an aborted-client storm (status poller racing an
-async WiFi scan) used to wedge the single-threaded server for minutes. Changes are
-tagged `DW fork:`; see `libraries/WebServer/README.md` before bumping the framework.
+async WiFi scan) used to wedge the single-threaded server for minutes — and a
+low-heap guard (503 "busy: low memory" under a 10 KB floor; `/sand_status` and
+stop/pause/resume exempt) so a heap-starved board sheds load instead of wedging.
+Changes are tagged `DW fork:`; see `libraries/WebServer/README.md` before bumping
+the framework.
 
 ## Docs — keep current
 

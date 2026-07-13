@@ -815,6 +815,13 @@ namespace WebUI {
             }
 
             WiFi.enableSTA(false);
+            // Set the hostname before the mode, same as StartSTA -- WiFi
+            // getHostname()/setHostname() share one mode-independent buffer, so
+            // in pure AP mode nothing else sets it and it would default to
+            // esp32-XXXXXX.  This name is what /sand_status reports and what
+            // mDNS advertises (<hostname>.local), so the table stays identity-
+            // stable across home-network and hotspot connections.
+            WiFi.setHostname(config->_hostname.empty() ? _hostname->get() : config->_hostname.c_str());
             WiFi.mode(WIFI_AP);
 
             const char* country = _ap_country->getStringValue();

@@ -122,6 +122,7 @@ TEST(SandStatusEncode, RunningWithProgressAndPlaylist) {
     d.playlist_pause_remaining = 42;
     d.playlist_pause_total     = 60;
     d.playlist_name     = "evening";
+    d.playlist_next     = "/patterns/owl.thr";
     d.playlist_clearing = false;
     d.quiet             = false;
 
@@ -139,6 +140,9 @@ TEST(SandStatusEncode, RunningWithProgressAndPlaylist) {
     EXPECT_TRUE(has(j, "\"index\":2"));
     EXPECT_TRUE(has(j, "\"total\":10"));
     EXPECT_TRUE(has(j, "\"name\":\"evening\""));
+    // Shuffle-aware "up next" (resolved by the firmware; the app must not
+    // guess it from the unshuffled file order).
+    EXPECT_TRUE(has(j, "\"next\":\"/patterns/owl.thr\""));
 }
 
 TEST(SandStatusEncode, LedBlockWhenPresent) {

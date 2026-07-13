@@ -371,6 +371,17 @@ void WebServer::_lingerAbort() {
   _currentClient.setSocketOption(SOL_SOCKET, SO_LINGER, &l, sizeof(l));
 }
 
+// DW fork: a write came up short, so the client stalled or vanished
+// mid-response (see _currentClientWrite).  RST-close it NOW so the rest of
+// the response's writes return immediately instead of each blocking a full
+// HTTP_MAX_SEND_WAIT on a socket nobody is reading.
+void WebServer::_abortDeadClient() {
+  if (_currentClient) {
+    _lingerAbort();
+    _currentClient.stop();
+  }
+}
+
 // DW fork: recover from a rotted accept queue (see Web_Server::poll()'s
 // watchdog). Drain the accepted client WiFiServer may have cached in
 // hasClient() (WiFiServer::end() closes only the listen socket and would leak
@@ -672,6 +683,21 @@ void WebServer::onNotFound(THandlerFunction fn) {
 }
 
 void WebServer::_handleRequest() {
+  // DW fork: request trace (diagnosis) -- before the guard so shed requests
+  // are traced too.
+  if (_onRequestTrace) {
+    _onRequestTrace(_currentUri.c_str());
+  }
+  // DW fork: low-heap guard -- see setLowHeapGuard(). Answered before the
+  // handler runs so a heap-starved board sheds load with a cheap 503 instead
+  // of stalling mid-handler and wedging the accept queue.
+  if (_lowHeapFloor && ESP.getFreeHeap() < _lowHeapFloor && !(_lowHeapExempt && _lowHeapExempt(_currentUri))) {
+    send(503, "text/plain", "busy: low memory");
+    _finalizeResponse();
+    _lastHandledMs = millis();
+    _currentUri = "";
+    return;
+  }
   bool handled = false;
   if (!_currentHandler){
     log_e("request handler not found");

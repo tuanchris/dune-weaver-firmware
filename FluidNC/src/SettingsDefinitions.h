@@ -29,3 +29,11 @@ extern EnumSetting* homing_mode;
 // theta=0 is placed this many degrees from the home reference (the limit switch
 // in sensor mode, the crash position in crash mode).  Applied by both modes.
 extern IntSetting* theta_offset;
+
+// Sand API password.  Empty (default) = everything open, as before.  Non-empty
+// locks the network control surfaces: HTTP control routes require it
+// (?key=<pw> or X-Sand-Key header -> else 401), telnet refuses clients, and
+// ArduinoOTA (port 3232) requires it.  Reads (/sand_status, /sand_patterns,
+// logs) stay open.  Serial is never gated (physical access = trusted), so a
+// lost password is cleared over USB with $Sand/Password=.
+extern StringSetting* sand_password;

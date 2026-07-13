@@ -9,28 +9,35 @@
 
 namespace PlaylistParse {
 
+    std::string clean_line(const std::string& raw) {
+        size_t end     = raw.size();
+        size_t comment = raw.find('#');
+        if (comment != std::string::npos) {
+            end = comment;
+        }
+        size_t b = raw.find_first_not_of(" \t\r");
+        if (b == std::string::npos || b >= end) {
+            return {};  // blank or comment-only
+        }
+        size_t      e = raw.find_last_not_of(" \t\r", end - 1);
+        std::string out;
+        if (raw[b] != '/') {
+            out += '/';
+        }
+        out.append(raw, b, e - b + 1);
+        return out;
+    }
+
     std::vector<std::string> parse_playlist(const std::string& content, size_t max_items) {
         std::vector<std::string> items;
         size_t                   pos = 0;
         while (pos < content.size() && items.size() < max_items) {
             size_t      eol  = content.find('\n', pos);
-            std::string line = content.substr(pos, eol == std::string::npos ? std::string::npos : eol - pos);
+            std::string path = clean_line(content.substr(pos, eol == std::string::npos ? std::string::npos : eol - pos));
             pos              = eol == std::string::npos ? content.size() : eol + 1;
-
-            size_t comment = line.find('#');
-            if (comment != std::string::npos) {
-                line.erase(comment);
+            if (!path.empty()) {
+                items.push_back(path);
             }
-            size_t b = line.find_first_not_of(" \t\r");
-            if (b == std::string::npos) {
-                continue;
-            }
-            size_t e = line.find_last_not_of(" \t\r");
-            line     = line.substr(b, e - b + 1);
-            if (line[0] != '/') {
-                line = "/" + line;
-            }
-            items.push_back(line);
         }
         return items;
     }
@@ -77,8 +84,10 @@ namespace PlaylistParse {
                 return randomized[rnd % 3];
             case CLEAR_ADAPTIVE:
                 if (first_rho < 0.0f) {
-                    // Unknown start; match dune-weaver's fallback of picking randomly
-                    return randomized[rnd % 3];
+                    // Unknown start; pick one of the two radial clears at
+                    // random.  Adaptive never uses the sideway clear -- it
+                    // only chooses between clear-from-in and clear-from-out.
+                    return (rnd & 1u) ? Clear::FromIn : Clear::FromOut;
                 }
                 return first_rho < 0.5f ? Clear::FromOut : Clear::FromIn;
             default:

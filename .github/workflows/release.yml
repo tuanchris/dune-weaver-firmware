@@ -1,0 +1,55 @@
+name: Release
+
+# Cut a Dune Weaver Firmware release when a `v*` tag is pushed. Mirrors the
+# local flow in RELEASING.md: build the `sandtable` firmware + littlefs image
+# via build-dw-release.py (flat .bin images + manifest.json + a convenience
+# zip), then publish them as GitHub Release assets. Runs on ubuntu, whose
+# bundled x86_64 mklittlefs works (the arm64 mklittlefs swap is a Mac-only note).
+#
+# Cut a release with:
+#   git tag -a v0.1.11 -m "Dune Weaver Firmware v0.1.11"
+#   git push origin v0.1.11
+# or trigger manually against an existing tag via the Actions tab.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # build-dw-release.py reads the version from `git describe`
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: platformio-sandtable-${{ runner.os }}
+      - name: Build release artifacts
+        run: python3 build-dw-release.py
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Match the dir build-dw-release.py staged (named from `git describe`),
+          # so a tag push and a manual dispatch on the same tag both resolve here.
+          TAG="$(git describe --tags --abbrev=0)"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            "release/$TAG"/*

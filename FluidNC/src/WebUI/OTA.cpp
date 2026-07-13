@@ -4,6 +4,7 @@
 #include "src/Module.h"
 
 #include "src/Logging.h"
+#include "src/SettingsDefinitions.h"  // sand_password ($Sand/Password API lock)
 #include <WiFi.h>
 #include "Driver/localfs.h"
 #include <ArduinoOTA.h>
@@ -59,8 +60,16 @@ public:
                 }
 
                 log_info("OTA Error(" << error << "):" << errorName);
-            })
-            .begin();
+            });
+        // $Sand/Password also locks ArduinoOTA (port 3232) -- otherwise a
+        // passwordless espota flash would bypass the whole HTTP lock.  The
+        // espota client sends it with --auth; challenge is MD5, LAN-adequate.
+        // Read at init: changing the password applies to OTA on next boot.
+        const char* pw = sand_password ? sand_password->get() : "";
+        if (pw && *pw) {
+            ArduinoOTA.setPassword(pw);
+        }
+        ArduinoOTA.begin();
     }
 
     void deinit() override { ArduinoOTA.end(); }
