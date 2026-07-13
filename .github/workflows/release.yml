@@ -49,7 +49,19 @@ jobs:
           # Match the dir build-dw-release.py staged (named from `git describe`),
           # so a tag push and a manual dispatch on the same tag both resolve here.
           TAG="$(git describe --tags --abbrev=0)"
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --generate-notes \
-            "release/$TAG"/*
+          # Release notes come from the annotated tag's BODY (everything after
+          # the subject line) -- write the changelog into `git tag -a` per
+          # RELEASING.md. `--generate-notes` only summarizes merged PRs, which
+          # is empty for direct-to-main commits (the bare "Full Changelog" link
+          # bug), so we only fall back to it when the tag has no body.
+          NOTES="$(git for-each-ref "refs/tags/$TAG" --format='%(contents:body)')"
+          if [ -n "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
+            printf '%s\n' "$NOTES" > "$RUNNER_TEMP/relnotes.md"
+            gh release create "$TAG" --title "$TAG" \
+              --notes-file "$RUNNER_TEMP/relnotes.md" \
+              "release/$TAG"/*
+          else
+            gh release create "$TAG" --title "$TAG" \
+              --generate-notes \
+              "release/$TAG"/*
+          fi

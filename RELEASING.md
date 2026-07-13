@@ -9,16 +9,32 @@ that a web installer consumes.
 
 Pushing a **`v*`** tag triggers the **Release** workflow
 (`.github/workflows/release.yml`), which runs `build-dw-release.py` on a clean
-ubuntu runner and publishes the staged assets as a GitHub Release:
+ubuntu runner and publishes the staged assets as a GitHub Release.
+
+**The release notes are the annotated tag's message body** — write the changelog
+into the `git tag -a` annotation (subject line = title, everything after the
+blank line = notes). Keep the house style: a one-line summary, bulleted changes
+with enough detail to be useful, the torture-gate result, and the install line.
 
 ```sh
-git tag -a v0.1.11 -m "Dune Weaver Firmware v0.1.11"
+git tag -a v0.1.11 -F - <<'EOF'
+Dune Weaver Firmware v0.1.11
+
+Sand table firmware for MKS-DLC32 (ESP32 4M, `sandtable` build).
+
+- **Headline change.** What it does and why it matters.
+- ...
+
+This release passed the 10-minute torture gate (… 0 reboots, 0 alerts).
+EOF
 git push origin v0.1.11
 ```
 
-Release notes are auto-generated from the commit log. The manual steps below are
-the equivalent local flow (useful for a dry run, or if the runner's bundled
-mklittlefs ever breaks).
+If the tag has only a subject line (no body), the workflow falls back to GitHub's
+`--generate-notes` — which for direct-to-`main` commits is just a bare "Full
+Changelog" compare link, so **always give the tag a body**. The manual steps
+below are the equivalent local flow (useful for a dry run, or if the runner's
+bundled mklittlefs ever breaks).
 
 ## Cut a release (manual)
 
