@@ -71,9 +71,21 @@ bundled mklittlefs ever breaks).
 `manifest.json` follows the [fluid-installer](https://github.com/breiler/fluid-installer)
 schema but is trimmed to one MCU / one variant (`esp32` → `sandtable`) with three
 install types: `fresh-install`, `firmware-update`, `filesystem-update`. Each image
-`path` is a **bare filename** (not a nested path) so it maps 1:1 onto a GitHub
-release asset, whose namespace is flat. The installer's asset base URL is therefore
-`…/releases/download/<tag>/`.
+`path` is a **bare filename** (not a nested path), resolved relative to the manifest.
+
+**The installer downloads the binaries from `releases/<tag>/` on the default
+branch** (`raw.githubusercontent.com/<owner>/<repo>/<branch>/releases/<tag>/…`),
+**not** from the GitHub Release assets. So every release must **commit its built
+artifacts to `releases/<tag>/`** in addition to publishing the GitHub Release —
+omit that and the installer 404s with *"Could not download the release asset"*
+even though the Release page has the files. The automated workflow does this
+commit (`Track artifacts on the default branch` step); the GitHub Release assets
+are a convenience mirror. If cutting a release by hand, commit the artifacts too:
+
+```sh
+mkdir -p releases/v0.1.0 && cp release/v0.1.0/* releases/v0.1.0/
+git add releases/v0.1.0 && git commit -m "Track v0.1.0 release artifacts" && git push
+```
 
 Flash offsets (4M ESP32, see `min_littlefs.csv`): bootloader `0x1000`, partitions
 `0x8000`, boot_app0 `0xe000`, firmware `0x10000`, littlefs `0x3d0000`.

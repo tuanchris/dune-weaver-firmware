@@ -65,3 +65,29 @@ jobs:
               --generate-notes \
               "release/$TAG"/*
           fi
+      - name: Track artifacts on the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The installer downloads the firmware binaries from releases/<tag>/ on
+          # the default branch (raw.githubusercontent.com/.../<branch>/...), NOT
+          # from the GitHub Release assets, so every release must also commit its
+          # artifacts there or the installer 404s ("Could not download the release
+          # asset"). release/<tag>/ is gitignored + untracked, so it survives the
+          # branch checkout; we copy it into the tracked releases/<tag>/.
+          TAG="$(git describe --tags --abbrev=0)"
+          BRANCH="${{ github.event.repository.default_branch }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$BRANCH"
+          git checkout -B "$BRANCH" "origin/$BRANCH"
+          mkdir -p "releases/$TAG"
+          cp -f "release/$TAG"/* "releases/$TAG"/
+          git add "releases/$TAG"
+          if git diff --cached --quiet; then
+            echo "artifacts already tracked; nothing to commit"
+          else
+            git commit -m "Track $TAG release artifacts"
+            # one retry in case the branch advanced between fetch and push
+            git push origin "HEAD:$BRANCH" || { git pull --rebase origin "$BRANCH" && git push origin "HEAD:$BRANCH"; }
+          fi
