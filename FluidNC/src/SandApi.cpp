@@ -417,6 +417,53 @@ void SandApi::streamPatterns(const JsonSink& emit) {
     streamDirJson("/patterns", ".thr", emit);
 }
 
+// Content-hash ETag cache for /patterns/index.json.  Keyed on file size: an
+// unchanged size reuses the cached hash (no read); a size change or an explicit
+// invalidatePatternsEtag() (manifest re-upload) forces one recompute.  A
+// same-size content change without going through the upload path is the only
+// gap, and the host regenerates the whole manifest (size almost always shifts),
+// so it doesn't arise in practice; the manual "Refresh library" is the backstop.
+static bool     s_patterns_etag_valid = false;
+static size_t   s_patterns_etag_size  = 0;
+static uint32_t s_patterns_etag_hash  = 0;
+
+void SandApi::invalidatePatternsEtag() {
+    s_patterns_etag_valid = false;
+}
+
+bool SandApi::patternsEtag(std::string& etagOut) {
+    try {
+        FileStream f(kPatternManifest, "r", "sd");
+        size_t     size = f.size();
+        uint32_t   hash;
+        if (s_patterns_etag_valid && s_patterns_etag_size == size) {
+            hash = s_patterns_etag_hash;
+        } else {
+            // FNV-1a over the whole manifest.  A fast sequential SD read, paid
+            // only when the size changed or after a manifest upload - not on the
+            // steady per-launch conditional GETs, which hit the size cache.
+            hash = 2166136261u;
+            char   chunk[1024];
+            size_t n;
+            while ((n = f.read(chunk, sizeof(chunk))) > 0) {
+                for (size_t i = 0; i < n; i++) {
+                    hash ^= (uint8_t)chunk[i];
+                    hash *= 16777619u;
+                }
+            }
+            s_patterns_etag_hash  = hash;
+            s_patterns_etag_size  = size;
+            s_patterns_etag_valid = true;
+        }
+        char buf[32];
+        snprintf(buf, sizeof(buf), "\"%08x-%x\"", hash, (unsigned)size);
+        etagOut = buf;
+        return true;
+    } catch (...) {
+        return false;  // no manifest -> live listing, not cacheable
+    }
+}
+
 void SandApi::streamDirJson(const char* folder, const char* ext, const JsonSink& emit) {
     std::string buf;
     bool        first = true;

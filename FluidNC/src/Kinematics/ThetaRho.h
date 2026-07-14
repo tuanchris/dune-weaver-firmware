@@ -65,10 +65,11 @@ namespace Kinematics {
         // (unlike the idle-gated $THR/Feed setting).  When idle this persists
         // to $THR/Feed; while moving it is an in-memory override applied on the
         // next move.  It persists across patterns (so a speed set mid-playlist
-        // holds for the whole playlist) and is cleared by clearFeedLive() when
-        // the run ends.  Backs /sand_feed?mm=.  Static + null-safe.
+        // holds for the whole playlist) and is flushed to $THR/Feed by
+        // flushFeedLive() when the run ends, so a mid-run speed sticks as the
+        // new default.  Backs /sand_feed?mm=.  Static + null-safe.
         static Error setFeedLive(int mm_per_min);
-        static void  clearFeedLive();  // drop the override back to $THR/Feed (run ended)
+        static void  flushFeedLive();  // persist the override to $THR/Feed (run ended)
         static int   effectiveFeed();  // live override or the persisted setting; -1 if no module
 
         // Dedicated feed (mm/min) for the clear pattern that precedes a real

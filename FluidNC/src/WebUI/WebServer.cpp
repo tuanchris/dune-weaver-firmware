@@ -1193,8 +1193,26 @@ namespace WebUI {
     }
     void Web_Server::handleSandPatterns() {
         // Serves the prebuilt /patterns/index.json manifest if present, else a
-        // live top-level listing (see SandApi::streamPatterns).
-        _webserver->sendHeader("Cache-Control", "no-store");
+        // live top-level listing (see SandApi::streamPatterns).  The manifest is
+        // large and the app re-reads it every launch/table-switch, so we support
+        // conditional GET: an ETag (content hash) lets a client that already has
+        // the current catalog get a tiny 304 instead of re-downloading the whole
+        // thing - the repeated full transfers colliding with the app's launch
+        // connection burst are what tripped the low-heap load-shedding.  No ETag
+        // (live-listing fallback) -> always serve 200.
+        std::string etag;
+        if (SandApi::patternsEtag(etag)) {
+            _webserver->sendHeader("ETag", etag.c_str());
+            // no-cache (not no-store): the client MAY cache but must revalidate
+            // with If-None-Match, which is what yields the 304 fast path.
+            _webserver->sendHeader("Cache-Control", "no-cache");
+            if (_webserver->hasHeader("If-None-Match") && _webserver->header("If-None-Match") == etag.c_str()) {
+                _webserver->send(304, "application/json", "");
+                return;
+            }
+        } else {
+            _webserver->sendHeader("Cache-Control", "no-store");
+        }
         _webserver->setContentLength(CONTENT_LENGTH_UNKNOWN);
         _webserver->send(200, "application/json", "");
         SandApi::streamPatterns([](const char* data, size_t len) {
@@ -1949,6 +1967,13 @@ namespace WebUI {
             }
 
             HashFS::rehash_file(filepath);
+
+            // A write under /patterns changes the catalog (the host re-uploads
+            // /patterns/index.json when patterns change), so drop the cached
+            // /sand_patterns ETag; the next request recomputes it.
+            if (pathname.find("/patterns/") != std::string::npos) {
+                SandApi::invalidatePatternsEtag();
+            }
 
             // Check size
             if (filesize) {

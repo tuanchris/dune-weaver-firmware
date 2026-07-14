@@ -129,17 +129,28 @@ namespace Kinematics {
         _job_name.clear();
         _job_channel = nullptr;
         // NOTE: the /sand_feed?mm live override (_live_feed) is intentionally NOT
-        // cleared here.  It persists across patterns so a speed set mid-playlist
-        // stays in effect for the rest of the playlist; Playlist::finish() clears
-        // it when the playlist (or a single $Sand/Run) ends.
+        // touched here.  It persists across patterns so a speed set mid-playlist
+        // stays in effect for the rest of the playlist; Playlist::finish()
+        // flushes it to $THR/Feed when the playlist (or a single $Sand/Run) ends.
         normalize_theta();
     }
 
-    // Clear the live base-feed override (back to the persisted $THR/Feed).
-    // Called when a playlist / single run ends so the override is per-run, not
-    // forever.
-    void ThetaRho::clearFeedLive() {
-        _live_feed = -1;
+    // Persist the live base-feed override to $THR/Feed so a speed set
+    // mid-pattern sticks as the new default instead of snapping back to the old
+    // setting.  Flash writes are idle-gated (Setting::check_state blocks Cycle /
+    // Hold), so this only writes when Idle/Alarm and CLEARS on success.  When
+    // the run ends mid-motion (a stop caught in Cycle, or a pause sitting in
+    // Hold) it can't write yet, so the override is left PENDING and the poller
+    // retries this on every Off tick until the machine settles to Idle.  Called
+    // from Playlist::finish() (run ended) and Playlist::pollLine() (retry).
+    void ThetaRho::flushFeedLive() {
+        if (_live_feed < 0 || !_instance || !_instance->_feed_setting) {
+            return;
+        }
+        if (state_is(State::Idle) || state_is(State::Alarm)) {
+            _instance->_feed_setting->setStringValue(std::to_string(_live_feed));
+            _live_feed = -1;
+        }
     }
 
     // Ball angle as a fraction of a full turn, [0,1), for the LED ball effect.

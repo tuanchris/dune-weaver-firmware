@@ -328,9 +328,11 @@ void Playlist::finish(const char* why) {
         protocol_send_event(&cycleStartEvent);
         _quiet_held = false;
     }
-    // A live /sand_feed?mm override persists across the run's patterns; clear it
-    // now the run (playlist or single $Sand/Run) is over, back to $THR/Feed.
-    Kinematics::ThetaRho::clearFeedLive();
+    // A live /sand_feed?mm override persists across the run's patterns; now the
+    // run (playlist or single $Sand/Run) is over, flush it to $THR/Feed so a
+    // speed set mid-run sticks as the new default (persists only when idle, the
+    // natural completion path always is; a mid-move stop drops it instead).
+    Kinematics::ThetaRho::flushFeedLive();
     // Drop any clear-pattern feed override too, in case the run ended (stop /
     // alarm / reset) while a clear was mid-flight.
     Kinematics::ThetaRho::setClearFeed(-1);
@@ -767,6 +769,10 @@ Error Playlist::pollLine(char* line) {
     }
 
     if (_phase == Phase::Off && !_req_run && !_req_stop) {
+        // A stop caught the pattern mid-move: finish() couldn't write $THR/Feed
+        // (flash is idle-gated) so a live /sand_feed override is still pending.
+        // Retry now the run is Off; it lands the moment the drain reaches Idle.
+        Kinematics::ThetaRho::flushFeedLive();
         return Error::NoData;
     }
 

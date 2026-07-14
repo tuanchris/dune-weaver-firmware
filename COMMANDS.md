@@ -33,6 +33,8 @@ curl "$B/sand_status"        # state, theta, rho, feed, feed_override, running, 
 curl "$B/sand_patterns"      # serves /patterns/index.json manifest if present (full recursive catalog,
                              #   paths relative to /patterns); else top-level /patterns/*.thr (non-recursive).
                              #   Run any pattern by full path: $Sand/Run=/patterns/sub/x.thr
+curl -sD- "$B/sand_patterns" -o/dev/null | grep -i etag   # manifest carries an ETag; revalidate to skip re-downloads:
+curl -H 'If-None-Match: "<etag>"' "$B/sand_patterns"      #   unchanged catalog -> 304 Not Modified (no body)
 curl "$B/sand_playlists"     # JSON array of /playlists/*.txt
 curl "$B/sand_settings"      # JSON of all app settings (speed, LED, playlist, quiet hours)
 curl "$B/sand_bootlog"       # plain-text boot log ($SS); after a PANIC reset it still holds the
@@ -143,8 +145,11 @@ curl "$B/sand_feed?d=up"                  # override + (coarse, +10%)
 curl "$B/sand_feed?d=down"                # override - (coarse, -10%)
 curl "$B/sand_feed?d=reset"               # back to 100%
 #   effective speed = base mm/min (feed) * feed_override% / 100; poll /sand_status for feed + feed_override.
-#   ?mm during a run is in-memory and persists across the whole playlist/run (cleared when it ends);
-#   ?mm while idle persists to $THR/Feed.
+#   ?mm during a run is in-memory and persists across the whole playlist/run, then is flushed to
+#     $THR/Feed so a speed set mid-pattern sticks as the new default. The flush lands on the return
+#     to idle: on natural completion right away, and on a stop once motion drains. A pause keeps the
+#     speed in memory (flash writes are blocked mid-Hold) and it persists at the next idle;
+#   ?mm while idle persists to $THR/Feed immediately.
 ```
 
 `/sand_status` reports `feed` (programmed) and `feed_override` (live %); effective

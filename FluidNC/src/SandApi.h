@@ -45,6 +45,20 @@ namespace SandApi {
     // live top-level streamDirJson("/patterns", ".thr").  Backs /sand_patterns.
     void streamPatterns(const JsonSink& emit);
 
+    // ETag for the /patterns manifest, enabling conditional GET on
+    // /sand_patterns.  The catalog is large and the app re-reads it on every
+    // launch / table-switch; an ETag lets a client that already holds the
+    // current catalog get a tiny 304 instead of re-downloading it (the
+    // repeated full transfers, colliding with the app's launch connection
+    // burst, are what pushed the heap-tight board into low-memory shedding).
+    // The value is a content hash of /patterns/index.json, computed lazily and
+    // cached keyed on the file size; invalidatePatternsEtag() drops the cache
+    // when the manifest is rewritten (called from the SD upload path).  Returns
+    // false when there is no manifest (the live-listing fallback is not
+    // cacheable) so the caller serves an unconditional 200.
+    bool patternsEtag(std::string& etagOut);
+    void invalidatePatternsEtag();
+
     // JSON object of the app-relevant settings (speed, LED, playlist,
     // quiet hours) as strings.  Backs /sand_settings so the app can read
     // all settings in one multi-client HTTP request.
