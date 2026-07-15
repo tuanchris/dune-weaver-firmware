@@ -114,7 +114,20 @@ state machine + clear policy, single-run `$Sand/Run … clear=`), `Leds.{h,cpp}`
 job stack), `WebUI/WebServer.cpp` (routes), `WebUI/WifiConfig.{h,cpp}` +
 `WebUI/WifiPortalPage.h` (WiFi setup portal: fallback AP = captive setup page,
 `$WiFi/Mode=AP` = standalone hotspot answering OS probes as "online"; `/wifi_*`
-routes). Configs: `dwg_configs/` (untracked, per-table + backups).
+routes), `WebUI/CaptiveDns.{h,cpp}` + `DnsQuery.{h,cpp}` (captive DNS). Configs:
+`dwg_configs/` (untracked, per-table + backups).
+
+- **Captive DNS is a native lwIP responder** (`WebUI/CaptiveDns`, per-query policy
+  in std-only `DnsQuery`), NOT the arduino `DNSServer`. The old `DNSServer` could
+  only wildcard *every* name to the softAP IP, which funnelled the connected
+  phone's entire background traffic at the single-client web server in AP mode
+  (each hostname → a TCP connection it can't drain → heap/PCB exhaustion → wedge).
+  The responder instead answers per-query: **fallback AP** resolves everything to
+  the table (setup sheet pops); **standalone AP** resolves ONLY the OS
+  connectivity-probe hosts (`DnsQuery::kProbeHosts` — keeps the phone attached and
+  "online") and returns NXDOMAIN for everything else, so background apps never open
+  a socket to the table. Extend the probe list for new OSes; keep it to genuine
+  probe hosts, not general CDNs, or the storm returns.
 
 **`libraries/WebServer/` is a vendored fork** of the Arduino WebServer (shadows the
 framework copy via `lib_extra_dirs`): shorter head-of-line waits, RST-close on

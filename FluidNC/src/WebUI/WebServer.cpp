@@ -16,7 +16,7 @@
 #include <Update.h>
 #include <esp_wifi_types.h>
 // #include <ESP32SSDP.h>
-#include <DNSServer.h>
+#include "CaptiveDns.h"  // native lwIP captive DNS (replaces arduino DNSServer)
 
 #include "WSChannel.h"
 
@@ -43,8 +43,8 @@
 #include <list>
 
 namespace WebUI {
-    const byte DNS_PORT = 53;
-    DNSServer  dnsServer;
+    // Captive DNS now lives in WebUI::CaptiveDns (native lwIP); no arduino
+    // DNSServer instance here.
 }
 
 #include <esp_ota_ops.h>
@@ -224,9 +224,12 @@ namespace WebUI {
         //_webserver->on("/SD", HTTP_ANY, handle_SDCARD);
 
         if (WiFi.getMode() == WIFI_AP) {
-            // if DNSServer is started with "*" for domain name, it will reply with
-            // provided IP to all DNS request
-            dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
+            // Native lwIP captive DNS.  poll() below passes the live fallback
+            // state: fallback AP resolves every name to the table (setup sheet
+            // pops); standalone AP resolves ONLY the OS probe hosts and refuses
+            // the rest, so the phone's background apps can't storm the server.
+            IPAddress apip = WiFi.softAPIP();
+            CaptiveDns::start(apip[0], apip[1], apip[2], apip[3]);
             log_info("Captive Portal Started");
             // OS connectivity probes.  handleCaptiveProbe answers them one of
             // two ways: fallback AP (failed/unconfigured home-WiFi join) serves
@@ -2040,7 +2043,7 @@ namespace WebUI {
     void Web_Server::poll() {
         static uint32_t start_time = millis();
         if (WiFi.getMode() == WIFI_AP) {
-            dnsServer.processNextRequest();
+            CaptiveDns::poll(wifi_ap_is_fallback());
         }
         if (_webserver) {
             _webserver->handleClient();
