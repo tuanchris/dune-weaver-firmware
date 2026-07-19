@@ -29,9 +29,7 @@
 extern void sand_http_heap_context(char* out, size_t outlen);
 
 #include <freertos/semphr.h>
-#include <freertos/task.h>  // xTaskGetTickCount for the heap-crater tracer throttle
 #include <esp_task_wdt.h>  // task watchdog: a hung poller/protocol task panics (-> coredump + reboot) instead of bricking the table
-#include <esp_heap_caps.h>  // DW DIAG: heap_caps_get_info (allocated_blocks) for the crater tracer
 #include <mutex>
 
 volatile ExecAlarm lastAlarm;  // The most recent alarm code
@@ -487,40 +485,6 @@ void protocol_main_loop() {
                 heapLowWaterReportTime = getCpuTicks();
             }
         }
-
-        // === DW DIAG (temporary, revert before release): heap-crater tracer ===
-        // The warning above is EDGE-triggered on a new all-time low, so a crater
-        // that recurs without beating the record stays silent.  This is
-        // LEVEL-triggered: it logs on every crater episode (largest block below a
-        // floor) plus a slow heartbeat baseline.  The key field is
-        // allocated_blocks: a spike there at the crater = a burst of many small
-        // allocations (a pileup); flat = a single big alloc.  (total_free -
-        // baseline_free) / (blocks - baseline_blocks) ~= per-block size, which
-        // fingerprints the source (~2 KB each = lwIP/connection buffers).
-        // heap_caps_get_info walks the heap, so gate it to ~2x/sec.
-        {
-            static TickType_t lastHeapInfo  = 0;
-            static TickType_t lastHeapTrace = 0;
-            TickType_t        nowTick       = xTaskGetTickCount();
-            if ((uint32_t)(nowTick - lastHeapInfo) * portTICK_PERIOD_MS >= 500) {
-                lastHeapInfo = nowTick;
-                multi_heap_info_t hi;
-                heap_caps_get_info(&hi, MALLOC_CAP_8BIT);
-                bool     crater  = hi.largest_free_block < 12000;
-                uint32_t sinceMs = (uint32_t)(nowTick - lastHeapTrace) * portTICK_PERIOD_MS;
-                if (lastHeapTrace == 0 || (crater && sinceMs >= 3000) || sinceMs >= 60000) {
-                    lastHeapTrace = nowTick;
-                    char httpctx[80];
-                    sand_http_heap_context(httpctx, sizeof(httpctx));
-                    log_info("HEAPTRACE free=" << (uint32_t)hi.total_free_bytes << " largest=" << (uint32_t)hi.largest_free_block
-                                               << " blocks=" << (uint32_t)hi.allocated_blocks
-                                               << " freeblk=" << (uint32_t)hi.free_blocks
-                                               << " min=" << (uint32_t)hi.minimum_free_bytes << (crater ? " CRATER " : " HB ")
-                                               << httpctx);
-                }
-            }
-        }
-        // === end DW DIAG ===
     }
     return; /* Never reached */
 }
