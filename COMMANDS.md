@@ -27,9 +27,10 @@ B=http://192.168.68.160       # LAN IP (preferred); or the mDNS name, e.g. http:
 
 ```bash
 curl "$B/sand_status"        # state, theta, rho, feed, feed_override, running, file, progress,
-                             #   playlist{active,index,total,name,clearing,quiet,pause_remaining,pause_total}, led{}
+                             #   playlist{active,index,total,name,next,last,clearing,quiet,pause_remaining,pause_total}, led{}
                              #   pause_remaining/pause_total = sec left / full length of between-patterns pause
                              #   (both -1 if not pausing); bar fill = (pause_total-pause_remaining)/pause_total
+                             #   next = shuffle-aware "up next"; last = just-finished pattern = what's on the table now
 curl "$B/sand_patterns"      # serves /patterns/index.json manifest if present (full recursive catalog,
                              #   paths relative to /patterns); else top-level /patterns/*.thr (non-recursive).
                              #   Run any pattern by full path: $Sand/Run=/patterns/sub/x.thr
@@ -328,6 +329,12 @@ curl "$B/sand_time?tz=ICT-7"                       # set + persist POSIX timezon
 curl "$B/sd/patterns/star.thr"
 curl "$B/sd/playlists/evening.txt"
 
+# Big files (preview-bundle shards): pull in ranged chunks (≤256 KB) so the
+# single-threaded server can serve status polls between chunks. 206 + Content-
+# Range per chunk; a transfer may be cut short below ~12 KB free heap — verify
+# length/hash and retry.
+curl -r 0-262143 "$B/sd/patterns/previews/shard-0.zip" -o part0.bin
+
 # List one directory level (non-recursive; dirs have "size":-1).
 # Optional pagination: <path>|<offset>|<limit> — "count" in the reply is the
 # directory's total entry count, so |0|0 is a cheap count-only probe.
@@ -335,9 +342,14 @@ curl "$B/sd/playlists/evening.txt"
 curl "$B/command?commandText=%24SD/ListJSON=/patterns"
 curl "$B/command?commandText=%24SD/ListJSON=/patterns%7C100%7C50"   # entries 100-149
 
-# Upload to the SD card (multipart): field <name>S = size, field <name> = bytes
-curl -F "path=/patterns" -F "my.thrS=$(wc -c < my.thr)" \
-     -F "my.thr=@my.thr;filename=my.thr" "$B/upload"
+# Upload to the SD card (multipart): the multipart FILENAME carries the full
+# destination path (a `path` arg is IGNORED — a bare filename lands at /);
+# field <name>S = size, field <name> = bytes, both named with that full path.
+curl -F "/patterns/my.thrS=$(wc -c < my.thr)" \
+     -F "/patterns/my.thr=@my.thr;filename=/patterns/my.thr" "$B/upload"
+
+# Delete an SD file
+curl "$B/upload?path=/patterns&action=delete&filename=my.thr"
 
 # Upload to the on-board flash / littlefs (e.g. config.yaml)
 curl -F "path=/" -F "config.yamlS=$(wc -c < config.yaml)" \

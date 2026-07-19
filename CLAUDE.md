@@ -52,6 +52,16 @@ Compass"**.)
   Watch the `heap_largest` floor across releases (WARN <20k, alert <12k) —
   decay there is the OOM-panic early warning. The `household` profile is an
   optional long soak for structural changes only.
+- **Overnight real-motion soak** (playlist/motion changes, complements the torture
+  gate): upload a small all-verified playlist (probe each entry readable with a
+  ranged `GET /sd/patterns/<f>` → 206), set `$Playlist/Mode=loop`, a short
+  `$Playlist/PauseTime` (e.g. 60), `$Playlist/Run=<name>`. Back the on-board
+  `/sand_log` ring with a **serial capture** — `dwg_configs/serial_logger.py`
+  (detached/nohup, DTR/RTS untouched so it does NOT reset the board; timestamps
+  every line, reconnects). Morning triage greps the log for `Low memory:` (carries
+  the in-flight URI), `playlist: skipping`, `canceled`, a boot banner mid-file
+  (= reboot). Restore `PauseTime`, delete the test playlist, `pkill -f
+  serial_logger.py` when done.
 
 ## Architecture / conventions
 
@@ -80,6 +90,14 @@ Compass"**.)
   is present.
 - **Progress %** = executed motion, not file-read position (the reader leads motion by
   the queued planner blocks); reported `-1` during a pre-execution clear.
+- **A playlist tolerates unplayable entries; a single `$Sand/Run` does not.** In a
+  playlist run a pattern that won't start (missing/renamed file, SD read hiccup) or an
+  unreadable slot is logged (`playlist: skipping …`) and the run advances immediately;
+  a failing clear is dropped and its pattern still tried. `MAX_CONSEC_FAIL` (5) failures
+  in a row with no pattern ever starting = a dead SD, so the run cancels rather than
+  spinning the carousel forever (the counter resets whenever a pattern actually starts).
+  A deliberate one-shot `$Sand/Run` instead fails loudly (`canceled: file did not
+  start`). Shared advance/wrap/reshuffle logic lives in `Playlist::advanceIndex`.
 
 ## Gotchas (these bit us; don't repeat)
 
@@ -96,6 +114,12 @@ Compass"**.)
   (long early-line values broke XModem parsing).
 - **Runtime `$/path=value` config changes do NOT persist** — config.yaml is reloaded
   fresh each boot; edit the file to persist.
+- **`POST /upload` (and `/files`) takes the destination path from the multipart
+  FILENAME, not a `path` field/arg** — `filename=/playlists/x.txt` lands it there; a
+  bare `filename=x.txt` with `path=/playlists` lands it at the **SD root** (the size
+  field must match: `/playlists/x.txtS`). Delete is the query form
+  `/upload?path=/playlists&action=delete&filename=x.txt`. (COMMANDS.md/API.md examples
+  were wrong about `path=` until 2026-07-18.)
 - **Never hold all playlist pattern paths in RAM.** A big playlist (188+ entries) as
   a contiguous buffer / vector-of-strings needs a multi-KB allocation the fragmented
   ESP32 heap often can't satisfy → `std::bad_alloc` → `terminate()` → `abort()`/reboot
@@ -134,9 +158,15 @@ framework copy via `lib_extra_dirs`): shorter head-of-line waits, RST-close on
 ABORTED clients only (never after a served response — linger-0 close discards
 unflushed response bytes), liveness accessors for the accept-queue self-heal
 watchdog in `Web_Server::poll()` — an aborted-client storm (status poller racing an
-async WiFi scan) used to wedge the single-threaded server for minutes — and a
-low-heap guard (503 "busy: low memory" under a 10 KB floor; `/sand_status` and
-stop/pause/resume exempt) so a heap-starved board sheds load instead of wedging.
+async WiFi scan) used to wedge the single-threaded server for minutes — and layered
+low-heap shedding: 503 "busy: low memory" under a 10 KB floor (`/sand_status` and
+stop/pause/resume exempt), RST-at-accept under a 6 KB hard floor, and `/sd/` file
+streams abort themselves under 12 KB. Root cause of the deep dips: **every client
+queued behind the single-threaded server pins ~2 KB of lwIP buffers**, and a
+monolithic multi-MB `/sd/` transfer (preview shards) keeps the server deaf for
+30+ s while they stack (measured 3.3 KB floor in the wild). `/sd/` GETs support
+HTTP Range (`HttpRange.{h,cpp}`, std-only) so clients pull big files in bounded
+chunks instead.
 Changes are tagged `DW fork:`; see `libraries/WebServer/README.md` before bumping
 the framework.
 

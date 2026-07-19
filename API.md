@@ -71,6 +71,14 @@ the WebSocket for a *single* "active controller" that wants smooth high-rate liv
 > preempts the first — they are not queued). Multi-user works mechanically; any "who's driving" UX is the
 > app's job. Scale assumption is household (a handful of pollers), not crowds — the ESP32 serves HTTP
 > serially and has a small socket pool.
+>
+> **Polling cadence is the client's biggest lever on board load.** Every `/sand_status` poll is a full
+> TCP connection (the server sends `Connection: close`, so keep-alive is a no-op) — the per-poll cost is
+> fixed, only the *rate* is yours to control. Poll at the base rate normally, and **back off hard when the
+> board signals heap pressure** (`heap_largest` below ~20k, or a `503 busy: low memory`) — that's the
+> regime that actually strains the single-client server. Also back off a table that's unreachable, and stop
+> polling when backgrounded / mid-upload. See **[POLLING.md](POLLING.md)** for the full rule and per-client
+> checklist.
 
 ### Status & listing — multi-client HTTP routes (JSON body, work during motion)
 | Endpoint | Returns |
@@ -95,7 +103,7 @@ reliably over the (single-client) WebSocket. Pattern/playlist **contents** are f
 | `$SD/Run=/patterns/<file>.thr` | run a pattern (`.thr` translated on the fly by ThetaRho kinematics) |
 | `$Sand/Run=/patterns/<file>.thr [clear=<mode>]` | run a pattern, optionally preceded by a clear ("pre-execution"). `clear=none\|adaptive\|in\|out\|sideway\|random` (default none); `adaptive` picks in/out from the pattern's first rho (never sideway). Clear moves honor `$Playlist/ClearSpeed` (0 = same as `$THR/Feed`) and the `$Playlist/ClearIn\|ClearOut` file overrides. Sequenced by the firmware (clear→pattern, then stop); aborts any running job first. Requires a `playlist:` config section (the clear files live there). Filenames may contain spaces; `clear=` must be the **last** token (everything before it is the path). |
 | `$SD/Show=/patterns/<file>.thr` | dump file contents (preview; requires Idle/Alarm) |
-| `$Playlist/Run=<name>` | run playlist `/playlists/<name>.txt` |
+| `$Playlist/Run=<name>` | run playlist `/playlists/<name>.txt`. **Unplayable entries are skipped**, not fatal: a pattern that fails to start (missing/renamed file, SD read hiccup) or an unreadable playlist slot is logged (`playlist: skipping …`) and the run advances immediately (no between-pattern pause); a failing clear is dropped and its pattern still tried. 5 consecutive failures (no pattern started in between) means the SD itself is broken → run cancels (`too many unplayable patterns in a row`). A single `$Sand/Run` still fails loudly (`canceled: file did not start`) |
 | `$Playlist/Stop` | stop after the current pattern |
 | `$Playlist/Skip` | abort current pattern, advance to next |
 | `$Playlist/List` | text listing + active playlist index/total/name |
@@ -216,13 +224,18 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   "file": "/sd/patterns/star.thr",
   "progress": 0.425,          // 0..1 fraction of executed motion, or -1 if unknown
   "playlist": { "active": true, "index": 2, "total": 10, "name": "evening",
-                "next": "/patterns/owl.thr",
+                "next": "/patterns/owl.thr", "last": "/patterns/star.thr",
                 "clearing": false, "quiet": false, "pause_remaining": -1, "pause_total": -1 },
   //  next = the pattern the table will actually play after the current one,
   //  resolved from the firmware's internal (possibly shuffled) order. ALWAYS use
   //  this for an "up next" display — deriving it from the playlist file's line
   //  order is wrong whenever shuffle is on. "" = unknown: last pattern of a loop
   //  pass (the next pass reshuffles when it starts) — show nothing or "reshuffling".
+  //  last = the most recently COMPLETED pattern of this run = what is currently
+  //  drawn on the table. During the between-patterns pause it names the pattern
+  //  that just finished, so render its preview as "on the table now". "" until
+  //  the first pattern of the run completes. (A skipped/aborted pattern never
+  //  finished drawing, so it does not become last.)
   //  clearing=true means a pre-execution clear is running before the chosen
   //  pattern; progress then tracks the CLEAR file's own 0..1 progress (file is the
   //  clear pattern). Render it as a separate "Clearing…" bar that resets when the
@@ -267,9 +280,31 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
 `GET /sd/patterns/<file>.thr` (and any `/sd/...` path) — served by the catch-all file handler. The app
 fetches the `.thr` and renders the polar preview locally (no server-side thumbnails).
 
+**Ranged GETs are supported** (single `bytes=` ranges: `a-b`, `a-`, `-n`): responses carry
+`Accept-Ranges: bytes`; a valid `Range:` header gets **206** + `Content-Range`, a range past EOF
+gets **416**. Multi-range or malformed headers fall back to the whole file (200). **Clients pulling
+multi-MB files (preview-bundle shards) should fetch in ranged chunks of ≤256 KB**: the server is
+single-threaded, so one monolithic 5 MB response leaves every other client (status polls, stop
+buttons) unserved for the whole transfer, and their queued connections each pin ~2 KB of heap.
+A transfer may also be **cut short mid-body if free heap drops below ~12 KB** (detect via the
+byte count / shard hash and retry with backoff).
+
+### Load shedding (low heap)
+Three floors, all measured on free heap:
+- **< 15 KB** — `[MSG:WARN: Low memory: N bytes, largest M, http busy <uri> for Tms, pend=P]`
+  in `/sand_log`. Reports the boot-session low-water mark (each value appears once) plus what
+  the web server was serving at that instant — the usual culprit behind a crater is a
+  connection pileup while one long request monopolizes the single-threaded server.
+- **< 10 KB** — non-exempt routes get **503** `busy: low memory` before the handler runs;
+  `/sand_status` and stop/pause/resume still work.
+- **< 6 KB** — new connections are RST-closed at accept, before the request is read (no
+  route is exempt — parsing itself costs heap the board no longer has). Back off and retry.
+
 ### Upload
-`POST /upload` (SD) multipart: field `<filename>S` = size in bytes, field `<filename>` = file bytes;
-optional `?path=/patterns`. Returns JSON `{status, files:[{name,size,…}], path, total, used, occupation}`.
+`POST /upload` (SD) multipart: the multipart **filename carries the full destination path**
+(`filename=/patterns/x.thr`; a `path` arg is ignored — a bare filename lands at `/`); field
+`<filename>S` = size in bytes, field `<filename>` = file bytes (both named with that full path).
+Returns JSON `{status, files:[{name,size,…}], path, total, used, occupation}`.
 Pre-checks free space. Missing parent folders are created automatically (a card prepared on a
 computer often lacks `/playlists` / `/patterns`). (Serial alternative: `$Xmodem/Receive=<path>` /
 `$Xmodem/Send=<path>`.)
