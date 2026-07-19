@@ -136,6 +136,15 @@ public:
     _lowHeapExempt = exempt;
   }
 
+  // DW fork: hard heap floor. Below it, a newly accepted connection is
+  // RST-closed before its request is even read.  The soft guard above still
+  // has to accept + parse a request to answer its 503, and each such client
+  // pins ~2 KB of lwIP buffers while it waits — under a genuine heap crater
+  // the shedding itself deepens the hole.  Applies to every route (pre-parse,
+  // so there is no URI to exempt on); clients retry with backoff.  0 disables
+  // (default).
+  void setHardHeapFloor(uint32_t floorBytes) { _heapHardFloor = floorBytes; }
+
   // DW fork: per-request trace hook, called at the top of _handleRequest()
   // (before the low-heap guard, so shed requests are traced too).  Diagnosis
   // aid for heap-drain hunts: the FluidNC side logs uri + heap per request.
@@ -250,6 +259,7 @@ protected:
   unsigned long _lastHandledMs; // DW fork: see lastHandledMillis()
   uint32_t    _lowHeapFloor = 0;                            // DW fork: see setLowHeapGuard()
   bool        (*_lowHeapExempt)(const String& uri) = nullptr; // DW fork
+  uint32_t    _heapHardFloor = 0;                           // DW fork: see setHardHeapFloor()
   void        (*_onRequestTrace)(const char* uri) = nullptr;  // DW fork: see onRequestTrace()
   boolean     _nullDelay;
 

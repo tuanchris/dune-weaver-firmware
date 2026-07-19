@@ -287,6 +287,16 @@ void WebServer::handleClient() {
 
     log_v("New client: client.localIP()=%s", _currentClient.localIP().toString().c_str());
 
+    // DW fork: hard heap floor — see setHardHeapFloor(). RST before reading
+    // the request; no response is owed, and an orderly close would park the
+    // socket in TIME_WAIT holding an lwIP PCB we can't spare right now.
+    if (_heapHardFloor && ESP.getFreeHeap() < _heapHardFloor) {
+      _lingerAbort();
+      _currentClient.stop();
+      _currentClient = WiFiClient();
+      return;
+    }
+
     _currentStatus = HC_WAIT_READ;
     _statusChange = millis();
   }

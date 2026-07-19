@@ -34,6 +34,7 @@
 #include "src/JSONEncoder.h"
 #include "src/StartupLog.h"  // StartupLog::dump() for /sand_bootlog
 #include "src/RingLog.h"     // RingLog::dump() for /sand_log
+#include "src/HttpRange.h"   // ranged /sd/ file GETs (preview-shard sync)
 #include "src/Job.h"         // Job::active() to gate OTA while a pattern runs
 #include "src/Report.h"      // git_info for the /updatefw response
 #include "src/SettingsDefinitions.h"  // sand_password ($Sand/Password API lock)
@@ -94,6 +95,15 @@ namespace WebUI {
     EnumSetting *http_enable, *http_block_during_motion;
     IntSetting*  http_port;
 
+    // Heap-crater forensics (heapContext): the web task stashes what it's
+    // serving so the protocol task's "Low memory" warning can name the
+    // traffic in flight when a new heap low-water mark hits.  Written only
+    // by the web task; read cross-task without a lock (a torn URI string in
+    // a diagnostic line is acceptable, a mutex on every request is not).
+    static char              s_traceUri[48] = { 0 };
+    static volatile uint32_t s_traceStartMs = 0;
+    static volatile bool     s_pendSeen     = false;
+
     Web_Server::~Web_Server() {
         deinit();
     }
@@ -132,12 +142,24 @@ namespace WebUI {
         _webserver->setLowHeapGuard(10000, [](const String& uri) {
             return uri == "/sand_status" || uri == "/sand_stop" || uri == "/sand_pause" || uri == "/sand_resume";
         });
-        // Request trace, debug level only ($Message/Level=Debug to enable):
-        // every request logged with the heap state.  This is the tool that
-        // found the 2026-07-12 preview-sync crash (dead clients grinding the
-        // send path) -- silent in normal operation, priceless when hunting a
-        // heap drain or a wedge, so it stays behind the debug gate.
+        // Hard floor (DW fork): below this, brand-new connections are RST at
+        // accept, before any request bytes are read.  The 503 guard above
+        // still costs an accept + parse (~2 KB of lwIP buffers pinned per
+        // waiting client); in a genuine crater — measured live: connection
+        // pileups behind a multi-MB /sd/ transfer took the heap floor to
+        // 3.3 KB — shedding at the socket is all the board can still afford.
+        _webserver->setHardHeapFloor(6000);
+        // Request trace: ALWAYS stash the URI + start time for heapContext()
+        // (so a later "Low memory" warning can name the in-flight request),
+        // and at debug level ($Message/Level=Debug) also log every request
+        // with the heap state.  The debug log is the tool that found the
+        // 2026-07-12 preview-sync crash (dead clients grinding the send path)
+        // -- silent in normal operation, priceless when hunting a heap drain
+        // or a wedge, so it stays behind the debug gate.
         _webserver->onRequestTrace([](const char* uri) {
+            strncpy(s_traceUri, uri, sizeof(s_traceUri) - 1);
+            s_traceUri[sizeof(s_traceUri) - 1] = '\0';
+            s_traceStartMs                     = millis();
             log_debug("http " << uri << " heap " << xPortGetFreeHeapSize() << " big "
                               << heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         });
@@ -150,7 +172,7 @@ namespace WebUI {
 #endif
 
         //here the list of headers to be recorded
-        const char* headerkeys[]   = { "If-None-Match", "X-Sand-Key" };
+        const char* headerkeys[]   = { "If-None-Match", "X-Sand-Key", "Range" };
         size_t      headerkeyssize = sizeof(headerkeys) / sizeof(char*);
         _webserver->collectHeaders(headerkeys, headerkeyssize);
 
@@ -390,17 +412,41 @@ namespace WebUI {
                 return false;
             }
         }
+        // Honor single-range GETs (parser is std-only HttpRange, unit-tested
+        // natively).  Multi-MB SD files (the app's preview-bundle shards)
+        // monopolize the single-threaded server for the whole transfer;
+        // ranged pulls bound each deaf window so queued clients get served
+        // between chunks instead of stacking ~2 KB of lwIP buffers each.
+        size_t           fsize  = file->size();
+        size_t           rStart = 0;
+        size_t           rLen   = fsize;
+        HttpRange::Result range  = HttpRange::parse(_webserver->header("Range").c_str(), fsize, rStart, rLen);
+        if (range == HttpRange::Result::Unsatisfiable) {
+            std::string cr = "bytes */" + std::to_string(fsize);
+            _webserver->sendHeader("Content-Range", cr.c_str());
+            _webserver->send(416, "text/plain", "");
+            delete file;
+            return true;
+        }
+        _webserver->sendHeader("Accept-Ranges", "bytes");
         if (download) {
             _webserver->sendHeader("Content-Disposition", "attachment");
         }
         if (hash.length()) {
             _webserver->sendHeader("ETag", hash.c_str());
         }
-        _webserver->setContentLength(file->size());
+        _webserver->setContentLength(rLen);
         if (isGzip) {
             _webserver->sendHeader("Content-Encoding", "gzip");
         }
-        _webserver->send(200, getContentType(path), "");
+        if (range == HttpRange::Result::Partial) {
+            std::string cr = "bytes " + std::to_string(rStart) + "-" + std::to_string(rStart + rLen - 1) + "/" + std::to_string(fsize);
+            _webserver->sendHeader("Content-Range", cr.c_str());
+            file->set_position(rStart);
+            _webserver->send(206, getContentType(path), "");
+        } else {
+            _webserver->send(200, getContentType(path), "");
+        }
 
         // Stream the file in explicit chunks instead of the opaque
         // WiFiClient::write(Stream&) loop.  Two reasons, both learned from
@@ -416,9 +462,20 @@ namespace WebUI {
         {
             static char buf[1360];
             WiFiClient  out       = _webserver->client();
-            size_t      remaining = file->size();
+            size_t      remaining = rLen;
             uint32_t    chunks    = 0;
             while (remaining) {
+                // Shed THIS transfer under heap pressure: the stream itself
+                // allocates nothing (static buf), but while it runs the
+                // single-threaded server is deaf and every waiting client
+                // pins ~2 KB of lwIP buffers — the pileup, not the transfer,
+                // is what cratered a live table to 3.3 KB free.  A truncated
+                // body fails the client's length/hash check and is retried
+                // with backoff, by which time the queue has drained.
+                if (xPortGetFreeHeapSize() < 12000) {
+                    log_debug("Aborting " << path << " stream: low heap");
+                    break;
+                }
                 size_t want = remaining < sizeof(buf) ? remaining : sizeof(buf);
                 size_t n    = file->readBytes(buf, want);
                 if (!n) {
@@ -1178,7 +1235,17 @@ namespace WebUI {
     // block-during-motion gate so status is available while a pattern runs.
     void Web_Server::handleSandStatus() {
         _webserver->sendHeader("Cache-Control", "no-store");
-        _webserver->send(200, "application/json", SandApi::statusJson().c_str());
+        // Hottest route in the whole API (every client polls it ~1 Hz, several
+        // concurrently).  Write the JSON std::string straight through instead
+        // of the send(int,const char*,const char*) overload, which does a full
+        // (String)content heap copy of the body -- a wasted allocation on the
+        // fragmented heap, multiplied by the poll rate.  setContentLength +
+        // empty send emits the headers with the right length (not chunked);
+        // sendContent writes the body bytes with no intermediate copy.
+        std::string json = SandApi::statusJson();
+        _webserver->setContentLength(json.size());
+        _webserver->send(200, "application/json", "");
+        _webserver->sendContent(json.data(), json.size());
     }
 
     // Multi-client HTTP reads (the $Sand/* command equivalents emit asynchronously
@@ -2057,7 +2124,9 @@ namespace WebUI {
             if (handled && (int32_t)(handled - web_alive_ms) > 0) {
                 web_alive_ms = handled;
             }
-            if (!_webserver->hasPendingClient()) {
+            bool pending = _webserver->hasPendingClient();
+            s_pendSeen   = pending;  // stashed for heapContext()
+            if (!pending) {
                 web_alive_ms = now;  // no demand -> quiet, not stalled
             } else if ((int32_t)(now - web_alive_ms) > (int32_t)WEB_STALL_MS) {
                 log_warn("Web server stalled with pending connections; restarting listener");
@@ -2077,9 +2146,45 @@ namespace WebUI {
         }
     }
 
+    void Web_Server::heapContext(char* out, size_t outlen) {
+        if (!_setupdone || !_webserver) {
+            snprintf(out, outlen, "http off");
+            return;
+        }
+        uint32_t now     = millis();
+        uint32_t started = s_traceStartMs;
+        uint32_t done    = _webserver->lastHandledMillis();
+        // A request whose start is newer than the last completion is still
+        // being served -- the exact monopolizer a heap crater wants named.
+        bool busy = started && (int32_t)(started - done) > 0;
+        if (busy) {
+            snprintf(out, outlen, "http busy %s for %lums, pend=%d", s_traceUri, (unsigned long)(now - started), (int)s_pendSeen);
+        } else if (!started) {
+            snprintf(out, outlen, "http idle, no requests yet, pend=%d", (int)s_pendSeen);
+        } else {
+            snprintf(out,
+                     outlen,
+                     "http idle, last %s %lums ago, pend=%d",
+                     s_traceUri,
+                     (unsigned long)(now - (done ? done : started)),
+                     (int)s_pendSeen);
+        }
+    }
+
     void Web_Server::handle_Websocket_Event(uint8_t num, uint8_t type, uint8_t* payload, size_t length) {
         WSChannels::handleEvent(_socket_server, num, type, payload, length);
     }
+
+}
+
+// Shim for Protocol.cpp's low-memory warning: it can't include this module's
+// header (Arduino.h macro collisions with the motion core), so it declares
+// this free function extern instead.
+void sand_http_heap_context(char* out, size_t outlen) {
+    WebUI::Web_Server::heapContext(out, outlen);
+}
+
+namespace WebUI {
 
     void Web_Server::handle_Websocketv3_Event(uint8_t num, uint8_t type, uint8_t* payload, size_t length) {
         WSChannels::handlev3Event(_socket_serverv3, num, type, payload, length);

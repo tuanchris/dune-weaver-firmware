@@ -23,6 +23,11 @@
 #include "Job.h"
 #include "Driver/restart.h"
 
+// Web_Server::heapContext shim (WebUI/WebServer.cpp).  Declared here instead
+// of including WebUI/WebServer.h: that header drags in Arduino.h, whose
+// DEG_TO_RAD macro collides with the motion core's constant.
+extern void sand_http_heap_context(char* out, size_t outlen);
+
 #include <freertos/semphr.h>
 #include <esp_task_wdt.h>  // task watchdog: a hung poller/protocol task panics (-> coredump + reboot) instead of bricking the table
 #include <mutex>
@@ -468,7 +473,14 @@ void protocol_main_loop() {
             // This prevents a cycle where the reporting itself consumes some heap and triggers another
             // report, but the true minimum is reported eventually, and large drops are reported immediately.
             if ((heapLowWater < heapLowWaterReported - 2048) || (ticksSinceReported > tickLimit)) {
-                log_warn("Low memory: " << heapLowWater << " bytes");
+                // Name the traffic in flight: heap craters have always come
+                // from connection pileups behind whatever the single-threaded
+                // web server was serving, and the low-water mark alone can't
+                // say what that was after the fact.
+                char httpctx[80];
+                sand_http_heap_context(httpctx, sizeof(httpctx));
+                log_warn("Low memory: " << heapLowWater << " bytes, largest " << heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) << ", "
+                                        << httpctx);
                 heapLowWaterReported   = heapLowWater;
                 heapLowWaterReportTime = getCpuTicks();
             }

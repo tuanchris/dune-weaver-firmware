@@ -36,6 +36,13 @@ Local changes (all tagged `DW fork:` in the sources):
 - `WebServer.{h,cpp}`: `onRequestTrace(fn)` — optional per-request hook (uri)
   called at the top of `_handleRequest()`, before the low-heap guard. Used for
   heap-drain diagnosis from the FluidNC side; no-op unless registered.
+- `WebServer.{h,cpp}`: `setHardHeapFloor(bytes)` — below the floor, a newly
+  accepted connection is RST-closed in `handleClient()` before its request is
+  read. The 503 guard still costs an accept + parse (~2 KB of lwIP buffers per
+  waiting client); when connection pileups have already cratered the heap
+  (measured 3.3 KB free behind a multi-MB `/sd/` transfer), shedding at the
+  socket is the only affordable answer. Registration (6 KB) is in
+  `Web_Server::init()`.
 
 When bumping the Arduino framework, re-vendor from the new version and re-apply the
 `DW fork:` blocks.

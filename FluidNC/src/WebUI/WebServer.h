@@ -57,6 +57,12 @@ namespace WebUI {
         // bootlog/log streaming (their capture channel lives outside the class).
         static void sendChunk(const char* data, size_t len);
 
+        // One-line snapshot of what the web server is doing (current/last URI,
+        // how long, pending-client flag), safe to call from any task.  Appended
+        // to the protocol loop's "Low memory" warning so a heap-crater log line
+        // names the traffic that was being served when the low-water mark hit.
+        static void heapContext(char* out, size_t outlen);
+
         ~Web_Server();
 
     private:
