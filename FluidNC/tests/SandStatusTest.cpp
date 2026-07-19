@@ -123,6 +123,7 @@ TEST(SandStatusEncode, RunningWithProgressAndPlaylist) {
     d.playlist_pause_total     = 60;
     d.playlist_name     = "evening";
     d.playlist_next     = "/patterns/owl.thr";
+    d.playlist_last     = "/patterns/star.thr";
     d.playlist_clearing = false;
     d.quiet             = false;
 
@@ -143,6 +144,9 @@ TEST(SandStatusEncode, RunningWithProgressAndPlaylist) {
     // Shuffle-aware "up next" (resolved by the firmware; the app must not
     // guess it from the unshuffled file order).
     EXPECT_TRUE(has(j, "\"next\":\"/patterns/owl.thr\""));
+    // Just-finished pattern = what's drawn on the table now (for a preview
+    // during the between-patterns pause).
+    EXPECT_TRUE(has(j, "\"last\":\"/patterns/star.thr\""));
 }
 
 TEST(SandStatusEncode, LedBlockWhenPresent) {

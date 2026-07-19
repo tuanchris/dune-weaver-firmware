@@ -44,6 +44,7 @@ namespace SandStatus {
         int         playlist_pause_total     = -1;  // full duration of that pause, seconds; -1 if not pausing
         std::string playlist_name;
         std::string playlist_next;  // resolved upcoming pattern (honors shuffle); "" = unknown (end of pass)
+        std::string playlist_last;  // most recently completed pattern in this run = what's drawn on the table; "" = none yet
         bool        playlist_clearing = false;
         bool        quiet             = false;  // Still Sands active
 

@@ -154,6 +154,11 @@ public:
         // this is the only truthful "up next").  "" = unknown: last pattern
         // of a pass (next pass not yet shuffled) or a single run.
         char next[160] = {};
+        // Most recently COMPLETED pattern of this run -- i.e. what is currently
+        // drawn on the table.  During the between-patterns pause this names the
+        // just-finished pattern so a client can show its preview.  "" until the
+        // first pattern of the run completes; cleared when the run ends.
+        char last[160] = {};
     };
     static bool runtimeStatus(RuntimeStatus& out);
 
@@ -198,6 +203,10 @@ private:
     // ($Sand/Run) hold their one path in _current_path already, so it's a
     // no-op for those.
     bool resolveCurrent();
+
+    // Advance to the next slot, wrapping (and reshuffling) in loop mode.
+    // Returns false when the run is over (finish("complete") already called).
+    bool advanceIndex();
 
     // Configuration
     std::string _folder     = "/playlists";
@@ -293,6 +302,7 @@ private:
     std::string              _playlist_path;   // SD path of the playlist .txt (for resolveCurrent); "" for single runs
     std::string              _current_path;    // resolved pattern path for _index (kept in sync by resolveCurrent)
     std::string              _next_path;       // resolved path for _index+1 ("up next"); "" = end of pass / single run
+    std::string              _last_pattern;    // most recently completed pattern = what's on the table; "" until one finishes
     size_t                   _resolved_index = SIZE_MAX;  // _index that _current_path currently reflects
     std::string              _playlist_name;
     std::string              _pending_clear;  // chosen clear file for current item
@@ -305,6 +315,7 @@ private:
     bool                     _single           = false;  // one-shot pattern run, not a playlist
     int                      _clear_override   = -1;     // CLEAR_* for this run, or -1 = use setting
     bool                     _clear_done       = false;  // clear already ran for current item
+    int                      _consec_fail      = 0;      // unplayable patterns in a row (skip-vs-cancel; see RunPattern)
     bool                     _job_seen         = false;  // injected job has been observed active
     uint32_t                 _inject_ms        = 0;      // when the last line was injected
     uint32_t                 _pattern_start_ms = 0;
@@ -334,4 +345,5 @@ private:
     char          _pub_name[64]     = {};
     char          _pub_current[160] = {};
     char          _pub_next[160]    = {};
+    char          _pub_last[160]    = {};
 };

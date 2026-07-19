@@ -327,6 +327,7 @@ std::string SandApi::statusJson() {
         d.playlist_pause_total       = rs.pause_total;
         d.playlist_name              = rs.name;
         d.playlist_next              = rs.next;
+        d.playlist_last              = rs.last;
         d.playlist_clearing          = rs.clearing;
         d.quiet                      = rs.quiet;
     }

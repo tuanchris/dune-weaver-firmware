@@ -100,6 +100,8 @@ namespace SandStatus {
         member_str(o, "name", d.playlist_name.c_str());
         o += ',';
         member_str(o, "next", d.playlist_next.c_str());  // truthful "up next" (shuffle-aware); "" = unknown
+        o += ',';
+        member_str(o, "last", d.playlist_last.c_str());  // just-finished pattern = what's on the table now; "" = none yet
         o += ",\"clearing\":";
         o += d.playlist_clearing ? "true" : "false";
         o += ",\"quiet\":";

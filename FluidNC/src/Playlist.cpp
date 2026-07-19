@@ -42,6 +42,9 @@ namespace {
     // How long to wait for an injected command to take effect before
     // declaring the playlist broken (missing file, alarm, etc.)
     constexpr uint32_t INJECT_TIMEOUT_MS = 8000;
+    // An unplayable pattern is skipped, but this many in a row means the SD
+    // (not the file) is the problem -- cancel instead of retry-looping forever.
+    constexpr int MAX_CONSEC_FAIL = 5;
     constexpr uint32_t HOMING_TIMEOUT_MS = 120000;
     // Auto-play fallback home: how long the machine may sit Idle-unhomed
     // before auto-play requests a home itself.  Long enough for the config
@@ -345,6 +348,8 @@ void Playlist::finish(const char* why) {
     _current_path.shrink_to_fit();
     _next_path.clear();
     _next_path.shrink_to_fit();
+    _last_pattern.clear();
+    _last_pattern.shrink_to_fit();
     _resolved_index = SIZE_MAX;
     _pending_clear.clear();
     _req_skip = false;
@@ -372,10 +377,14 @@ void Playlist::publish() {
         strlcpy(_pub_name, _playlist_name.c_str(), sizeof(_pub_name));
         strlcpy(_pub_current, _index < _order.size() ? _current_path.c_str() : "", sizeof(_pub_current));
         strlcpy(_pub_next, _index < _order.size() ? _next_path.c_str() : "", sizeof(_pub_next));
+        // What's on the table now = the last pattern that finished drawing;
+        // "" until the first one completes.  Kept truthful through the pause.
+        strlcpy(_pub_last, _last_pattern.c_str(), sizeof(_pub_last));
     } else {
         _pub_name[0]    = '\0';
         _pub_current[0] = '\0';
         _pub_next[0]    = '\0';
+        _pub_last[0]    = '\0';
     }
 }
 
@@ -402,6 +411,7 @@ bool Playlist::runtimeStatus(RuntimeStatus& out) {
     strlcpy(out.name, p->_pub_name, sizeof(out.name));
     strlcpy(out.current, p->_pub_current, sizeof(out.current));
     strlcpy(out.next, p->_pub_next, sizeof(out.next));
+    strlcpy(out.last, p->_pub_last, sizeof(out.last));
     return true;
 }
 
@@ -564,6 +574,23 @@ bool Playlist::resolveCurrent() {
     }
     _current_path = std::move(found);
     _next_path    = std::move(found_next);  // may be empty (end of pass)
+    return true;
+}
+
+bool Playlist::advanceIndex() {
+    _index++;
+    _clear_done = false;
+    if (_index >= _order.size()) {
+        if (!_single && runMode() == MODE_LOOP) {
+            if (runShuffle()) {
+                shuffleOrder();
+            }
+            _index = 0;
+        } else {
+            finish("complete");
+            return false;
+        }
+    }
     return true;
 }
 
@@ -809,6 +836,7 @@ Error Playlist::pollLine(char* line) {
         _ov_pfs         = _req_ov_pfs;
         bool no_abort   = _req_no_abort;
         _req_no_abort   = false;
+        _consec_fail    = 0;
         // no_abort (boot auto-play only): the only job that can be active at
         // boot is the after_homing recenter macro, nested by $H after the
         // autostart trigger's own Job::active() check -- let it finish;
@@ -871,19 +899,7 @@ Error Playlist::pollLine(char* line) {
                 // Skip while deciding means skip this pattern entirely
                 _req_skip = false;
                 _since_home++;
-                _index++;
-                _clear_done = false;
-                if (_index >= _order.size()) {
-                    if (!_single && runMode() == MODE_LOOP) {
-                        if (runShuffle()) {
-                            shuffleOrder();
-                        }
-                        _index = 0;
-                    } else {
-                        finish("complete");
-                        break;
-                    }
-                }
+                advanceIndex();
                 break;
             }
             // Injecting a command needs a line slot and an idle machine, and no
@@ -904,11 +920,19 @@ Error Playlist::pollLine(char* line) {
                 break;
             }
             // Fetch this item's path off the SD (once per item -- _order[_index]
-            // is only read back here).  A read failure cancels rather than
-            // injecting a garbage path.
+            // is only read back here).  A read failure skips the slot rather
+            // than cancelling the run (or injecting a garbage path) -- a
+            // transient SD hiccup shouldn't kill an overnight playlist.  A
+            // dead SD fails every slot, so the consecutive cap still cancels
+            // within a few polls.
             if (_resolved_index != _index) {
                 if (!resolveCurrent()) {
-                    finish("canceled: playlist read error (see log)");
+                    if (++_consec_fail >= MAX_CONSEC_FAIL) {
+                        finish("canceled: playlist read error (see log)");
+                        break;
+                    }
+                    log_warn("playlist: slot " << (_index + 1) << "/" << _order.size() << " unreadable, skipping");
+                    advanceIndex();
                     break;
                 }
                 _resolved_index = _index;
@@ -990,13 +1014,41 @@ Error Playlist::pollLine(char* line) {
             if (!_job_seen) {
                 if (Job::active()) {
                     _job_seen = true;
+                    if (_phase == Phase::RunPattern) {
+                        _consec_fail = 0;  // a pattern started; the SD is alive
+                    }
                 } else if (now - _inject_ms > INJECT_TIMEOUT_MS) {
                     // Say WHICH file and WHY: the $SD/Run error reply went to
                     // this output-discarding channel, so without re-logging it
                     // here the serial log shows no reason at all.
                     const char* fname = _phase == Phase::RunClear ? _pending_clear.c_str() : _current_path.c_str();
                     log_error("playlist: " << fname << " did not start: " << (_last_err[0] ? _last_err : "no error reported"));
-                    finish("canceled: file did not start (see log)");
+                    if (_single) {
+                        // A deliberate one-shot $Sand/Run has nothing to skip
+                        // to; fail loudly so the app surfaces it.
+                        finish("canceled: file did not start (see log)");
+                        break;
+                    }
+                    if (_phase == Phase::RunClear) {
+                        // The pattern itself may be fine; drop the clear and
+                        // try it (_clear_done is already true for this item).
+                        Kinematics::ThetaRho::setClearFeed(-1);
+                        _phase = Phase::NextItem;
+                        break;
+                    }
+                    // Skip the unplayable pattern instead of cancelling the
+                    // whole run.  A wholesale SD failure would turn skipping
+                    // into an endless retry carousel, so a streak of failures
+                    // (never interrupted by a pattern that starts) cancels.
+                    if (++_consec_fail >= MAX_CONSEC_FAIL) {
+                        finish("canceled: too many unplayable patterns in a row (see log)");
+                        break;
+                    }
+                    log_warn("playlist: skipping " << _current_path);
+                    _since_home++;
+                    if (advanceIndex()) {
+                        _phase = Phase::NextItem;
+                    }
                 }
                 break;
             }
@@ -1009,6 +1061,11 @@ Error Playlist::pollLine(char* line) {
                     break;
                 }
             pattern_done:
+                // Remember what just finished drawing: it's what's on the table
+                // now, so a client can preview it during the upcoming pause.
+                // (advanceIndex below moves _index on; _current_path isn't
+                // re-resolved until NextItem, but capture here to be explicit.)
+                _last_pattern = _current_path;
                 _since_home++;
                 _quiet_override = false;  // a Skip override is good for one pattern
                 uint32_t pause_ms = static_cast<uint32_t>(runPause()) * 1000;
@@ -1016,18 +1073,8 @@ Error Playlist::pollLine(char* line) {
                     uint32_t elapsed = now - _pattern_start_ms;
                     pause_ms         = pause_ms > elapsed ? pause_ms - elapsed : 0;
                 }
-                _index++;
-                _clear_done = false;
-                if (_index >= _order.size()) {
-                    if (!_single && runMode() == MODE_LOOP) {
-                        if (runShuffle()) {
-                            shuffleOrder();
-                        }
-                        _index = 0;
-                    } else {
-                        finish("complete");
-                        break;
-                    }
+                if (!advanceIndex()) {
+                    break;
                 }
                 if (pause_ms > 0) {
                     log_info("playlist: pausing " << (pause_ms / 1000) << "s");
