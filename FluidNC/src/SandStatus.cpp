@@ -88,6 +88,10 @@ namespace SandStatus {
         } else {
             append_float(o, d.progress, 3);
         }
+        o += ",\"elapsed\":";
+        // Seconds since the pattern started; <0 (nothing running) => "-1", mirroring
+        // progress.  Paired with progress, the client derives the ETA.
+        append_int(o, d.elapsed < 0 ? -1 : static_cast<int>(d.elapsed));
 
         o += ",\"playlist\":{";
         o += "\"active\":";

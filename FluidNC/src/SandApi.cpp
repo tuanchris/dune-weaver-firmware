@@ -316,6 +316,12 @@ std::string SandApi::statusJson() {
         d.running   = true;
         d.file      = ch->name();
         d.progress  = SandStatus::parse_sd_percent(ch->_progress);
+        // Wall-clock seconds since this file job started (InputFile stamps its own
+        // start; a fresh object per pattern makes it reset per run and per clear).
+        // Monotonic esp_timer, same clock as uptime — no wall-clock/tz dependency.
+        if (int64_t start = ch->jobStartMicros(); start >= 0) {
+            d.elapsed = static_cast<long>((esp_timer_get_time() - start) / 1000000);
+        }
     }
 
     Playlist::RuntimeStatus rs;

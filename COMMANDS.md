@@ -26,10 +26,12 @@ B=http://192.168.68.160       # LAN IP (preferred); or the mDNS name, e.g. http:
 ## Read state (JSON, safe during motion, any number of clients)
 
 ```bash
-curl "$B/sand_status"        # state, theta, rho, feed, feed_override, running, file, progress,
+curl "$B/sand_status"        # state, theta, rho, feed, feed_override, running, file, progress, elapsed,
                              #   playlist{active,index,total,name,next,last,clearing,quiet,pause_remaining,pause_total}, led{}
                              #   pause_remaining/pause_total = sec left / full length of between-patterns pause
                              #   (both -1 if not pausing); bar fill = (pause_total-pause_remaining)/pause_total
+                             #   elapsed = sec since pattern started (-1 if idle); ETA: remaining = elapsed*(1-progress)/progress,
+                             #   finish = client_now + remaining. Monotonic (not a timestamp); gate on state=="Run" & progress>~0.03.
                              #   next = shuffle-aware "up next"; last = just-finished pattern = what's on the table now
 curl "$B/sand_patterns"      # serves /patterns/index.json manifest if present (full recursive catalog,
                              #   paths relative to /patterns); else top-level /patterns/*.thr (non-recursive).

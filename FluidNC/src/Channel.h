@@ -198,6 +198,11 @@ public:
 
     size_t lineNumber() { return _line_number; }
 
+    // Monotonic microsecond timestamp (esp_timer clock) of when this channel's
+    // file job began, or <0 if this channel is not a timed file job.  Overridden
+    // by InputFile; lets the status builder report elapsed run-time for ETA.
+    virtual int64_t jobStartMicros() const { return -1; }
+
     virtual void   save() {}
     virtual void   restore() {}
     virtual size_t position() { return 0; }

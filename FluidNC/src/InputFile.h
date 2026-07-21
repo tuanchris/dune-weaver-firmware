@@ -26,6 +26,11 @@ private:
 
     size_t _blank_lines = 0;
 
+    // esp_timer microseconds at construction = when this pattern started drawing.
+    // A fresh InputFile per run (and per pre-execution clear) makes this reset
+    // correctly on every pattern, including back-to-back repeats of the same file.
+    int64_t _start_us = 0;
+
 public:
     // fsname is the default file system on which the file is located, in case the path does not specify
     // path is the full path to the file
@@ -48,9 +53,10 @@ public:
     Error readLine(char* line, int len);
 
     // Channel methods
-    size_t write(uint8_t c) override { return 0; }
-    void   ack(Error status) override;
-    Error  pollLine(char* line) override;
+    size_t  write(uint8_t c) override { return 0; }
+    void    ack(Error status) override;
+    Error   pollLine(char* line) override;
+    int64_t jobStartMicros() const override { return _start_us; }
 
     ~InputFile();
 };

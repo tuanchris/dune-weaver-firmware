@@ -42,6 +42,7 @@ TEST(SandStatusEncode, IdleDefaults) {
     EXPECT_TRUE(has(j, "\"running\":false"));
     EXPECT_TRUE(has(j, "\"file\":\"\""));
     EXPECT_TRUE(has(j, "\"progress\":-1,"));  // unknown sentinel, clean "-1"
+    EXPECT_TRUE(has(j, "\"elapsed\":-1,"));    // nothing running => -1 sentinel
     EXPECT_TRUE(has(j, "\"pause_remaining\":-1"));  // not pausing
     EXPECT_TRUE(has(j, "\"pause_total\":-1"));
     EXPECT_TRUE(has(j, "\"feed_override\":100"));  // default = 100%
@@ -116,6 +117,7 @@ TEST(SandStatusEncode, RunningWithProgressAndPlaylist) {
     d.running           = true;
     d.file              = "/sd/star.thr";
     d.progress          = 0.425f;  // 0..1 fraction
+    d.elapsed           = 312;     // seconds drawing so far
     d.playlist_active   = true;
     d.playlist_index    = 2;
     d.playlist_total    = 10;
@@ -136,6 +138,7 @@ TEST(SandStatusEncode, RunningWithProgressAndPlaylist) {
     EXPECT_TRUE(has(j, "\"running\":true"));
     EXPECT_TRUE(has(j, "\"file\":\"/sd/star.thr\""));
     EXPECT_TRUE(has(j, "\"progress\":0.425"));
+    EXPECT_TRUE(has(j, "\"elapsed\":312,"));  // ETA ingredient, paired with progress
     EXPECT_TRUE(has(j, "\"pause_remaining\":42"));
     EXPECT_TRUE(has(j, "\"pause_total\":60"));
     EXPECT_TRUE(has(j, "\"index\":2"));

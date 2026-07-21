@@ -8,7 +8,10 @@
 #include "Machine/MachineConfig.h"   // config->_planner_blocks
 #include "SandStatus.h"              // executed_percent()
 
-InputFile::InputFile(const char* defaultFs, const char* path) : FileStream(path, "r", defaultFs) {}
+#include <esp_timer.h>               // esp_timer_get_time() for the job start stamp
+
+InputFile::InputFile(const char* defaultFs, const char* path) :
+    FileStream(path, "r", defaultFs), _start_us(esp_timer_get_time()) {}
 /*
   Read a line from the file
   Returns Error::Ok if a line was read, even if the line was empty.

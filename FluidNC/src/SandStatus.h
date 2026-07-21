@@ -13,7 +13,7 @@
   The document is a compact single-line JSON object, e.g.
 
     {"state":"Run","theta":1.2340,"rho":0.5000,"feed":100,"feed_override":110,"running":true,
-     "file":"/sd/star.thr","progress":0.425,
+     "file":"/sd/star.thr","progress":0.425,"elapsed":312,
      "playlist":{"active":true,"index":2,"total":10,"name":"evening",
                  "clearing":false,"quiet":false},
      "led":{"effect":"rainbow","brightness":40}}
@@ -36,6 +36,16 @@ namespace SandStatus {
         bool        running  = false;  // a file job is active
         std::string file;              // current job file, empty if none
         float       progress = -1.0f;  // 0..1 fraction, or <0 if unknown
+
+        // Wall-clock seconds since the current pattern started drawing, or <0 if
+        // nothing is running.  Pairs with progress for a client-side ETA:
+        //   remaining = elapsed * (1 - progress) / progress
+        //   finish    = <client's own clock>-now + remaining
+        // Monotonic (esp_timer), so it is immune to the device's timezone/RTC.
+        // It is raw wall-clock and keeps counting through a mid-pattern hold, so
+        // the client must gate ETA on state == "Run" and progress above a small
+        // floor (~0.03) to avoid the divide-by-near-zero blow-up early on.
+        long elapsed = -1;
 
         bool        playlist_active   = false;
         int         playlist_index    = 0;  // 0-based
