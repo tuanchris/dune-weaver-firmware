@@ -316,6 +316,12 @@ private:
     int                      _clear_override   = -1;     // CLEAR_* for this run, or -1 = use setting
     bool                     _clear_done       = false;  // clear already ran for current item
     int                      _consec_fail      = 0;      // unplayable patterns in a row (skip-vs-cancel; see RunPattern)
+    // A manual $Playlist/Skip is in flight: set when the skip aborts the running
+    // clear/pattern, consumed at the deferred completion.  It makes a skip (a) jump
+    // the WHOLE item even from a clear (not just drop the clear) and (b) bypass the
+    // between-patterns pause.  Distinguishes a skip-triggered completion from a
+    // natural one, which look identical once the job goes Idle.
+    bool                     _skip_active      = false;
     bool                     _job_seen         = false;  // injected job has been observed active
     uint32_t                 _inject_ms        = 0;      // when the last line was injected
     uint32_t                 _pattern_start_ms = 0;

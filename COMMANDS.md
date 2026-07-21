@@ -32,7 +32,9 @@ curl "$B/sand_status"        # state, theta, rho, feed, feed_override, running, 
                              #   (both -1 if not pausing); bar fill = (pause_total-pause_remaining)/pause_total
                              #   elapsed = sec since pattern started (-1 if idle); ETA: remaining = elapsed*(1-progress)/progress,
                              #   finish = client_now + remaining. Monotonic (not a timestamp); gate on state=="Run" & progress>~0.03.
-                             #   next = shuffle-aware "up next"; last = just-finished pattern = what's on the table now
+                             #   next = shuffle-aware "up next" (while clearing=true it's THIS item's own pattern,
+                             #     the one the clear is preparing for; otherwise the following item);
+                             #     last = just-finished pattern = what's on the table now
 curl "$B/sand_patterns"      # serves /patterns/index.json manifest if present (full recursive catalog,
                              #   paths relative to /patterns); else top-level /patterns/*.thr (non-recursive).
                              #   Run any pattern by full path: $Sand/Run=/patterns/sub/x.thr
@@ -275,7 +277,7 @@ curl "$B/command?plain=\$LED/IdleEffect=breathe" # while Idle/Hold
 
 ```bash
 curl "$B/command?plain=\$Playlist/Run=evening"   # /playlists/evening.txt
-curl "$B/command?plain=\$Playlist/Skip"          # abort current, go to next
+curl "$B/command?plain=\$Playlist/Skip"          # skip whole item -> next item, NO pause (skipping a clear skips its pattern too)
 curl "$B/command?plain=\$Playlist/Stop"          # stop after current pattern
 curl "$B/command?plain=\$Playlist/List"          # folder listing + active position
 ```

@@ -352,7 +352,8 @@ void Playlist::finish(const char* why) {
     _last_pattern.shrink_to_fit();
     _resolved_index = SIZE_MAX;
     _pending_clear.clear();
-    _req_skip = false;
+    _req_skip    = false;
+    _skip_active = false;
     // Release the run-long SD hold (move-assign swaps _isSD into the
     // temporary, whose destructor drops the refcount).
     _sd_hold = FluidPath();
@@ -376,7 +377,11 @@ void Playlist::publish() {
     if (active) {
         strlcpy(_pub_name, _playlist_name.c_str(), sizeof(_pub_name));
         strlcpy(_pub_current, _index < _order.size() ? _current_path.c_str() : "", sizeof(_pub_current));
-        strlcpy(_pub_next, _index < _order.size() ? _next_path.c_str() : "", sizeof(_pub_next));
+        // While a clear is drawing, "up next" is this item's OWN pattern (the one
+        // the clear is preparing for), not the following playlist item.  Once the
+        // main pattern is drawing, up-next is the genuine next item.
+        const char* up_next = _phase == Phase::RunClear ? _current_path.c_str() : _next_path.c_str();
+        strlcpy(_pub_next, _index < _order.size() ? up_next : "", sizeof(_pub_next));
         // What's on the table now = the last pattern that finished drawing;
         // "" until the first one completes.  Kept truthful through the pause.
         strlcpy(_pub_last, _last_pattern.c_str(), sizeof(_pub_last));
@@ -837,6 +842,7 @@ Error Playlist::pollLine(char* line) {
         bool no_abort   = _req_no_abort;
         _req_no_abort   = false;
         _consec_fail    = 0;
+        _skip_active    = false;
         // no_abort (boot auto-play only): the only job that can be active at
         // boot is the after_homing recenter macro, nested by $H after the
         // autostart trigger's own Job::active() check -- let it finish;
@@ -996,7 +1002,10 @@ Error Playlist::pollLine(char* line) {
                 break;
             }
             if (_req_skip) {
-                _req_skip = false;
+                _req_skip    = false;
+                _skip_active = true;  // consumed at the deferred completion below:
+                                      // skip the whole item (even from a clear) and
+                                      // drop the between-patterns pause.
                 log_info("playlist: skipped");
                 // Abort the running clear/pattern via the SAFE deferred path
                 // (post stopJobEvent, as $Playlist/Stop does) rather than a
@@ -1018,6 +1027,10 @@ Error Playlist::pollLine(char* line) {
                         _consec_fail = 0;  // a pattern started; the SD is alive
                     }
                 } else if (now - _inject_ms > INJECT_TIMEOUT_MS) {
+                    // The job never started, so any skip requested in the inject
+                    // window is moot -- clear it so it can't leak into the next
+                    // item's completion.
+                    _skip_active = false;
                     // Say WHICH file and WHY: the $SD/Run error reply went to
                     // this output-discarding channel, so without re-logging it
                     // here the serial log shows no reason at all.
@@ -1030,10 +1043,22 @@ Error Playlist::pollLine(char* line) {
                         break;
                     }
                     if (_phase == Phase::RunClear) {
-                        // The pattern itself may be fine; drop the clear and
-                        // try it (_clear_done is already true for this item).
+                        // A clear that won't start skips the WHOLE item, not just
+                        // the clear: advance to the next item (its own clear ->
+                        // pattern) rather than drawing this pattern un-cleared.
+                        // Count it toward the consecutive-failure cap so a dead SD
+                        // (every clear fails) still cancels instead of spinning the
+                        // carousel forever.
                         Kinematics::ThetaRho::setClearFeed(-1);
-                        _phase = Phase::NextItem;
+                        if (++_consec_fail >= MAX_CONSEC_FAIL) {
+                            finish("canceled: too many unplayable patterns in a row (see log)");
+                            break;
+                        }
+                        log_warn("playlist: clear did not start, skipping item " << _current_path);
+                        _since_home++;
+                        if (advanceIndex()) {
+                            _phase = Phase::NextItem;
+                        }
                         break;
                     }
                     // Skip the unplayable pattern instead of cancelling the
@@ -1057,6 +1082,17 @@ Error Playlist::pollLine(char* line) {
                     // Clear done -- drop its feed override so the pattern runs
                     // at the normal $THR/Feed (or /sand_feed) speed.
                     Kinematics::ThetaRho::setClearFeed(-1);
+                    if (_skip_active) {
+                        // A manual skip during the clear skips the WHOLE item, not
+                        // just the clear: advance to the next item.  (A natural
+                        // clear completion falls through to run this item's pattern.)
+                        _skip_active = false;
+                        _since_home++;
+                        if (advanceIndex()) {
+                            _phase = Phase::NextItem;
+                        }
+                        break;
+                    }
                     _phase = Phase::NextItem;
                     break;
                 }
@@ -1072,6 +1108,12 @@ Error Playlist::pollLine(char* line) {
                 if (runPauseFromStart()) {
                     uint32_t elapsed = now - _pattern_start_ms;
                     pause_ms         = pause_ms > elapsed ? pause_ms - elapsed : 0;
+                }
+                if (_skip_active) {
+                    // A manual skip jumps straight to the next pattern -- no
+                    // between-patterns pause (only natural completions pause).
+                    _skip_active = false;
+                    pause_ms     = 0;
                 }
                 if (!advanceIndex()) {
                     break;

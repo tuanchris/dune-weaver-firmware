@@ -26,8 +26,10 @@ Compass"**.)
 - Kinematics **ThetaRho**: theta 50 mm/rev, rho 20 mm, coupling 0.195.
 - Homing = **limit switches** (X/theta neg `gpio.36`, Y/rho neg `gpio.35`); X homes
   positive, Y homes negative; `soft_limits: false`. **Auto-homes on boot**
-  (`macros: startup_line0: $H`; `after_homing` re-centers to 0,0). Crash/sensorless
-  homing is **not** implemented.
+  (`macros: startup_line0: $Sand/Home` — the mode-aware home that honors
+  `$Sand/HomingMode` + `$Sand/ThetaOffset`, preferred over raw `$H` which always
+  does sensor homing; `after_homing` re-centers to 0,0). Crash/sensorless homing
+  is **not** implemented.
 - **LEDs**: 49 WS2812 on `gpio.18`, color order **RGB**, via RMT (channel 7). (`uart1`
   was removed to free gpio.18.)
 
@@ -92,12 +94,20 @@ Compass"**.)
   the queued planner blocks); reported `-1` during a pre-execution clear.
 - **A playlist tolerates unplayable entries; a single `$Sand/Run` does not.** In a
   playlist run a pattern that won't start (missing/renamed file, SD read hiccup) or an
-  unreadable slot is logged (`playlist: skipping …`) and the run advances immediately;
-  a failing clear is dropped and its pattern still tried. `MAX_CONSEC_FAIL` (5) failures
-  in a row with no pattern ever starting = a dead SD, so the run cancels rather than
-  spinning the carousel forever (the counter resets whenever a pattern actually starts).
-  A deliberate one-shot `$Sand/Run` instead fails loudly (`canceled: file did not
-  start`). Shared advance/wrap/reshuffle logic lives in `Playlist::advanceIndex`.
+  unreadable slot is logged (`playlist: skipping …`) and the run advances immediately.
+  **The clear + its pattern are one unit**: a clear that won't start skips the *whole*
+  item (advance to the next item's clear→pattern; `clear did not start, skipping item`),
+  NOT draws the pattern un-cleared. `MAX_CONSEC_FAIL` (5) failures in a row with no
+  pattern ever starting (clear-failures counted) = a dead SD, so the run cancels rather
+  than spinning the carousel forever (the counter resets whenever a pattern actually
+  starts). A deliberate one-shot `$Sand/Run` instead fails loudly (`canceled: file did
+  not start`). Shared advance/wrap/reshuffle logic lives in `Playlist::advanceIndex`.
+- **`$Playlist/Skip` is item-level and pause-free.** It skips the whole current item to
+  the next one with **no** between-patterns pause (`_skip_active` flag, set when the skip
+  aborts the running job, consumed at the deferred completion). Skipping during a clear
+  skips its pattern too; a *natural* clear completion still runs the item's pattern and a
+  natural pattern completion still pauses. While a clear draws, status `next` = this
+  item's own pattern (the one the clear is preparing for), not the following item.
 
 ## Gotchas (these bit us; don't repeat)
 

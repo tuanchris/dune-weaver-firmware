@@ -103,9 +103,9 @@ reliably over the (single-client) WebSocket. Pattern/playlist **contents** are f
 | `$SD/Run=/patterns/<file>.thr` | run a pattern (`.thr` translated on the fly by ThetaRho kinematics) |
 | `$Sand/Run=/patterns/<file>.thr [clear=<mode>]` | run a pattern, optionally preceded by a clear ("pre-execution"). `clear=none\|adaptive\|in\|out\|sideway\|random` (default none); `adaptive` picks in/out from the pattern's first rho (never sideway). Clear moves honor `$Playlist/ClearSpeed` (0 = same as `$THR/Feed`) and the `$Playlist/ClearIn\|ClearOut` file overrides. Sequenced by the firmware (clear→pattern, then stop); aborts any running job first. Requires a `playlist:` config section (the clear files live there). Filenames may contain spaces; `clear=` must be the **last** token (everything before it is the path). |
 | `$SD/Show=/patterns/<file>.thr` | dump file contents (preview; requires Idle/Alarm) |
-| `$Playlist/Run=<name>` | run playlist `/playlists/<name>.txt`. **Unplayable entries are skipped**, not fatal: a pattern that fails to start (missing/renamed file, SD read hiccup) or an unreadable playlist slot is logged (`playlist: skipping …`) and the run advances immediately (no between-pattern pause); a failing clear is dropped and its pattern still tried. 5 consecutive failures (no pattern started in between) means the SD itself is broken → run cancels (`too many unplayable patterns in a row`). A single `$Sand/Run` still fails loudly (`canceled: file did not start`) |
+| `$Playlist/Run=<name>` | run playlist `/playlists/<name>.txt`. **Unplayable entries are skipped**, not fatal: a pattern that fails to start (missing/renamed file, SD read hiccup) or an unreadable playlist slot is logged (`playlist: skipping …`) and the run advances immediately (no between-pattern pause). A clear that fails to start skips the **whole item** — the run advances to the next item (its own clear→pattern) rather than drawing the pattern on an un-cleared table (`clear did not start, skipping item …`). 5 consecutive failures (no pattern started in between, clear-failures included) means the SD itself is broken → run cancels (`too many unplayable patterns in a row`). A single `$Sand/Run` still fails loudly (`canceled: file did not start`) |
 | `$Playlist/Stop` | stop after the current pattern |
-| `$Playlist/Skip` | abort current pattern, advance to next |
+| `$Playlist/Skip` | skip the current item and jump straight to the next one — **no** between-patterns pause. Skipping while the **main pattern** draws advances to the next item; skipping while the **clear** draws skips the whole item too (not just the clear), so the current item's pattern is not drawn. Skipping during the between-patterns pause ends the pause immediately |
 | `$Playlist/List` | text listing + active playlist index/total/name |
 | `$Sand/Goto theta=<rad> rho=<0..1>` / `GET /sand_goto?theta=&rho=` | jog to an absolute θ (radians) and/or ρ (0..1); either or both axes (omitted axis stays put). For manual positioning **between patterns** — requires Idle (rejects with IdleError/HTTP 409 if a pattern is running or unhomed). ρ clamped to 0..1; uses the current feed; runs as a `G1` move (through ThetaRho kinematics) in the main loop — stop with `/sand_stop` |
 | `$Sand/Home` / `GET /sand_home` | home honoring `$Sand/HomingMode`; runs in the main loop (safe over HTTP). **sensor** = limit-switch `$H`; **crash** = drive ρ (Y) blindly into the center stop then zero θ/ρ |
@@ -233,11 +233,15 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   "playlist": { "active": true, "index": 2, "total": 10, "name": "evening",
                 "next": "/patterns/owl.thr", "last": "/patterns/star.thr",
                 "clearing": false, "quiet": false, "pause_remaining": -1, "pause_total": -1 },
-  //  next = the pattern the table will actually play after the current one,
-  //  resolved from the firmware's internal (possibly shuffled) order. ALWAYS use
-  //  this for an "up next" display — deriving it from the playlist file's line
-  //  order is wrong whenever shuffle is on. "" = unknown: last pattern of a loop
-  //  pass (the next pass reshuffles when it starts) — show nothing or "reshuffling".
+  //  next = what the table will draw next, resolved from the firmware's internal
+  //  (possibly shuffled) order. ALWAYS use this for an "up next" display — deriving
+  //  it from the playlist file's line order is wrong whenever shuffle is on.
+  //  Phase-dependent: while a pre-execution clear is drawing (clearing=true), next
+  //  is THIS item's own pattern — the one the clear is preparing for (so "up next"
+  //  during a clear shows the pattern about to appear, not the following item).
+  //  Once the main pattern is drawing, next is the genuine following item.
+  //  "" = unknown: last pattern of a loop pass (the next pass reshuffles when it
+  //  starts) — show nothing or "reshuffling".
   //  last = the most recently COMPLETED pattern of this run = what is currently
   //  drawn on the table. During the between-patterns pause it names the pattern
   //  that just finished, so render its preview as "on the table now". "" until
