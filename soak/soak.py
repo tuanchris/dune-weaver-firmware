@@ -55,6 +55,7 @@ PROFILES = {
     "household": dict(pollers=(0.9, 1.0, 1.1), scan_s=300, led_s=120,
                       pattern_hold_s=0,     # patterns run to completion
                       complete_wait_s=0, feed_pct=0,
+                      start_wait_s=75,      # how long to wait for motion to begin
                       chaos_s=600, storm_s=0, telemetry_s=60),
     # The pre-release gate: 10 minutes, feed override 200% so several patterns
     # COMPLETE inside the window (natural pattern->next is a different
@@ -63,6 +64,9 @@ PROFILES = {
                       pattern_hold_s=20,    # abort cycles: stop after 20s
                       complete_wait_s=110,  # completion cycles: bounded wait
                       feed_pct=200,
+                      start_wait_s=75,      # a multi-MB .thr can take ~50s to
+                                            # open+translate off the SD before
+                                            # motion begins; poll, don't one-shot
                       chaos_s=45, storm_s=150, telemetry_s=20),
 }
 
@@ -160,10 +164,19 @@ class Soak:
             p = random.choice(self.patterns)
             clear = " clear=adaptive" if random.random() < 0.25 else ""
             self.command(f"$Sand/Run=/patterns/{p}{clear}")
-            # confirm it took; if not, log and let the next cycle try another
-            if STOP.wait(15):
-                return
-            st = self.get_json("/sand_status")
+            # confirm it took; poll up to start_wait_s rather than a single fixed
+            # check.  A large pattern (a 2.86MB .thr measured ~47s) can take tens
+            # of seconds to open+translate off the SD before motion begins; a 15s
+            # one-shot false-flagged such a file as a no-start, then it started
+            # and hogged the rest of the gate (0 patterns, spurious FAIL).
+            st = None
+            start_deadline = time.time() + self.p["start_wait_s"]
+            while time.time() < start_deadline:
+                if STOP.wait(3):
+                    return
+                st = self.get_json("/sand_status")
+                if st and st.get("running"):
+                    break
             if st and st.get("running"):
                 n = self.counters["patterns"] = self.counters["patterns"] + 1
                 self.started_names.add(p)
