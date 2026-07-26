@@ -32,7 +32,23 @@ git push origin v0.1.11
 
 If the tag has only a subject line (no body), the workflow falls back to GitHub's
 `--generate-notes` — which for direct-to-`main` commits is just a bare "Full
-Changelog" compare link, so **always give the tag a body**. The manual steps
+Changelog" compare link, so **always give the tag a body**.
+
+**Then check what actually got published:**
+
+```sh
+gh release view v0.1.11 --json body -q .body | head -5
+```
+
+Through v0.1.16 this silently published the *tagged commit's* message instead of
+the changelog: `actions/checkout` leaves the triggering tag as a **lightweight**
+ref pointing at the commit, and `%(contents:body)` on a lightweight tag returns
+the commit message. The workflow now re-fetches the tag object and checks
+`git cat-file -t` before trusting it, but a release whose notes read like a
+commit message is the symptom to watch for — fix with
+`gh release edit <tag> --notes-file <file>`.
+
+The manual steps
 below are the equivalent local flow (useful for a dry run, or if the runner's
 bundled mklittlefs ever breaks).
 

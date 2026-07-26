@@ -54,7 +54,20 @@ jobs:
           # RELEASING.md. `--generate-notes` only summarizes merged PRs, which
           # is empty for direct-to-main commits (the bare "Full Changelog" link
           # bug), so we only fall back to it when the tag has no body.
-          NOTES="$(git for-each-ref "refs/tags/$TAG" --format='%(contents:body)')"
+          # actions/checkout leaves the triggering tag as a LIGHTWEIGHT ref
+          # pointing straight at the commit, and for a lightweight tag
+          # %(contents:body) yields the COMMIT message body -- so this silently
+          # published the tagged commit's message as the release notes instead
+          # of the changelog (v0.1.15 and earlier, fixed after v0.1.16 shipped).
+          # Re-fetch the real tag object, and only trust the annotation when the
+          # ref actually resolves to one.
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG" || true
+          if [ "$(git cat-file -t "refs/tags/$TAG" 2>/dev/null)" = "tag" ]; then
+            NOTES="$(git for-each-ref "refs/tags/$TAG" --format='%(contents:body)')"
+          else
+            echo "::warning::$TAG is not an annotated tag; falling back to generated notes"
+            NOTES=""
+          fi
           if [ -n "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
             printf '%s\n' "$NOTES" > "$RUNNER_TEMP/relnotes.md"
             gh release create "$TAG" --title "$TAG" \
