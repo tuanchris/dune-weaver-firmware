@@ -290,7 +290,11 @@ void WebServer::handleClient() {
     // DW fork: hard heap floor — see setHardHeapFloor(). RST before reading
     // the request; no response is owed, and an orderly close would park the
     // socket in TIME_WAIT holding an lwIP PCB we can't spare right now.
-    if (_heapHardFloor && ESP.getFreeHeap() < _heapHardFloor) {
+    // Gauge on the largest free BLOCK, not total free: a fragmented heap with
+    // plenty of total free but no big contiguous span is what actually fails
+    // an allocation (a weak-link manifest storm sat at 11-14 KB free while the
+    // largest block collapsed to ~5.6 KB and the SD mount died with NO_MEM).
+    if (_heapHardFloor && ESP.getMaxAllocHeap() < _heapHardFloor) {
       _lingerAbort();
       _currentClient.stop();
       _currentClient = WiFiClient();
@@ -700,8 +704,10 @@ void WebServer::_handleRequest() {
   }
   // DW fork: low-heap guard -- see setLowHeapGuard(). Answered before the
   // handler runs so a heap-starved board sheds load with a cheap 503 instead
-  // of stalling mid-handler and wedging the accept queue.
-  if (_lowHeapFloor && ESP.getFreeHeap() < _lowHeapFloor && !(_lowHeapExempt && _lowHeapExempt(_currentUri))) {
+  // of stalling mid-handler and wedging the accept queue.  Largest free BLOCK,
+  // not total free: fragmentation (not exhaustion) is what fails allocations
+  // and remounts here -- see the hard-floor note above.
+  if (_lowHeapFloor && ESP.getMaxAllocHeap() < _lowHeapFloor && !(_lowHeapExempt && _lowHeapExempt(_currentUri))) {
     send(503, "text/plain", "busy: low memory");
     _finalizeResponse();
     _lastHandledMs = millis();

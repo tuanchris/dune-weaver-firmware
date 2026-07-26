@@ -59,6 +59,12 @@ namespace SandApi {
     bool patternsEtag(std::string& etagOut);
     void invalidatePatternsEtag();
 
+    // Path of the prebuilt manifest on the SD card ("/patterns/index.json"),
+    // exposed so the web layer can serve /sand_patterns as a plain ranged file
+    // (Accept-Ranges/206) instead of one monolithic transfer.  Always a valid
+    // C string.
+    const char* patternManifestPath();
+
     // JSON object of the app-relevant settings (speed, LED, playlist,
     // quiet hours) as strings.  Backs /sand_settings so the app can read
     // all settings in one multi-client HTTP request.

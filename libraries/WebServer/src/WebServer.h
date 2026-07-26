@@ -126,23 +126,25 @@ public:
   bool hasPendingClient() { return _server.hasClient(); }
   void restartListener(); // flush a rotted accept queue; handlers survive
 
-  // DW fork: low-heap guard. When free heap is below floorBytes, requests are
-  // answered 503 before their handler runs (a handler whose allocations fail
-  // mid-flight stalls the single-threaded server and queued clients pin even
-  // more memory). exempt(uri) returning true bypasses the guard for cheap
+  // DW fork: low-heap guard. When the largest free heap BLOCK is below
+  // floorBytes, requests are answered 503 before their handler runs (a handler
+  // whose allocations fail mid-flight stalls the single-threaded server and
+  // queued clients pin even more memory). Gauged on the largest contiguous
+  // block, not total free, because fragmentation is what actually fails an
+  // allocation. exempt(uri) returning true bypasses the guard for cheap
   // must-work routes (status poll, stop). floorBytes 0 disables (default).
   void setLowHeapGuard(uint32_t floorBytes, bool (*exempt)(const String& uri)) {
     _lowHeapFloor = floorBytes;
     _lowHeapExempt = exempt;
   }
 
-  // DW fork: hard heap floor. Below it, a newly accepted connection is
-  // RST-closed before its request is even read.  The soft guard above still
-  // has to accept + parse a request to answer its 503, and each such client
-  // pins ~2 KB of lwIP buffers while it waits — under a genuine heap crater
-  // the shedding itself deepens the hole.  Applies to every route (pre-parse,
-  // so there is no URI to exempt on); clients retry with backoff.  0 disables
-  // (default).
+  // DW fork: hard heap floor. Below it (again gauged on the largest free
+  // BLOCK, not total free), a newly accepted connection is RST-closed before
+  // its request is even read.  The soft guard above still has to accept +
+  // parse a request to answer its 503, and each such client pins ~2 KB of
+  // lwIP buffers while it waits — under a genuine heap crater the shedding
+  // itself deepens the hole.  Applies to every route (pre-parse, so there is
+  // no URI to exempt on); clients retry with backoff.  0 disables (default).
   void setHardHeapFloor(uint32_t floorBytes) { _heapHardFloor = floorBytes; }
 
   // DW fork: per-request trace hook, called at the top of _handleRequest()

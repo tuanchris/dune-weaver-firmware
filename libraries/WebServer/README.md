@@ -18,13 +18,18 @@ Local changes (all tagged `DW fork:` in the sources):
 - `WebServer.{h,cpp}`: `lastHandledMillis()` + `hasPendingClient()` liveness
   accessors for the self-heal watchdog in `Web_Server::poll()`
   (`FluidNC/src/WebUI/WebServer.cpp`).
-- `WebServer.{h,cpp}`: `setLowHeapGuard(floorBytes, exempt)` — when free heap is
-  under the floor, `_handleRequest()` answers **503 "busy: low memory"** before
-  the route handler runs. A handler whose allocations fail mid-flight stalls the
-  single-threaded server and the queued clients pin even more memory (observed
-  as a total HTTP outage at ~7 KB free while pings still answered). The exempt
+- `WebServer.{h,cpp}`: `setLowHeapGuard(floorBytes, exempt)` — when the largest
+  free BLOCK (`ESP.getMaxAllocHeap()`, not total free) is under the floor,
+  `_handleRequest()` answers **503 "busy: low memory"** before the route handler
+  runs. A handler whose allocations fail mid-flight stalls the single-threaded
+  server and the queued clients pin even more memory (observed as a total HTTP
+  outage at ~7 KB free while pings still answered). Gauging on the largest block,
+  not total free, is deliberate: a weak-link manifest storm sat at 11–14 KB free
+  while the largest block collapsed to ~5.6 KB and the SD remount died with
+  NO_MEM, all *above* the old total-free floor so nothing shed. The exempt
   callback keeps must-work routes live; registration (floor 10 KB, exempting
-  `/sand_status` + stop/pause/resume) is in `Web_Server::begin()`.
+  `/sand_status` + stop/pause/resume and a `/sand_patterns` conditional GET) is
+  in `Web_Server::init()`.
 - `WebServer.{h,cpp}`: `_currentClientWrite{,_P}()` check the write result and
   RST+stop the client on a short write (`_abortDeadClient()`). A client that
   stalls or vanishes mid-response (the app cancelling a preview download)
@@ -36,13 +41,13 @@ Local changes (all tagged `DW fork:` in the sources):
 - `WebServer.{h,cpp}`: `onRequestTrace(fn)` — optional per-request hook (uri)
   called at the top of `_handleRequest()`, before the low-heap guard. Used for
   heap-drain diagnosis from the FluidNC side; no-op unless registered.
-- `WebServer.{h,cpp}`: `setHardHeapFloor(bytes)` — below the floor, a newly
-  accepted connection is RST-closed in `handleClient()` before its request is
-  read. The 503 guard still costs an accept + parse (~2 KB of lwIP buffers per
-  waiting client); when connection pileups have already cratered the heap
-  (measured 3.3 KB free behind a multi-MB `/sd/` transfer), shedding at the
-  socket is the only affordable answer. Registration (6 KB) is in
-  `Web_Server::init()`.
+- `WebServer.{h,cpp}`: `setHardHeapFloor(bytes)` — below the floor (again the
+  largest free BLOCK, not total free), a newly accepted connection is RST-closed
+  in `handleClient()` before its request is read. The 503 guard still costs an
+  accept + parse (~2 KB of lwIP buffers per waiting client); when connection
+  pileups have already cratered the heap (measured 3.3 KB free behind a multi-MB
+  `/sd/` transfer), shedding at the socket is the only affordable answer.
+  Registration (6 KB) is in `Web_Server::init()`.
 
 When bumping the Arduino framework, re-vendor from the new version and re-apply the
 `DW fork:` blocks.

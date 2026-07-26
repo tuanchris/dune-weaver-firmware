@@ -126,7 +126,7 @@ probe:
   check_mode_start: true
   hard_stop: false
 macros:
-  startup_line0: $H
+  startup_line0: $Sand/Home
   Macro0: G90
   after_homing: G90 G1 X0 Y0 F100
 start:

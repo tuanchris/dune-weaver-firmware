@@ -140,7 +140,15 @@ namespace WebUI {
         // the ~1 Hz status poll, and stop/pause/resume (trivial handlers that
         // just post a protocol event).
         _webserver->setLowHeapGuard(10000, [](const String& uri) {
-            return uri == "/sand_status" || uri == "/sand_stop" || uri == "/sand_pause" || uri == "/sand_resume";
+            if (uri == "/sand_status" || uri == "/sand_stop" || uri == "/sand_pause" || uri == "/sand_resume") {
+                return true;
+            }
+            // A catalog *revalidation* (conditional GET) is a cheap 304 that
+            // lets a client keep its cached library instead of re-streaming it;
+            // exempt it so the library stays usable on a stressed board.  A
+            // *cold* /sand_patterns GET (no If-None-Match) is a big transfer and
+            // stays sheddable — the client retries with backoff or ranged pulls.
+            return uri == "/sand_patterns" && _webserver->hasHeader("If-None-Match");
         });
         // Hard floor (DW fork): below this, brand-new connections are RST at
         // accept, before any request bytes are read.  The 503 guard above
@@ -459,41 +467,45 @@ namespace WebUI {
         //  - a client that stalls or vanishes mid-download must end the
         //    transfer at the FIRST short write, not burn a full send-wait on
         //    every remaining chunk.
-        {
-            static char buf[1360];
-            WiFiClient  out       = _webserver->client();
-            size_t      remaining = rLen;
-            uint32_t    chunks    = 0;
-            while (remaining) {
-                // Shed THIS transfer under heap pressure: the stream itself
-                // allocates nothing (static buf), but while it runs the
-                // single-threaded server is deaf and every waiting client
-                // pins ~2 KB of lwIP buffers — the pileup, not the transfer,
-                // is what cratered a live table to 3.3 KB free.  A truncated
-                // body fails the client's length/hash check and is retried
-                // with backoff, by which time the queue has drained.
-                if (xPortGetFreeHeapSize() < 12000) {
-                    log_debug("Aborting " << path << " stream: low heap");
-                    break;
-                }
-                size_t want = remaining < sizeof(buf) ? remaining : sizeof(buf);
-                size_t n    = file->readBytes(buf, want);
-                if (!n) {
-                    break;  // short file / SD read error; nothing more to send
-                }
-                if (out.write(reinterpret_cast<const uint8_t*>(buf), n) != n) {
-                    break;  // client stalled or gone; stop paying for it
-                }
-                remaining -= n;
-                esp_task_wdt_reset();
-                if ((++chunks & 63) == 0) {
-                    delay(1);  // let IDLE/lwip breathe on very long transfers
-                }
-            }
-        }
+        streamOpenFile(file, rLen);
 
         delete file;
         return true;
+    }
+
+    // Stream `len` bytes from an open file's current position in bounded chunks.
+    // Shared by myStreamFile (/sd/) and handleSandPatterns (the manifest).
+    void Web_Server::streamOpenFile(FileStream* file, size_t len) {
+        static char buf[1360];
+        WiFiClient  out       = _webserver->client();
+        size_t      remaining = len;
+        uint32_t    chunks    = 0;
+        while (remaining) {
+            // Shed THIS transfer under heap pressure: the stream itself
+            // allocates nothing (static buf), but while it runs the
+            // single-threaded server is deaf and every waiting client pins
+            // ~2 KB of lwIP buffers — the pileup, not the transfer, is what
+            // cratered a live table to 3.3 KB free.  A truncated body fails
+            // the client's length/hash check and is retried with backoff, by
+            // which time the queue has drained.
+            if (xPortGetFreeHeapSize() < 12000) {
+                log_debug("Aborting file stream: low heap");
+                break;
+            }
+            size_t want = remaining < sizeof(buf) ? remaining : sizeof(buf);
+            size_t n    = file->readBytes(buf, want);
+            if (!n) {
+                break;  // short file / SD read error; nothing more to send
+            }
+            if (out.write(reinterpret_cast<const uint8_t*>(buf), n) != n) {
+                break;  // client stalled or gone; stop paying for it
+            }
+            remaining -= n;
+            esp_task_wdt_reset();
+            if ((++chunks & 63) == 0) {
+                delay(1);  // let IDLE/lwip breathe on very long transfers
+            }
+        }
     }
     void Web_Server::sendWithOurAddress(const char* content, int code) {
         auto        ip    = WiFi.getMode() == WIFI_STA ? WiFi.localIP() : WiFi.softAPIP();
@@ -1274,15 +1286,60 @@ namespace WebUI {
         if (SandApi::patternsEtag(etag)) {
             _webserver->sendHeader("ETag", etag.c_str());
             // no-cache (not no-store): the client MAY cache but must revalidate
-            // with If-None-Match, which is what yields the 304 fast path.
+            // with If-None-Match, which is what yields the 304 fast path.  A
+            // revalidation is exempt from the low-heap 503 guard (see init()),
+            // so the library stays usable on a stressed board; a cold full GET
+            // is not.
             _webserver->sendHeader("Cache-Control", "no-cache");
             if (_webserver->hasHeader("If-None-Match") && _webserver->header("If-None-Match") == etag.c_str()) {
                 _webserver->send(304, "application/json", "");
                 return;
             }
+            // Serve the manifest as a plain ranged file so a big catalog arrives
+            // in bounded windows (Accept-Ranges/206) instead of one multi-second
+            // transfer.  While the server streams it, it is deaf and queued
+            // clients stack ~2 KB of lwIP buffers each — on a weak link with
+            // several pollers that pileup, not the bytes, is what craters the
+            // heap.  Ranged pulls let the status polls interleave between chunks.
+            FileStream* file = nullptr;
+            try {
+                file = new FileStream(SandApi::patternManifestPath(), "r", "sd");
+            } catch (...) {
+                file = nullptr;  // manifest vanished / SD hiccup -> live listing
+            }
+            if (file) {
+                size_t            fsize  = file->size();
+                size_t            rStart = 0;
+                size_t            rLen   = fsize;
+                HttpRange::Result range  = HttpRange::parse(_webserver->header("Range").c_str(), fsize, rStart, rLen);
+                if (range == HttpRange::Result::Unsatisfiable) {
+                    std::string cr = "bytes */" + std::to_string(fsize);
+                    _webserver->sendHeader("Content-Range", cr.c_str());
+                    _webserver->send(416, "text/plain", "");
+                    delete file;
+                    return;
+                }
+                _webserver->sendHeader("Accept-Ranges", "bytes");
+                _webserver->setContentLength(rLen);
+                if (range == HttpRange::Result::Partial) {
+                    std::string cr =
+                        "bytes " + std::to_string(rStart) + "-" + std::to_string(rStart + rLen - 1) + "/" + std::to_string(fsize);
+                    _webserver->sendHeader("Content-Range", cr.c_str());
+                    file->set_position(rStart);
+                    _webserver->send(206, "application/json", "");
+                } else {
+                    _webserver->send(200, "application/json", "");
+                }
+                streamOpenFile(file, rLen);
+                delete file;
+                return;
+            }
+            // manifest open lost the race: fall through to the live listing.
         } else {
             _webserver->sendHeader("Cache-Control", "no-store");
         }
+        // No manifest (live top-level listing): unconditional chunked 200, no
+        // Range — the fallback isn't a seekable file.
         _webserver->setContentLength(CONTENT_LENGTH_UNKNOWN);
         _webserver->send(200, "application/json", "");
         SandApi::streamPatterns([](const char* data, size_t len) {

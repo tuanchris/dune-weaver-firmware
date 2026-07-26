@@ -438,6 +438,10 @@ void SandApi::invalidatePatternsEtag() {
     s_patterns_etag_valid = false;
 }
 
+const char* SandApi::patternManifestPath() {
+    return kPatternManifest;
+}
+
 bool SandApi::patternsEtag(std::string& etagOut) {
     try {
         FileStream f(kPatternManifest, "r", "sd");

@@ -84,7 +84,7 @@ the WebSocket for a *single* "active controller" that wants smooth high-rate liv
 | Endpoint | Returns |
 |----------|---------|
 | `GET /sand_status` | status object (schema below) |
-| `GET /sand_patterns` | JSON array of `.thr` paths. **If `/patterns/index.json` (a prebuilt manifest) exists, it is served verbatim** — a fast single-file read of the full recursive catalog (paths relative to `/patterns`, e.g. `custom_patterns/x.thr`; run via `$Sand/Run=/patterns/<path>`). Generate it on the host and upload to the card whenever patterns change (see COMMANDS.md). **Without a manifest** it falls back to a non-recursive top-level listing (subfolders omitted — enumerating the ~1000-file nested library on the slow SD froze the single-threaded server). Chunked/streamed. **Conditional GET**: when a manifest is present the response carries an `ETag` (a content hash) and `Cache-Control: no-cache`; send it back as `If-None-Match: <etag>` and an unchanged catalog answers **`304 Not Modified`** with no body instead of re-streaming the whole manifest. Clients that re-read the catalog on every launch/table-switch should cache the ETag and revalidate — the repeated full downloads, colliding with an app's launch connection burst, are what pushed the heap-tight board into low-memory shedding. The ETag changes whenever the manifest is re-uploaded; the live-listing fallback has no ETag (always `200`) |
+| `GET /sand_patterns` | JSON array of `.thr` paths. **If `/patterns/index.json` (a prebuilt manifest) exists, it is served verbatim** — a fast single-file read of the full recursive catalog (paths relative to `/patterns`, e.g. `custom_patterns/x.thr`; run via `$Sand/Run=/patterns/<path>`). Generate it on the host and upload to the card whenever patterns change (see COMMANDS.md). **Without a manifest** it falls back to a non-recursive top-level listing (subfolders omitted — enumerating the ~1000-file nested library on the slow SD froze the single-threaded server). Chunked/streamed. **Conditional GET**: when a manifest is present the response carries an `ETag` (a content hash) and `Cache-Control: no-cache`; send it back as `If-None-Match: <etag>` and an unchanged catalog answers **`304 Not Modified`** with no body instead of re-streaming the whole manifest. Clients that re-read the catalog on every launch/table-switch should cache the ETag and revalidate — the repeated full downloads, colliding with an app's launch connection burst, are what pushed the heap-tight board into low-memory shedding. The ETag changes whenever the manifest is re-uploaded; the live-listing fallback has no ETag (always `200`). **Ranged GET**: when the manifest is served the response carries `Accept-Ranges: bytes` and honors a single `Range:` header (`a-b`, `a-`, `-n`) with **`206`** + `Content-Range`, so a client can pull a large catalog in bounded windows instead of one multi-second transfer that leaves the single-threaded server deaf while pollers stack behind it (the live-listing fallback is not seekable — no Range). **Load-shedding**: a *revalidation* (a conditional GET carrying `If-None-Match`) is exempt from the low-heap `503` guard so the library stays usable on a stressed board; a *cold* full GET is sheddable (`503 busy: low memory`) — retry with backoff or ranged pulls |
 | `GET /sand_playlists` | JSON array of `.txt` files in the top level of `/playlists` (non-recursive) |
 | `GET /sand_settings` | JSON object of app settings (speed, homing mode, LED, playlist, quiet hours), values as strings |
 | `GET /sand_time` | wall clock `{epoch, synced, local, tz}`. `?epoch=<unix>` sets the clock (app auto-sync / AP mode); `?tz=<POSIX>` sets + persists the timezone. Safe mid-run: the zone applies immediately and the (idle-gated) NVS write is deferred to the return to idle. Also surfaced in `/sand_status` under `time` |
@@ -301,15 +301,19 @@ A transfer may also be **cut short mid-body if free heap drops below ~12 KB** (d
 byte count / shard hash and retry with backoff).
 
 ### Load shedding (low heap)
-Three floors, all measured on free heap:
-- **< 15 KB** — `[MSG:WARN: Low memory: N bytes, largest M, http busy <uri> for Tms, pend=P]`
+Three floors. The warn line is on total free heap; **the two shedding floors are gauged on
+the largest allocatable BLOCK** (`heap_largest`), not total free — a fragmented heap can sit
+at 11–14 KB free while the largest block collapses to ~5 KB, which is what actually fails an
+allocation or an SD remount:
+- **< 15 KB free** — `[MSG:WARN: Low memory: N bytes, largest M, http busy <uri> for Tms, pend=P]`
   in `/sand_log`. Reports the boot-session low-water mark (each value appears once) plus what
   the web server was serving at that instant — the usual culprit behind a crater is a
   connection pileup while one long request monopolizes the single-threaded server.
-- **< 10 KB** — non-exempt routes get **503** `busy: low memory` before the handler runs;
-  `/sand_status` and stop/pause/resume still work.
-- **< 6 KB** — new connections are RST-closed at accept, before the request is read (no
-  route is exempt — parsing itself costs heap the board no longer has). Back off and retry.
+- **largest block < 10 KB** — non-exempt routes get **503** `busy: low memory` before the
+  handler runs; `/sand_status`, stop/pause/resume, and a `/sand_patterns` *revalidation*
+  (conditional GET with `If-None-Match`) still work.
+- **largest block < 6 KB** — new connections are RST-closed at accept, before the request is
+  read (no route is exempt — parsing itself costs heap the board no longer has). Back off and retry.
 
 ### Upload
 `POST /upload` (SD) multipart: the multipart **filename carries the full destination path**

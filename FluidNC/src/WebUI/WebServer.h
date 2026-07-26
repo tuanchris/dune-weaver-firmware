@@ -140,6 +140,14 @@ namespace WebUI {
 
         static bool myStreamFile(const char* path, bool download = false);
 
+        // Stream `len` bytes from the current position of an open file to the
+        // client in bounded chunks, feeding the WDT and self-shedding (12 KB)
+        // under heap pressure.  Shared by the /sd/ file path and the
+        // /sand_patterns manifest so both bound each deaf window rather than
+        // monopolizing the single-threaded server for one long transfer.  Does
+        // not close `file`.
+        static void streamOpenFile(FileStream* file, size_t len);
+
         static void pushError(int code, const char* st, bool web_error = 500, uint16_t timeout = 1000);
 
         static void cancelUpload();
