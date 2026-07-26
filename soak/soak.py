@@ -87,7 +87,7 @@ class Soak:
         self.last_ok = time.time()  # any successful request, any thread
         self.counters = {"requests": 0, "failures": 0, "patterns": 0,
                          "scans": 0, "led": 0, "pauses": 0, "reboots": 0,
-                         "storm_aborts": 0, "no_start": 0}
+                         "storm_aborts": 0, "no_start": 0, "run_lost": 0}
         self.lock = threading.Lock()
         self.patterns = []
         # A no-start can be a lost request (storm window), but a pattern that
@@ -163,7 +163,26 @@ class Soak:
                 continue
             p = random.choice(self.patterns)
             clear = " clear=adaptive" if random.random() < 0.25 else ""
-            self.command(f"$Sand/Run=/patterns/{p}{clear}")
+            # Retry the Run itself when the request never lands.  The storm
+            # windows deliberately shed /command (503 busy: low memory) and a
+            # real client retries with backoff, so a lost request is load
+            # behaving as designed -- not the board ignoring a command.  Only a
+            # Run the board ACCEPTED and then failed to act on is a no-start;
+            # counting a lost one made the "never started all run" alert fire on
+            # any single shed request, because a pattern drawn at random from
+            # ~1000 is almost never re-attempted inside one 10-minute gate.
+            ack = None
+            for _ in range(3):
+                ack = self.command(f"$Sand/Run=/patterns/{p}{clear}")
+                if ack is not None:
+                    break
+                if STOP.wait(2):
+                    return
+            if ack is None:
+                with self.lock:
+                    self.counters["run_lost"] += 1
+                self.log("WARN", f"run request never accepted (shed/lost): {p}{clear}")
+                continue
             # confirm it took; poll up to start_wait_s rather than a single fixed
             # check.  A large pattern (a 2.86MB .thr measured ~47s) can take tens
             # of seconds to open+translate off the SD before motion begins; a 15s
@@ -382,7 +401,8 @@ class Soak:
                          f"({c['failures']} failed), {c['patterns']} patterns, "
                          f"{c['scans']} scans, {c['led']} led, {c['pauses']} pauses, "
                          f"{c['storm_aborts']} storm aborts, {c['no_start']} no-starts, "
-                         f"{c['reboots']} reboots, {len(ALERTS)} alerts")
+                         f"{c['run_lost']} runs lost, {c['reboots']} reboots, "
+                         f"{len(ALERTS)} alerts")
         return 1 if ALERTS else 0
 
 
