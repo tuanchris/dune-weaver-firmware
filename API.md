@@ -195,6 +195,18 @@ Two ways to run the table, both driven by the same two NVS settings (`$WiFi/Mode
   socket to the WiFi network when in hotspot mode.) Switching standalone→home-WiFi: open
   `http://192.168.0.1/wifi` or use the routes below from the app.
 
+**Dropped home-WiFi links recover on their own.** If the AP goes away (a router reboot, a rolling
+AP restart), the table retries the join itself rather than sitting dark until a power cycle — the
+ESP32 WiFi stack refuses to auto-retry some disconnect reasons, notably the one many APs send as
+they shut down. Retries start ~20 s after the drop and repeat every 30 s (slowing to 2 min after
+five tries), but only at a moment that cannot disturb motion: the machine at **Idle**, or the
+instant a **pattern or clear finishes**, so a continuously looping playlist still gets recovery
+windows. A table is therefore reachable again within a minute of the AP returning if it is idle, or
+by the end of the current pattern if it is drawing. Serial log lines: `WiFi Disconnected, reason
+<n> (<name>)`, `WiFi down <n>s; reconnect attempt <n>`, `WiFi reconnected after <n>s, IP <addr>`.
+This does not cover an SSID that is gone for good (moved house, renamed network) — that still needs
+a reboot to reach the fallback AP.
+
 Portal routes (registered in **every** mode, so the app can also reconfigure a table over the LAN):
 
 | Endpoint | Returns / action |

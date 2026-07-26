@@ -16,7 +16,9 @@ future iOS/Android/web app, scripts) drive it over HTTP.
 ## Hardware (active test board)
 
 **Dune Weaver Mini Pro** on **MKS-DLC32 V2.1**, plain **stepstick** drivers (so no
-Trinamic/StallGuard). On the LAN at **`DWMP.local` / 192.168.68.160** (prefer the IP;
+Trinamic/StallGuard). On the LAN at **`DWMP.local` / 192.168.68.128** (DHCP moves it;
+prefer the IP but confirm it — the `usbserial-NNNN` number names the USB *port*, so
+`$I` over serial is the only reliable way to tell which table you are about to flash;
 mDNS is flaky here), USB serial **`/dev/cu.usbserial-8320` @ 115200**. The hostname
 is set by **`hostname: DWMP`** in config.yaml (a top-level key that overrides the
 `$Hostname` NVS setting; empty/absent → the NVS default `fluidnc`). (A second table
@@ -88,6 +90,15 @@ Compass"**.)
   (homing-crawl bug).
 - The global **Job stack is shared across tasks** and guarded by a `recursive_mutex`
   (concurrent push vs pop corrupted the deque → panic).
+- **We supervise the STA link ourselves** (`WifiConfig::pollStaLink`) — the arduino
+  core never auto-retries `WIFI_REASON_ASSOC_LEAVE` (8, what many APs send as they
+  reboot) or `AUTH_FAIL` (202), so a router's weekly restart used to leave the table
+  dark until a power cycle. Retries use `esp_wifi_connect()`, never `WiFi.begin()`
+  (we don't call `WiFi.persistent(false)`, so storage stays `WIFI_STORAGE_FLASH` and
+  `begin()`'s `esp_wifi_set_config()` can write NVS per attempt) and never a scan.
+  **The retry window is machine state-gated**: Idle, or the moment a job (pattern or
+  clear) finishes — `Idle` alone is not enough because an indefinitely looping
+  playlist may never be observed there. Never during `State::Homing`.
 - **Config-gated modules**: `Playlist` and `Leds` only exist if their config section
   is present.
 - **Progress %** = executed motion, not file-read position (the reader leads motion by

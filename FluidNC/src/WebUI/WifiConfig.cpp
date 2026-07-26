@@ -9,6 +9,8 @@
 #include "src/Channel.h"     // Channel
 #include "src/Error.h"       // Error
 #include "src/Module.h"      // Module
+#include "src/Job.h"         // Job::active() - pattern boundary for the STA link supervisor
+#include "src/Types.h"       // State, state_is()
 #include "Authentication.h"  // AuthenticationLevel
 
 #include "src/Main.h"
@@ -219,6 +221,15 @@ namespace WebUI {
         }
         return err;
     }
+
+    // --- STA link supervisor state (see pollStaLink) ---------------------
+    // Wall-clock bookkeeping only; the policy lives in pollStaLink().
+    static uint32_t _sta_down_since   = 0;      // millis of the first poll that saw the link down; 0 = up
+    static uint32_t _sta_next_try     = 0;      // millis before which we do not retry
+    static uint32_t _sta_tries        = 0;      // consecutive retries since the link went down
+    static uint32_t _sta_gate_checked = 0;      // millis of the last Job::active() sample
+    static bool     _sta_job_active   = false;  // last sampled Job::active(), for the falling edge
+    static bool     _sta_pattern_done = false;  // sticky: a job finished, a retry window is owed
 
     class WiFiConfig : public Module {
     private:
@@ -682,14 +693,27 @@ namespace WebUI {
      * SYSTEM_EVENT_MAX
      */
 
-        static void WiFiEvent(WiFiEvent_t event) {
+        // Registered as a WiFiEventSysCb (pointer to the event) rather than the
+        // (event, info) form: that one is a std::function taking the ~140-byte
+        // arduino_event_info_t union BY VALUE, copied onto the arduino_events
+        // task's 4 KB stack on every WiFi event.  The pointer form copies nothing.
+        static void WiFiEvent(arduino_event_t* sys_event) {
             static bool disconnect_seen = false;
-            switch (event) {
+            switch (sys_event->event_id) {
                 case SYSTEM_EVENT_STA_GOT_IP:
                     break;
                 case SYSTEM_EVENT_STA_DISCONNECTED:
                     if (!disconnect_seen) {
-                        log_info_to(Uart0, "WiFi Disconnected");
+                        // The reason code is the whole diagnosis for a station that
+                        // never comes back: the arduino core refuses to auto-retry
+                        // ASSOC_LEAVE (8, sent by many APs as they reboot) and
+                        // AUTH_FAIL (202) after the first join, so those are the
+                        // codes that leave the link down until we retry it
+                        // ourselves in pollStaLink().
+                        uint8_t reason = sys_event->event_info.wifi_sta_disconnected.reason;
+                        log_info_to(Uart0,
+                                    "WiFi Disconnected, reason " << (int)reason << " ("
+                                                                 << WiFi.disconnectReasonName((wifi_err_reason_t)reason) << ")");
                         disconnect_seen = true;
                     }
                     break;
@@ -702,7 +726,7 @@ namespace WebUI {
                     log_info_to(Uart0, "WiFi STA Connected");
                     break;
                 default:
-                    log_debug_to(Uart0, "WiFi event: " << (int)event);
+                    log_debug_to(Uart0, "WiFi event: " << (int)sys_event->event_id);
                     break;
             }
         }
@@ -1073,6 +1097,116 @@ namespace WebUI {
             }
         }
 
+        // How long the link may be down before we take over from the core's own
+        // auto-reconnect, and how long between our attempts.  Attempts are cheap
+        // but they are still radio work, so they slow down once it is clear the
+        // AP is gone for a while rather than blipping.
+        static const uint32_t STA_GRACE_MS   = 20000;
+        static const uint32_t STA_RETRY_MS   = 30000;
+        static const uint32_t STA_SLOW_MS    = 120000;
+        static const uint32_t STA_SLOW_AFTER = 5;  // retries before backing off to STA_SLOW_MS
+
+        // True when a reconnect attempt cannot disturb work in progress.
+        //
+        // Idle alone is not enough: a playlist looping indefinitely with a short
+        // (or zero) PauseTime may never be observed at Idle, which is exactly
+        // the table that would sit off-network for days.  So a finished job --
+        // the moment a pattern or clear ends and before the next is injected --
+        // opens a window of its own.  The flag is sticky so a window earned
+        // mid-homing is spent afterwards rather than lost.
+        static bool staRetryWindowOpen() {
+            const uint32_t now = millis();
+            // Sample the job stack at 4 Hz, not every poll: Job::active() takes
+            // the shared job mutex, and this loop also feeds segment prep.
+            if ((uint32_t)(now - _sta_gate_checked) >= 250) {
+                _sta_gate_checked = now;
+                bool active       = Job::active();
+                if (_sta_job_active && !active) {
+                    _sta_pattern_done = true;
+                }
+                _sta_job_active = active;
+            }
+            // Homing is our most timing-fragile motion; never touch the radio
+            // during it.  A pending window survives to the other side.
+            if (state_is(State::Homing)) {
+                return false;
+            }
+            if (_sta_pattern_done) {
+                _sta_pattern_done = false;
+                return true;
+            }
+            return state_is(State::Idle);
+        }
+
+        // Retry a dropped station link ourselves.
+        //
+        // The arduino core gives up permanently on WIFI_REASON_ASSOC_LEAVE (8) --
+        // "Voluntarily disconnected. Don't reconnect!" in WiFiGeneric.cpp -- and on
+        // AUTH_FAIL (202), neither of which is in _isReconnectableReason().  An AP
+        // rebooting on a schedule commonly deauths with 8, so without this the
+        // table stays dark until someone power-cycles it.
+        static void pollStaLink() {
+            // Only supervise a real station link.  AP_STA is the transient scan
+            // mode handled above; AP-only has no station to recover.
+            if (WiFi.getMode() != WIFI_STA) {
+                return;
+            }
+            if (!_sta_ssid || strlen(_sta_ssid->get()) == 0) {
+                return;
+            }
+
+            const uint32_t now = millis();
+
+            if (WiFi.status() == WL_CONNECTED) {
+                if (_sta_down_since) {
+                    log_info("WiFi reconnected after " << (now - _sta_down_since) / 1000 << "s, IP " << IP_string(WiFi.localIP()));
+                }
+                _sta_down_since   = 0;
+                _sta_tries        = 0;
+                _sta_pattern_done = false;
+                return;
+            }
+
+            // Associated to the AP but no IP yet (DHCP in flight, or a DHCP
+            // server that never answers).  esp_wifi_connect() would only knock a
+            // live association back down, and it cannot fix DHCP, so leave it be.
+            wifi_ap_record_t ap;
+            if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+                return;
+            }
+
+            if (!_sta_down_since) {
+                // First poll that sees the link down: give the core's own retry
+                // (and a brief AP reboot) a grace period before we step in.
+                _sta_down_since = now ? now : 1;
+                _sta_next_try   = now + STA_GRACE_MS;
+                return;
+            }
+            if ((int32_t)(now - _sta_next_try) < 0) {
+                return;
+            }
+            if (!staRetryWindowOpen()) {
+                return;
+            }
+
+            ++_sta_tries;
+            _sta_next_try = now + (_sta_tries >= STA_SLOW_AFTER ? STA_SLOW_MS : STA_RETRY_MS);
+
+            // esp_wifi_connect(), not WiFi.begin(): we never call
+            // WiFi.persistent(false), so the core leaves storage at
+            // WIFI_STORAGE_FLASH and begin()'s esp_wifi_set_config() can write
+            // NVS on every attempt.  connect() reuses the config already in the
+            // driver, writes nothing, and returns immediately -- no scanNetworks()
+            // (an async scan racing the status poller is what wedges the web
+            // server) and nothing that blocks this task.
+            esp_err_t err = esp_wifi_connect();
+            if (err == ESP_OK || err == ESP_ERR_WIFI_CONN) {
+                log_info("WiFi down " << (now - _sta_down_since) / 1000 << "s; reconnect attempt " << _sta_tries);
+            } else {
+                log_warn("WiFi reconnect attempt " << _sta_tries << " failed to start: " << esp_err_to_name(err));
+            }
+        }
+
         void poll() {
             //to avoid mixed mode due to scan network
             if (WiFi.getMode() == WIFI_AP_STA) {
@@ -1083,6 +1217,7 @@ namespace WebUI {
                     WiFi.enableSTA(false);
                 }
             }
+            pollStaLink();
         }
 
         bool is_radio() override {
