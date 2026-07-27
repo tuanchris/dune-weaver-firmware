@@ -17,6 +17,7 @@
 
 #include "WebServer.h"             // Web_Server::port()
 #include "WifiConfig.h"            // provisioning interface for the captive portal
+#include "CaptiveDns.h"            // stop the responder when the recovery AP comes down
 #include "TelnetServer.h"          // TelnetServer::port()
 #include "NotificationsService.h"  // notificationsservice
 
@@ -181,6 +182,7 @@ namespace WebUI {
     static EnumSetting*     _sta_min_security;
     static PasswordSetting* _sta_password;
     static EnumSetting*     _wifi_ps_mode;
+    static IntSetting*      _ap_fallback_min;
 
     // Captive-portal state (see WifiConfig.h): why the AP is up, and why the
     // last STA join failed.  Both are per-boot; a failed join after /wifi_save
@@ -230,6 +232,9 @@ namespace WebUI {
     static uint32_t _sta_gate_checked = 0;      // millis of the last Job::active() sample
     static bool     _sta_job_active   = false;  // last sampled Job::active(), for the falling edge
     static bool     _sta_pattern_done = false;  // sticky: a job finished, a retry window is owed
+    static bool     _ap_raised        = false;  // WE raised the setup hotspot alongside the station
+    static bool     _ap_probing       = false;  // a bounded home-network probe is in flight
+    static uint32_t _ap_probe_until   = 0;      // millis the current probe gives up at
 
     class WiFiConfig : public Module {
     private:
@@ -1014,6 +1019,9 @@ namespace WebUI {
             _ap_password = new PasswordSetting("AP Password", "ESP106", "AP/Password", "12345678");
             _ap_ssid     = new StringSetting("AP SSID", WEBSET, WA, "ESP105", "AP/SSID", "DuneWeaver", MIN_SSID_LENGTH, MAX_SSID_LENGTH);
             _ap_country  = new EnumSetting("AP regulatory domain", WEBSET, WA, NULL, "AP/Country", WiFiCountry01, &wifiCountryOptions);
+            // Minutes the home network may be unreachable before the setup
+            // hotspot joins the still-retrying station.  0 = never raise it.
+            _ap_fallback_min = new IntSetting("AP fallback delay (min)", WEBSET, WA, NULL, "WiFi/ApFallbackMin", 10, 0, 1440);
             _sta_netmask = new IPaddrSetting("Station Static Mask", WEBSET, WA, NULL, "Sta/Netmask", NULL_IP);
             _sta_gateway = new IPaddrSetting("Station Static Gateway", WEBSET, WA, NULL, "Sta/Gateway", NULL_IP);
             _sta_ip      = new IPaddrSetting("Station Static IP", WEBSET, WA, NULL, "Sta/IP", NULL_IP);
@@ -1106,6 +1114,14 @@ namespace WebUI {
         static const uint32_t STA_SLOW_MS    = 120000;
         static const uint32_t STA_SLOW_AFTER = 5;  // retries before backing off to STA_SLOW_MS
 
+        // While the setup hotspot is up the station is PARKED, because a
+        // scanning station drags the shared-radio AP off its channel and makes
+        // it unjoinable.  It wakes only for a bounded probe of the home network,
+        // so the AP is stable for all but ~25s out of every 5 minutes.
+        static const uint32_t AP_PROBE_SETTLE_MS = 30000;
+        static const uint32_t AP_PROBE_WINDOW_MS = 25000;
+        static const uint32_t AP_PROBE_EVERY_MS  = 300000;
+
         // True when a reconnect attempt cannot disturb work in progress.
         //
         // Idle alone is not enough: a playlist looping indefinitely with a short
@@ -1138,6 +1154,78 @@ namespace WebUI {
             return state_is(State::Idle);
         }
 
+        // How long the station must stay down before the setup hotspot joins it.
+        // 0 disables the hotspot entirely (retry-only, the v0.1.16 behavior).
+        static uint32_t apFallbackMs() {
+            int m = _ap_fallback_min ? _ap_fallback_min->get() : 0;
+            return m > 0 ? (uint32_t)m * 60000u : 0;
+        }
+
+        // Bring up the setup hotspot WITHOUT tearing down the station.
+        // AP_STA, not AP: the whole point is that reconnect attempts continue
+        // underneath, so a table whose router was merely rebooting rejoins on
+        // its own and the hotspot goes away again -- the owner never has to
+        // touch it.  StartAP() is not reusable here; it kills the station.
+        static void raiseRecoveryAp(uint32_t now) {
+            // PARK THE STATION FIRST.  The softAP shares one radio with the
+            // station and has to follow its channel, so a station left hunting
+            // for a missing SSID keeps yanking the channel and the AP never
+            // beacons long enough to be joinable -- measured: the AP reported
+            // itself up at 192.168.0.1 while a laptop could not see the SSID at
+            // all.  Stop the core's own reconnect loop, park the station, and
+            // probe the home network on a slow cadence instead (below).
+            WiFi.setAutoReconnect(false);
+            esp_wifi_disconnect();
+            _ap_probing = false;
+
+            WiFi.mode(WIFI_AP_STA);
+
+            const char* country = _ap_country->getStringValue();
+            if (ESP_OK != esp_wifi_set_country_code(country, true)) {
+                log_error("failed to set Wifi regulatory domain to " << country);
+            }
+
+            IPAddress ip(_ap_ip->get());
+            IPAddress mask;
+            mask.fromString("255.255.255.0");
+            WiFi.softAPConfig(ip, ip, mask);
+
+            const char* ssid     = _ap_ssid->get();
+            const char* password = _ap_password->get();
+            if (WiFi.softAP(ssid, (strlen(password) > 0) ? password : NULL, int8_t(_ap_channel->get()))) {
+                _ap_raised = true;
+                // Fallback semantics: the captive DNS resolves every name to the
+                // table so the phone pops the setup sheet, which is exactly the
+                // "I need to re-point this table at a network" case.
+                _ap_is_fallback  = true;
+                _sta_fail_reason = "home network unreachable for " + std::to_string((now - _sta_down_since) / 60000) + " min";
+                // Let the AP settle before the first probe steals the channel.
+                _sta_next_try = now + AP_PROBE_SETTLE_MS;
+                log_info("WiFi down " << (now - _sta_down_since) / 1000 << "s; setup hotspot " << ssid << " raised at "
+                                      << IP_string(ip) << " (home network probed every "
+                                      << AP_PROBE_EVERY_MS / 60000 << " min)");
+            } else {
+                // Leave _ap_raised false so a later attempt can try again.
+                WiFi.setAutoReconnect(true);
+                WiFi.mode(WIFI_STA);
+                esp_wifi_connect();
+                log_error("could not raise the setup hotspot; staying station-only");
+            }
+        }
+
+        // Home network is back (or the mode changed): return to a pure station.
+        static void dropRecoveryAp() {
+            WiFi.softAPdisconnect(true);
+            WiFi.mode(WIFI_STA);
+            WiFi.setAutoReconnect(true);  // hand routine retries back to the core
+            CaptiveDns::stop();
+            _ap_raised      = false;
+            _ap_probing     = false;
+            _ap_is_fallback = false;
+            _sta_fail_reason.clear();
+            log_info("Setup hotspot lowered; back to station only");
+        }
+
         // Retry a dropped station link ourselves.
         //
         // The arduino core gives up permanently on WIFI_REASON_ASSOC_LEAVE (8) --
@@ -1146,9 +1234,12 @@ namespace WebUI {
         // rebooting on a schedule commonly deauths with 8, so without this the
         // table stays dark until someone power-cycles it.
         static void pollStaLink() {
-            // Only supervise a real station link.  AP_STA is the transient scan
-            // mode handled above; AP-only has no station to recover.
-            if (WiFi.getMode() != WIFI_STA) {
+            // Supervise a real station link.  WIFI_AP_STA counts only when it is
+            // OUR recovery AP (the station is still there, retrying underneath
+            // it); otherwise AP_STA is the transient scan mode handled above and
+            // AP-only has no station to recover.
+            auto mode = WiFi.getMode();
+            if (mode != WIFI_STA && !(mode == WIFI_AP_STA && _ap_raised)) {
                 return;
             }
             if (!_sta_ssid || strlen(_sta_ssid->get()) == 0) {
@@ -1164,6 +1255,12 @@ namespace WebUI {
                 _sta_down_since   = 0;
                 _sta_tries        = 0;
                 _sta_pattern_done = false;
+                if (_ap_raised) {
+                    // Home network is back: the table belongs on the LAN, so
+                    // drop the recovery hotspot (any phone on it gets kicked --
+                    // correct, the thing it was there to fix is fixed).
+                    dropRecoveryAp();
+                }
                 return;
             }
 
@@ -1172,6 +1269,32 @@ namespace WebUI {
             // live association back down, and it cannot fix DHCP, so leave it be.
             wifi_ap_record_t ap;
             if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+                return;
+            }
+
+            // Hotspot is up: the station is parked and only wakes for a bounded
+            // probe, so the AP keeps a stable channel and stays joinable.
+            if (_ap_raised) {
+                if (_ap_probing) {
+                    if ((int32_t)(now - _ap_probe_until) >= 0) {
+                        _ap_probing = false;
+                        esp_wifi_disconnect();  // re-park: stop scanning, give the AP its channel back
+                        _sta_next_try = now + AP_PROBE_EVERY_MS;
+                    }
+                    return;
+                }
+                if ((int32_t)(now - _sta_next_try) < 0) {
+                    return;
+                }
+                if (!staRetryWindowOpen()) {
+                    return;
+                }
+                ++_sta_tries;
+                _ap_probing     = true;
+                _ap_probe_until = now + AP_PROBE_WINDOW_MS;
+                esp_wifi_connect();
+                log_info("WiFi down " << (now - _sta_down_since) / 1000 << "s; probing home network (attempt " << _sta_tries
+                                      << ") while the hotspot stays up");
                 return;
             }
 
@@ -1187,6 +1310,17 @@ namespace WebUI {
             }
             if (!staRetryWindowOpen()) {
                 return;
+            }
+
+            // A home network that has stayed down this long may not be coming
+            // back as it was (moved house, renamed SSID, changed password), and
+            // a headless table with no radio the owner can reach is a brick.
+            // Raise the setup hotspot alongside the station -- the retries below
+            // keep running underneath it, so a router that WAS just rebooting
+            // still gets picked up automatically and the AP disappears again.
+            if (!_ap_raised && _mode->get() == WiFiFallback && apFallbackMs() &&
+                (uint32_t)(now - _sta_down_since) >= apFallbackMs()) {
+                raiseRecoveryAp(now);
             }
 
             ++_sta_tries;
@@ -1209,7 +1343,10 @@ namespace WebUI {
 
         void poll() {
             //to avoid mixed mode due to scan network
-            if (WiFi.getMode() == WIFI_AP_STA) {
+            // Skipped while we hold a recovery AP: there AP_STA is deliberate and
+            // the station is the thing being recovered, so a completed scan must
+            // not disable it.
+            if (WiFi.getMode() == WIFI_AP_STA && !_ap_raised) {
                 // In principle it should be sufficient to check for != WIFI_SCAN_RUNNING,
                 // but that does not work well.  Doing so makes scans in AP mode unreliable.
                 // Sometimes the first try works, but subsequent scans fail.

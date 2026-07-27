@@ -99,6 +99,23 @@ Compass"**.)
   **The retry window is machine state-gated**: Idle, or the moment a job (pattern or
   clear) finishes — `Idle` alone is not enough because an indefinitely looping
   playlist may never be observed there. Never during `State::Homing`.
+- **The recovery AP parks the station; it does not run it in parallel.** After
+  `$WiFi/ApFallbackMin` (default 10) minutes down, `raiseRecoveryAp()` brings the
+  `DuneWeaver` portal up at runtime in `WIFI_AP_STA`. The softAP shares ONE radio with
+  the station and must follow its channel, so a station left hunting a missing SSID
+  (the arduino core's own auto-reconnect loop does exactly that) drags the AP off
+  channel and **it never beacons — the AP reports itself up at 192.168.0.1 while no
+  client can see the SSID**. So raising it does `setAutoReconnect(false)` +
+  `esp_wifi_disconnect()` to park the station, then probes the home network for a
+  bounded 25 s every 5 min, re-parking after each miss. `dropRecoveryAp()` restores
+  `setAutoReconnect(true)`. Verify AP visibility from a SECOND radio (the other table's
+  `/wifi_scan`) — macOS `networksetup`/`system_profiler` scanning is unreliable enough
+  to produce false negatives.
+- **Captive-probe routes are registered in every mode** (`WebServer.cpp`), not just when
+  the board *boots* into AP: routes cannot be added retroactively, and gating them on
+  boot mode would force a web-server restart to give a runtime AP a working portal.
+  `CaptiveDns::start()` is idempotent and driven from `Web_Server::poll()` off the live
+  radio mode.
 - **Config-gated modules**: `Playlist` and `Leds` only exist if their config section
   is present.
 - **Progress %** = executed motion, not file-read position (the reader leads motion by

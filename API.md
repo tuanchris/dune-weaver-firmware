@@ -204,8 +204,24 @@ instant a **pattern or clear finishes**, so a continuously looping playlist stil
 windows. A table is therefore reachable again within a minute of the AP returning if it is idle, or
 by the end of the current pattern if it is drawing. Serial log lines: `WiFi Disconnected, reason
 <n> (<name>)`, `WiFi down <n>s; reconnect attempt <n>`, `WiFi reconnected after <n>s, IP <addr>`.
-This does not cover an SSID that is gone for good (moved house, renamed network) — that still needs
-a reboot to reach the fallback AP.
+
+**If the network stays gone, the setup hotspot comes up on its own.** After the home network has
+been unreachable for `$WiFi/ApFallbackMin` minutes (default **10**, `0` disables) — checked at the
+same safe moments, so never mid-pattern — the table raises the same `DuneWeaver` AP and captive
+setup portal it uses at boot, at `192.168.0.1`, *without rebooting*. This is the "moved house /
+renamed the network / changed the password" case: the owner joins the hotspot and re-points the
+table from the portal.
+
+The station is **not** abandoned while the hotspot is up. It is parked (so the shared radio can
+hold the AP's channel) and wakes for a bounded probe of the home network every 5 minutes; if the
+router simply came back, the table rejoins the LAN on its own and the hotspot disappears again with
+no user action. Log lines: `setup hotspot DuneWeaver raised at 192.168.0.1 (home network probed
+every 5 min)`, `probing home network (attempt <n>) while the hotspot stays up`, and
+`Setup hotspot lowered; back to station only`.
+
+Only `$WiFi/Mode=STA>AP` (the default) raises the hotspot; a table deliberately set to `STA` stays a
+station. While the hotspot is up, `GET /wifi_status` reports `mode:"fallback"` and `fail` explains
+how long the home network has been unreachable.
 
 Portal routes (registered in **every** mode, so the app can also reconfigure a table over the LAN):
 

@@ -253,30 +253,27 @@ namespace WebUI {
         _webserver->on("/upload", HTTP_ANY, handle_direct_SDFileList, SDFileUpload);
         //_webserver->on("/SD", HTTP_ANY, handle_SDCARD);
 
-        if (WiFi.getMode() == WIFI_AP) {
-            // Native lwIP captive DNS.  poll() below passes the live fallback
-            // state: fallback AP resolves every name to the table (setup sheet
-            // pops); standalone AP resolves ONLY the OS probe hosts and refuses
-            // the rest, so the phone's background apps can't storm the server.
-            IPAddress apip = WiFi.softAPIP();
-            CaptiveDns::start(apip[0], apip[1], apip[2], apip[3]);
-            log_info("Captive Portal Started");
-            // OS connectivity probes.  handleCaptiveProbe answers them one of
-            // two ways: fallback AP (failed/unconfigured home-WiFi join) serves
-            // the setup portal so the phone pops the captive sheet; standalone
-            // AP ($WiFi/Mode=AP) answers what each OS expects from the real
-            // internet, so the phone treats the hotspot as online and keeps
-            // the app's traffic on it instead of nagging or preferring
-            // cellular.
-            _webserver->on("/generate_204", HTTP_ANY, handleCaptiveProbe);  // Android
-            _webserver->on("/gen_204", HTTP_ANY, handleCaptiveProbe);       // Android (alt)
-            _webserver->on("/gconnectivitycheck.gstatic.com", HTTP_ANY, handleCaptiveProbe);
-            _webserver->on("/hotspot-detect.html", HTTP_ANY, handleCaptiveProbe);  // iOS/macOS
-            _webserver->on("/ncsi.txt", HTTP_ANY, handleCaptiveProbe);             // Windows
-            _webserver->on("/connecttest.txt", HTTP_ANY, handleCaptiveProbe);      // Windows 10+
-            //do not forget the / at the end
-            _webserver->on("/fwlink/", HTTP_ANY, handleCaptiveProbe);
-        }
+        // OS connectivity probes.  handleCaptiveProbe answers them one of two
+        // ways: fallback AP (failed/unconfigured home-WiFi join) serves the
+        // setup portal so the phone pops the captive sheet; standalone AP
+        // ($WiFi/Mode=AP) answers what each OS expects from the real internet,
+        // so the phone treats the hotspot as online and keeps the app's traffic
+        // on it instead of nagging or preferring cellular.
+        //
+        // Registered in EVERY mode, not just AP.  The WiFi module can raise a
+        // recovery AP long after begin() has run (a home network that stayed
+        // down), and routes cannot be added retroactively -- gating these on the
+        // boot-time mode would have meant restarting the whole web server to get
+        // a working portal.  On the LAN nothing requests these paths, and if
+        // something did, the non-fallback answers below are inert.
+        _webserver->on("/generate_204", HTTP_ANY, handleCaptiveProbe);  // Android
+        _webserver->on("/gen_204", HTTP_ANY, handleCaptiveProbe);       // Android (alt)
+        _webserver->on("/gconnectivitycheck.gstatic.com", HTTP_ANY, handleCaptiveProbe);
+        _webserver->on("/hotspot-detect.html", HTTP_ANY, handleCaptiveProbe);  // iOS/macOS
+        _webserver->on("/ncsi.txt", HTTP_ANY, handleCaptiveProbe);             // Windows
+        _webserver->on("/connecttest.txt", HTTP_ANY, handleCaptiveProbe);      // Windows 10+
+        //do not forget the / at the end
+        _webserver->on("/fwlink/", HTTP_ANY, handleCaptiveProbe);
 
 #if 0
         //SSDP service presentation
@@ -2166,8 +2163,17 @@ namespace WebUI {
 
     void Web_Server::poll() {
         static uint32_t start_time = millis();
-        if (WiFi.getMode() == WIFI_AP) {
+        // Follow the live radio mode rather than the boot-time one: the WiFi
+        // module can raise (and drop) a recovery AP at any point while a home
+        // network is down, and AP_STA is that AP with the station still
+        // retrying underneath it.
+        auto wifi_mode = WiFi.getMode();
+        if (wifi_mode == WIFI_AP || wifi_mode == WIFI_AP_STA) {
+            IPAddress apip = WiFi.softAPIP();
+            CaptiveDns::start(apip[0], apip[1], apip[2], apip[3]);  // idempotent
             CaptiveDns::poll(wifi_ap_is_fallback());
+        } else {
+            CaptiveDns::stop();  // pure STA: give :53 back
         }
         if (_webserver) {
             _webserver->handleClient();

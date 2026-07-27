@@ -444,6 +444,17 @@ curl "$B/command?plain=\$Sta/SSID=MyNetwork"      # then $Sta/Password=..., then
 curl "$B/command?plain=\$WiFi/Mode=STA>AP"        # or =AP for standalone
 ```
 
+**Losing home WiFi no longer needs a power cycle.** A dropped link is retried by the
+table itself (at Idle or as a pattern finishes — never mid-draw). If the network is
+still gone after `$WiFi/ApFallbackMin` minutes, the `DuneWeaver` setup hotspot comes
+up *without rebooting* while the station keeps probing every 5 min; when the home
+network returns the table rejoins and the hotspot disappears on its own.
+
+```bash
+curl "$B/command?plain=\$WiFi/ApFallbackMin"      # minutes down before the hotspot rises
+curl "$B/command?plain=\$WiFi/ApFallbackMin=10"   # default 10; 0 = never raise it
+```
+
 ---
 
 ## Live status stream (single client, WebSocket on port 82)

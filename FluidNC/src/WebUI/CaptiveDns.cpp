@@ -28,6 +28,12 @@ namespace WebUI {
         }
 
         void start(uint8_t ip0, uint8_t ip1, uint8_t ip2, uint8_t ip3) {
+            // Genuinely idempotent: Web_Server::poll() calls this every pass
+            // while an AP is up, so an already-bound socket for the same IP must
+            // be left alone rather than closed and re-created each time.
+            if (s_sock >= 0 && s_ip[0] == ip0 && s_ip[1] == ip1 && s_ip[2] == ip2 && s_ip[3] == ip3) {
+                return;
+            }
             stop();
             s_ip[0] = ip0;
             s_ip[1] = ip1;
