@@ -24,7 +24,7 @@ namespace WebUI {
     const char* wifi_sta_fail_reason();
 
     const char* wifi_sta_ssid();  // stored Sta/SSID ("" if unset)
-    const char* wifi_ap_ssid();   // AP/SSID, e.g. "DuneWeaver"
+    const char* wifi_ap_ssid();   // AP/SSID, e.g. "DuneWeaver-4B90" (per-board by default)
 
     // Persist home-WiFi credentials and force $WiFi/Mode=STA>AP - never plain
     // STA, so a bad password lands back in the portal instead of a dead

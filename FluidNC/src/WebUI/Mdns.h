@@ -18,8 +18,14 @@ namespace WebUI {
     public:
         Mdns(const char* name) : Module(name) {}
 
-        void        init() override;
-        void        deinit() override;
+        void init() override;
+        void deinit() override;
+
+        // Re-advertise under a new <hostname>.local without a reboot, so a
+        // table renamed with $Hostname is discoverable under the new name
+        // right away.  No-op when mDNS is off or WiFi is down.
+        static void setHostname(const char* hostname);
+
         static void add(const char* service, const char* proto, int port);
         static void addTxt(const char* service, const char* proto, const char* key, const char* value);
         static void remove(const char* service, const char* proto);

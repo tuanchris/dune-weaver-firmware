@@ -50,7 +50,10 @@ Commands can be sent on any transport, **but command output routing differs** (v
 board, 2026-06):
 
 - **HTTP `GET/POST /command?plain=<urlencoded cmd>`** runs the command (the *action* always takes effect),
-  but its **text response is racy** except for `$/` settings reads — plain `$` / `[ESP…]` output is emitted
+  as do the `commandText=` and `cmd=` arg forms — all three are synchronous and equivalent. *(Before
+  v0.1.18 only `plain=` and `[ESPxxx]` ran; the other forms were routed to the disabled WebSocket, so they
+  answered 500 "WebSocket dead" and never executed the command.)*
+  Its **text response is racy** except for `$/` settings reads — plain `$` / `[ESP…]` output is emitted
   asynchronously and may not reach the request. So use `/command` for **fire-and-forget actions**
   (`$SD/Run=`, `$THR/Feed=`, `$LED/*`, `$Playlist/*`, settings writes) and confirm via a status poll; for
   *reads*, use the dedicated `/sand_*` JSON routes below. This fork ships **`HTTP/BlockDuringMotion`
@@ -184,7 +187,7 @@ Two ways to run the table, both driven by the same two NVS settings (`$WiFi/Mode
 - **Home-WiFi mode** (`$WiFi/Mode=STA>AP`, the default): the table joins the LAN; the app finds it
   via mDNS. If the join fails (wrong password, 2.4 GHz SSID missing, moved house) or no SSID is set,
   the board falls back to its own AP (**fallback AP**) and serves a **captive setup portal**: joining
-  the `DuneWeaver` hotspot (password `12345678`) pops the phone's captive sheet with a chooser —
+  the `DuneWeaver-<MAC4>` hotspot (password `12345678`) pops the phone's captive sheet with a chooser —
   connect to home WiFi (scan, pick, password) or switch to standalone. A failed join's reason
   (wrong password / network not found / timeout) is shown on the portal.
 - **Standalone mode** (`$WiFi/Mode=AP`): the AP is deliberate — the phone joins the hotspot and the
@@ -207,7 +210,7 @@ by the end of the current pattern if it is drawing. Serial log lines: `WiFi Disc
 
 **If the network stays gone, the setup hotspot comes up on its own.** After the home network has
 been unreachable for `$WiFi/ApFallbackMin` minutes (default **10**, `0` disables) — checked at the
-same safe moments, so never mid-pattern — the table raises the same `DuneWeaver` AP and captive
+same safe moments, so never mid-pattern — the table raises the same `DuneWeaver-<MAC4>` AP and captive
 setup portal it uses at boot, at `192.168.0.1`, *without rebooting*. This is the "moved house /
 renamed the network / changed the password" case: the owner joins the hotspot and re-points the
 table from the portal.
@@ -215,7 +218,7 @@ table from the portal.
 The station is **not** abandoned while the hotspot is up. It is parked (so the shared radio can
 hold the AP's channel) and wakes for a bounded probe of the home network every 5 minutes; if the
 router simply came back, the table rejoins the LAN on its own and the hotspot disappears again with
-no user action. Log lines: `setup hotspot DuneWeaver raised at 192.168.0.1 (home network probed
+no user action. Log lines: `setup hotspot DuneWeaver-<MAC4> raised at 192.168.0.1 (home network probed
 every 5 min)`, `probing home network (attempt <n>) while the hotspot stays up`, and
 `Setup hotspot lowered; back to station only`.
 
@@ -300,8 +303,10 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   //  Key saved tables by this (not IP, not hostname): it dedupes a table added
   //  by IP against the same one found via mDNS (whose TXT carries the same
   //  value), and survives DHCP changes and hostname edits.
-  "hostname": "DWMP",          // network hostname (config.yaml hostname: / $Hostname);
-  //  a human-readable default name for a table added by bare IP
+  "hostname": "DWMP",          // network hostname — $Hostname if the user has renamed
+  //  the table, else config.yaml `hostname:` (its factory name). A human-readable
+  //  default name for a table added by bare IP. Rename with `$Hostname=<name>`;
+  //  this field and <name>.local follow immediately, no reboot needed.
   "time": { "epoch": 1718971402, "synced": true, "local": "2026-06-21 14:03:22", "tz": "ICT-7" }
   //  synced=false means the clock isn't set (no NTP yet / no $Time/Set) -> quiet
   //  hours won't fire; the app can push time via GET /sand_time?epoch=<unix>.

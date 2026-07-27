@@ -39,7 +39,19 @@ namespace Machine {
         handler.item("board", _board);
         handler.item("name", _name);
         handler.item("meta", _meta);
-        handler.item("hostname", _hostname);
+
+        // `hostname:` is a FILE-ONLY key: it seeds the default of the $Hostname
+        // NVS setting (WebUI/WifiConfig.cpp) and nothing else.  It must stay out
+        // of the runtime handler, because settings_execute_line() searches the
+        // config tree BEFORE the settings list: while this item was visible
+        // there it swallowed `$Hostname=<new name>`, which wrote the in-memory
+        // config tree instead of NVS.  The write reported Ok and read back the
+        // new name, then config.yaml was re-read on the next boot and the name
+        // was gone -- renaming a table looked like it silently reverted, and
+        // the real $Hostname setting was unreachable by name.
+        if (handler.handlerType() != Configuration::HandlerType::Runtime) {
+            handler.item("hostname", _hostname);
+        }
 
         handler.section("stepping", _stepping);
 

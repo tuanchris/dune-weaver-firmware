@@ -18,11 +18,13 @@
 #include "WebServer.h"             // Web_Server::port()
 #include "WifiConfig.h"            // provisioning interface for the captive portal
 #include "CaptiveDns.h"            // stop the responder when the recovery AP comes down
+#include "Mdns.h"                  // re-advertise <hostname>.local after a rename
 #include "TelnetServer.h"          // TelnetServer::port()
 #include "NotificationsService.h"  // notificationsservice
 
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <esp_mac.h>  // esp_read_mac() for the per-board hotspot/hostname suffix
 #include "Driver/localfs.h"
 #include <string>
 #include <cstring>
@@ -125,6 +127,19 @@ namespace WebUI {
     static constexpr int DHCP_MODE   = 0;
     static constexpr int STATIC_MODE = 1;
 
+    // Last two bytes of the burned-in STA MAC as hex -- a per-board tag for the
+    // factory hotspot SSID and hostname, so a household with several tables
+    // does not get several identically named "DuneWeaver" hotspots and several
+    // colliding duneweaver.local records.  Read from efuse (esp_read_mac), so
+    // this is valid before the radio is up and identical in STA and AP mode.
+    static std::string macSuffix(bool upper) {
+        uint8_t m[6];
+        esp_read_mac(m, ESP_MAC_WIFI_STA);
+        char buf[8];
+        snprintf(buf, sizeof(buf), upper ? "%02X%02X" : "%02x%02x", m[4], m[5]);
+        return std::string(buf);
+    }
+
     static const enum_opt_t staModeOptions = {
         { "DHCP", DHCP_MODE },
         { "Static", STATIC_MODE },
@@ -162,7 +177,22 @@ namespace WebUI {
                     return Error::InvalidValue;
                 }
             }
-            return StringSetting::setStringValue(s);
+            Error err = StringSetting::setStringValue(s);
+            if (err != Error::Ok) {
+                return err;
+            }
+            // Apply the rename as far as we can without a reboot, so a client
+            // that renames the table sees the new name instead of the old one
+            // (which reads as "the rename did not stick").  WiFi.setHostname()
+            // writes the arduino core's shared name buffer, which is what
+            // WiFi.getHostname() -- and so /sand_status -- reports; mDNS gets
+            // the new <name>.local immediately.  The DHCP-registered name is
+            // bound for the life of the lease, so the router keeps showing the
+            // old one until the next boot.
+            WiFi.setHostname(get());
+            Mdns::setHostname(get());
+            log_info("Hostname is now " << get() << " (router name updates on the next reboot)");
+            return Error::Ok;
         }
     };
 
@@ -806,8 +836,8 @@ namespace WebUI {
                 return false;
             }
             //Hostname needs to be set before mode to take effect.
-            //A hostname in config.yaml overrides the $Hostname NVS setting.
-            WiFi.setHostname(config->_hostname.empty() ? _hostname->get() : config->_hostname.c_str());
+            //$Hostname already carries config.yaml's `hostname:` as its default.
+            WiFi.setHostname(_hostname->get());
             WiFi.mode(WIFI_STA);
             WiFi.setMinSecurity(static_cast<wifi_auth_mode_t>(_sta_min_security->get()));
             WiFi.setScanMethod(_fast_scan->get() ? WIFI_FAST_SCAN : WIFI_ALL_CHANNEL_SCAN);
@@ -850,7 +880,7 @@ namespace WebUI {
             // esp32-XXXXXX.  This name is what /sand_status reports and what
             // mDNS advertises (<hostname>.local), so the table stays identity-
             // stable across home-network and hotspot connections.
-            WiFi.setHostname(config->_hostname.empty() ? _hostname->get() : config->_hostname.c_str());
+            WiFi.setHostname(_hostname->get());
             WiFi.mode(WIFI_AP);
 
             const char* country = _ap_country->getStringValue();
@@ -1012,12 +1042,34 @@ namespace WebUI {
         WiFiConfig(const char* name) : Module(name) {}
 
         void init() {
-            _sta_ssid    = new StringSetting("Station SSID", WEBSET, WA, "ESP100", "Sta/SSID", "", MIN_SSID_LENGTH, MAX_SSID_LENGTH);
-            _hostname    = new HostnameSetting("Hostname", "ESP112", "Hostname", "duneweaver");
+            _sta_ssid = new StringSetting("Station SSID", WEBSET, WA, "ESP100", "Sta/SSID", "", MIN_SSID_LENGTH, MAX_SSID_LENGTH);
+            // config.yaml `hostname:` is the table's FACTORY name -- the default
+            // this setting falls back to, not an override of it.  A $Hostname
+            // the user has actually set lives in NVS and always wins, so a table
+            // can be renamed from the app; renaming it back to the config.yaml
+            // name drops the NVS key and returns it to the factory default.
+            // (Before this it was the other way round: config.yaml won forever,
+            // so $Hostname accepted, stored, and reported a new name that the
+            // table then ignored on every boot -- it looked like the rename
+            // silently reverted.)
+            //
+            // With no `hostname:` in config.yaml the fallback is per-board
+            // (duneweaver-4b90), not a flat "duneweaver": every unnamed table
+            // used to answer to the same name, so a second one on the LAN
+            // collided on mDNS and the app listed them all identically.
+            const std::string host_default =
+                (config && !config->_hostname.empty()) ? config->_hostname : ("duneweaver-" + macSuffix(false));
+            _hostname = new HostnameSetting("Hostname", "ESP112", "Hostname", host_default.c_str());
             _ap_channel  = new IntSetting("AP Channel", WEBSET, WA, "ESP108", "AP/Channel", 1, 1, 14);
             _ap_ip       = new IPaddrSetting("AP Static IP", WEBSET, WA, "ESP107", "AP/IP", "192.168.0.1");
             _ap_password = new PasswordSetting("AP Password", "ESP106", "AP/Password", "12345678");
-            _ap_ssid     = new StringSetting("AP SSID", WEBSET, WA, "ESP105", "AP/SSID", "DuneWeaver", MIN_SSID_LENGTH, MAX_SSID_LENGTH);
+            // Per-board so several tables setting themselves up in one house do
+            // not all raise a hotspot called "DuneWeaver" (indistinguishable in
+            // the phone's WiFi list, and the phone may silently rejoin the wrong
+            // one).  $AP/SSID overrides it and is what the portal displays.
+            const std::string ap_ssid_default = "DuneWeaver-" + macSuffix(true);
+            _ap_ssid =
+                new StringSetting("AP SSID", WEBSET, WA, "ESP105", "AP/SSID", ap_ssid_default.c_str(), MIN_SSID_LENGTH, MAX_SSID_LENGTH);
             _ap_country  = new EnumSetting("AP regulatory domain", WEBSET, WA, NULL, "AP/Country", WiFiCountry01, &wifiCountryOptions);
             // Minutes the home network may be unreachable before the setup
             // hotspot joins the still-retrying station.  0 = never raise it.

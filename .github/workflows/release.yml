@@ -68,13 +68,23 @@ jobs:
             echo "::warning::$TAG is not an annotated tag; falling back to generated notes"
             NOTES=""
           fi
+          # A tag with a pre-release suffix (v0.1.18-rc1, v0.2.0-beta2) ships as a
+          # GitHub PRE-RELEASE: testers can install it deliberately, but
+          # /releases/latest -- what the installer and "is there an update?"
+          # checks follow -- keeps pointing at the last final release, so a
+          # release candidate does not push a version bump at every table.
+          PRERELEASE=""
+          case "$TAG" in
+            *-*) PRERELEASE="--prerelease"
+                 echo "$TAG has a pre-release suffix; publishing as a pre-release" ;;
+          esac
           if [ -n "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
             printf '%s\n' "$NOTES" > "$RUNNER_TEMP/relnotes.md"
-            gh release create "$TAG" --title "$TAG" \
+            gh release create "$TAG" --title "$TAG" $PRERELEASE \
               --notes-file "$RUNNER_TEMP/relnotes.md" \
               "release/$TAG"/*
           else
-            gh release create "$TAG" --title "$TAG" \
+            gh release create "$TAG" --title "$TAG" $PRERELEASE \
               --generate-notes \
               "release/$TAG"/*
           fi

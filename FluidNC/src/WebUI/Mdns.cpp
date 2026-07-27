@@ -33,6 +33,18 @@ namespace WebUI {
     void Mdns::deinit() {
         mdns_free();
     }
+    void Mdns::setHostname(const char* hostname) {
+        if (!active()) {
+            return;
+        }
+        // The registered services were added with a NULL instance name, so they
+        // follow the host record and keep advertising under the new name.
+        if (mdns_hostname_set(hostname)) {
+            log_error("Cannot set mDNS hostname to " << hostname);
+            return;
+        }
+        log_info("mDNS hostname is now http://" << hostname << ".local/");
+    }
     void Mdns::add(const char* service, const char* proto, int port) {
         if (active()) {
             mdns_service_add(NULL, service, proto, port, NULL, 0);

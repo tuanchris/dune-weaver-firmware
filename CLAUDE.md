@@ -20,10 +20,12 @@ Trinamic/StallGuard). On the LAN at **`DWMP.local` / 192.168.68.128** (DHCP move
 prefer the IP but confirm it — the `usbserial-NNNN` number names the USB *port*, so
 `$I` over serial is the only reliable way to tell which table you are about to flash;
 mDNS is flaky here), USB serial **`/dev/cu.usbserial-8320` @ 115200**. The hostname
-is set by **`hostname: DWMP`** in config.yaml (a top-level key that overrides the
-`$Hostname` NVS setting; empty/absent → the NVS default `fluidnc`). (A second table
-exists: the **DWG "Desert
-Compass"**.)
+is **`$Hostname` (NVS) if the table has been renamed, else `hostname: DWMP` from
+config.yaml** — that top-level key is the table's *factory* name, i.e. the default
+the setting falls back to (empty/absent → the per-board `duneweaver-<mac4>`, never a
+flat `duneweaver`: identical names collide on mDNS and read as one table in the app).
+The fallback hotspot SSID is per-board the same way (`DuneWeaver-<MAC4>`). (A second
+table exists: the **DWG "Desert Compass"**.)
 
 - Kinematics **ThetaRho**: theta 50 mm/rev, rho 20 mm, coupling 0.195.
 - Homing = **limit switches** (X/theta neg `gpio.36`, Y/rho neg `gpio.35`); X homes
@@ -75,7 +77,11 @@ Compass"**.)
   setup portal (every mode); the plain API map lives at `GET /help`.
 - **WebUI WebSockets are disabled** (`_socket_server = NULL`) — they raced motion and
   panicked the board. Drive everything over stateless HTTP (`/command` + `/sand_*`),
-  poll `/sand_status` ~1 Hz.
+  poll `/sand_status` ~1 Hz. Because of that, **every `/command` arg form
+  (`plain=`, `commandText=`, `cmd=`) runs synchronously**: upstream routed the
+  non-`[ESPxxx]` ones into the socket, where they could only answer 500 "WebSocket
+  dead" *without running the command* — a silent no-op for any client that did not
+  happen to use `plain=`.
 - **Settings framework = the way to make things app-configurable**: any NVS-backed
   `Setting` is auto-readable via `GET /sand_settings` and writable via
   `$Key=value` over `/command`. Add a setting + its key in `settingsJson()`.
@@ -101,7 +107,7 @@ Compass"**.)
   playlist may never be observed there. Never during `State::Homing`.
 - **The recovery AP parks the station; it does not run it in parallel.** After
   `$WiFi/ApFallbackMin` (default 10) minutes down, `raiseRecoveryAp()` brings the
-  `DuneWeaver` portal up at runtime in `WIFI_AP_STA`. The softAP shares ONE radio with
+  `DuneWeaver-<MAC4>` portal up at runtime in `WIFI_AP_STA`. The softAP shares ONE radio with
   the station and must follow its channel, so a station left hunting a missing SSID
   (the arduino core's own auto-reconnect loop does exactly that) drags the AP off
   channel and **it never beacons — the AP reports itself up at 192.168.0.1 while no
@@ -152,6 +158,16 @@ Compass"**.)
   (long early-line values broke XModem parsing).
 - **Runtime `$/path=value` config changes do NOT persist** — config.yaml is reloaded
   fresh each boot; edit the file to persist.
+- **A config.yaml key silently shadows an NVS `Setting` of the same name.**
+  `settings_execute_line` searches the config tree **before** `Setting::List`, so a
+  top-level `foo:` item makes `$Foo=bar` a *runtime config write* — it answers Ok,
+  reads back the new value, and evaporates on the next boot, while the real NVS
+  setting becomes unreachable by name. This is what made tables un-renameable
+  (`hostname:` vs `$Hostname`, shipped v0.1.0–v0.1.17). When a config key and a
+  setting must coexist, hide the config item from the runtime handler
+  (`if (handler.handlerType() != Configuration::HandlerType::Runtime)`) and let it
+  seed the setting's **default** instead — see `MachineConfig::group`. Before adding
+  any top-level config item, grep the settings list for a name collision.
 - **`POST /upload` (and `/files`) takes the destination path from the multipart
   FILENAME, not a `path` field/arg** — `filename=/playlists/x.txt` lands it there; a
   bare `filename=x.txt` with `path=/playlists` lands it at the **SD root** (the size

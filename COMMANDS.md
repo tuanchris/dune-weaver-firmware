@@ -11,7 +11,7 @@ behind each command see `FluidNC/src/SandApi.cpp`, `Playlist.cpp`, `Leds.cpp`,
 
 ```bash
 B=http://192.168.68.160       # LAN IP (preferred); or the mDNS name, e.g. http://DWMP.local
-#   hostname comes from `hostname:` in config.yaml (this table: DWMP), else $Hostname (default fluidnc)
+#   hostname = $Hostname if you have set it, else `hostname:` from config.yaml (this table: DWMP)
 ```
 
 - In a shell, `\$` escapes the `$` so it isn't treated as a variable.
@@ -422,7 +422,7 @@ curl "$B/command?plain=\$Sand/Password=&key=hunter2"             # clear the loc
 ## WiFi setup / modes
 
 Two modes, keyed off `$WiFi/Mode`: **STA>AP** (default: join home WiFi; on failure
-fall back to the `DuneWeaver` hotspot, password `12345678`, which serves a **captive
+fall back to the `DuneWeaver-<MAC4>` hotspot, password `12345678`, which serves a **captive
 setup portal** at `http://192.168.0.1/`) and **AP** ("standalone": the hotspot IS the
 product — the app joins it and drives the API at `192.168.0.1`; captive probes answer
 "online" so phones stay put). See API.md → "WiFi onboarding / setup portal".
@@ -446,7 +446,7 @@ curl "$B/command?plain=\$WiFi/Mode=STA>AP"        # or =AP for standalone
 
 **Losing home WiFi no longer needs a power cycle.** A dropped link is retried by the
 table itself (at Idle or as a pattern finishes — never mid-draw). If the network is
-still gone after `$WiFi/ApFallbackMin` minutes, the `DuneWeaver` setup hotspot comes
+still gone after `$WiFi/ApFallbackMin` minutes, the `DuneWeaver-<MAC4>` setup hotspot comes
 up *without rebooting* while the station keeps probing every 5 min; when the home
 network returns the table rejoins and the hotspot disappears on its own.
 
@@ -454,6 +454,32 @@ network returns the table rejoins and the hotspot disappears on its own.
 curl "$B/command?plain=\$WiFi/ApFallbackMin"      # minutes down before the hotspot rises
 curl "$B/command?plain=\$WiFi/ApFallbackMin=10"   # default 10; 0 = never raise it
 ```
+
+### Renaming the table
+
+`$Hostname` is the table's name on the network: `<name>.local`, the DHCP name the
+router lists, and `hostname` in `/sand_status` (which is what the app labels the
+table with). Letters, digits and `-` only, 1..32 chars.
+
+```bash
+curl "$B/command?plain=\$Hostname"                # what the table is called now
+curl "$B/command?plain=\$Hostname=LivingRoom"     # rename it (idle-gated: not mid-pattern)
+```
+
+The new name is live immediately for `/sand_status` and for `LivingRoom.local`; the
+**router** keeps showing the old name until the next reboot, because the DHCP lease
+carries the name it was taken out under.
+
+`hostname:` in config.yaml is the table's **factory name** — the default `$Hostname`
+falls back to when you have never renamed it (`DWMP`, `DWPro`, `DWGold` in the stock
+configs). A rename is stored in NVS and wins over it from then on; renaming the table
+back to the config.yaml name returns it to that default. With **no** `hostname:` in
+config.yaml the factory name is per-board — `duneweaver-<last 2 MAC bytes>`, e.g.
+`duneweaver-4b90` — so two unnamed tables on one LAN don't both answer to
+`duneweaver.local` and show up as the same table in the app. The setup hotspot is
+named the same way (`DuneWeaver-4B90`, `$AP/SSID` to override). *(Before v0.1.18 the
+config.yaml key overrode `$Hostname` instead: a rename was accepted and stored but
+then ignored on every boot, so every table stayed stuck on its config name.)*
 
 ---
 

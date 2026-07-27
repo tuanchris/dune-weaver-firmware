@@ -751,14 +751,13 @@ namespace WebUI {
         }
         AuthenticationLevel auth_level = is_authenticated();
         if (_webserver->hasArg("cmd")) {  // WebUI3
-
-            auto cmd = _webserver->arg("cmd");
-            // [ESPXXX] commands expect data in the HTTP response
-            if (cmd.startsWith("[ESP") || cmd.startsWith("$/")) {
-                synchronousCommand(cmd.c_str(), silent, auth_level);
-            } else {
-                websocketCommand(cmd.c_str(), -1, auth_level);  // WebUI3 does not support PAGEID
-            }
+            // Every arg form runs synchronously.  Upstream routed anything that
+            // was not [ESPxxx]/$/ into the WebSocket, but this fork disables the
+            // socket server (it raced motion and panicked the board), so that
+            // path could only ever answer 500 "WebSocket dead" WITHOUT running
+            // the command -- a silent no-op for any client that sent $Hostname=
+            // (or any other command) as cmd= / commandText= instead of plain=.
+            synchronousCommand(_webserver->arg("cmd").c_str(), silent, auth_level);
             return;
         }
         if (_webserver->hasArg("plain")) {
@@ -766,14 +765,7 @@ namespace WebUI {
             return;
         }
         if (_webserver->hasArg("commandText")) {
-            auto cmd = _webserver->arg("commandText");
-            if (cmd.startsWith("[ESP")) {
-                // [ESPXXX] commands expect data in the HTTP response
-                // Only the fallback web page uses commandText with [ESPxxx]
-                synchronousCommand(cmd.c_str(), silent, auth_level);
-            } else {
-                websocketCommand(_webserver->arg("commandText").c_str(), getPageid(), auth_level);
-            }
+            synchronousCommand(_webserver->arg("commandText").c_str(), silent, auth_level);
             return;
         }
         _webserver->send(500, "text/plain", "Invalid command");
