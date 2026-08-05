@@ -1059,7 +1059,9 @@ namespace WebUI {
             // collided on mDNS and the app listed them all identically.
             const std::string host_default =
                 (config && !config->_hostname.empty()) ? config->_hostname : ("duneweaver-" + macSuffix(false));
-            _hostname = new HostnameSetting("Hostname", "ESP112", "Hostname", host_default.c_str());
+            // holdOk: renaming the table only restarts mDNS -- the app renames
+            // from the same Settings screen, which stays usable while paused.
+            _hostname = holdOk(new HostnameSetting("Hostname", "ESP112", "Hostname", host_default.c_str()));
             _ap_channel  = new IntSetting("AP Channel", WEBSET, WA, "ESP108", "AP/Channel", 1, 1, 14);
             _ap_ip       = new IPaddrSetting("AP Static IP", WEBSET, WA, "ESP107", "AP/IP", "192.168.0.1");
             _ap_password = new PasswordSetting("AP Password", "ESP106", "AP/Password", "12345678");

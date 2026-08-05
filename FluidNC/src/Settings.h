@@ -116,6 +116,8 @@ protected:
     // group_t _group;
     axis_t      _axis = NO_AXIS;
     const char* _keyName;
+    // Opted in via allowInHold() / holdOk() -- see check_state().
+    bool _allow_hold = false;
 
 public:
     static nvs_handle _handle;
@@ -124,6 +126,16 @@ public:
     // Setting::List is a vector of all settings,
     // so common code can enumerate them.
     static std::vector<Setting*> List;
+
+    // Permit writes while the machine is PAUSED (State::Hold), on top of the
+    // usual Idle/Alarm.  Opt-in per setting: only for the sand-table policy
+    // settings a client may reasonably change mid-job (playlist / LED / quiet
+    // hours / hostname / API password).  Machine configuration -- steps/mm,
+    // homing, kinematics -- stays Idle-only, where changing it under a job
+    // that is about to resume would corrupt the rest of the run.
+    void allowInHold() {
+        _allow_hold = true;
+    }
 
     Error check_state();
 
@@ -177,6 +189,16 @@ public:
     }
     virtual const char* getDefaultString() = 0;
 };
+
+// Mark a setting writable while paused, at its definition:
+//     _mode = holdOk(new EnumSetting(...));
+// Keeping the mark on the definition line is deliberate -- a new sand setting
+// added without it is visibly missing it, rather than silently Idle-only.
+template <typename T>
+inline T* holdOk(T* setting) {
+    setting->allowInHold();
+    return setting;
+}
 
 class IntSetting : public Setting {
 private:

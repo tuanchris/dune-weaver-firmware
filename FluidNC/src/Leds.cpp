@@ -178,20 +178,22 @@ void Leds::init() {
     _rng ^= now_ms() * 2654435761U;  // seed the effect RNG
 
     if (!_effect) {
-        _effect      = new EnumSetting("LED effect", EXTENDED, WG, NULL, "LED/Effect", EFFECT_RAINBOW, &ledEffects);
-        _palette     = new EnumSetting("LED palette", EXTENDED, WG, NULL, "LED/Palette", 0, &ledPalettes);
-        _color       = new StringSetting("LED primary color RRGGBB", EXTENDED, WG, NULL, "LED/Color", "FFB060", 0, 7);
-        _color2      = new StringSetting("LED secondary color RRGGBB", EXTENDED, WG, NULL, "LED/Color2", "0040FF", 0, 7);
-        _brightness  = new IntSetting("LED brightness", EXTENDED, WG, NULL, "LED/Brightness", 40, 0, 255);
-        _speed       = new IntSetting("LED effect speed", EXTENDED, WG, NULL, "LED/Speed", 50, 1, 255);
-        _run_effect  = new EnumSetting("LED effect while running", EXTENDED, WG, NULL, "LED/RunEffect", EFFECT_NONE, &ledHookEffects);
-        _idle_effect = new EnumSetting("LED effect while idle", EXTENDED, WG, NULL, "LED/IdleEffect", EFFECT_NONE, &ledHookEffects);
-        _direction   = new EnumSetting("LED ball direction", EXTENDED, WG, NULL, "LED/Direction", DIR_CW, &ledDirections);
-        _align       = new IntSetting("LED ball alignment, degrees", EXTENDED, WG, NULL, "LED/Align", 0, 0, 359);
-        _ballsize    = new IntSetting("LED ball glow size, LEDs", EXTENDED, WG, NULL, "LED/BallSize", 3, 1, 200);
-        _ballbg      = new EnumSetting("LED ball background effect", EXTENDED, WG, NULL, "LED/BallBg", EFFECT_STATIC, &ledEffects);
-        _ballbright  = new IntSetting("LED ball blob brightness", EXTENDED, WG, NULL, "LED/BallBright", 255, 0, 255);
-        _ballbgbright = new IntSetting("LED ball background brightness", EXTENDED, WG, NULL, "LED/BallBgBright", 255, 0, 255);
+        // holdOk: LEDs are decoration, never motion -- writable while paused
+        // (and, via /sand_led + Leds::setLive, even mid-pattern).
+        _effect      = holdOk(new EnumSetting("LED effect", EXTENDED, WG, NULL, "LED/Effect", EFFECT_RAINBOW, &ledEffects));
+        _palette     = holdOk(new EnumSetting("LED palette", EXTENDED, WG, NULL, "LED/Palette", 0, &ledPalettes));
+        _color       = holdOk(new StringSetting("LED primary color RRGGBB", EXTENDED, WG, NULL, "LED/Color", "FFB060", 0, 7));
+        _color2      = holdOk(new StringSetting("LED secondary color RRGGBB", EXTENDED, WG, NULL, "LED/Color2", "0040FF", 0, 7));
+        _brightness  = holdOk(new IntSetting("LED brightness", EXTENDED, WG, NULL, "LED/Brightness", 40, 0, 255));
+        _speed       = holdOk(new IntSetting("LED effect speed", EXTENDED, WG, NULL, "LED/Speed", 50, 1, 255));
+        _run_effect  = holdOk(new EnumSetting("LED effect while running", EXTENDED, WG, NULL, "LED/RunEffect", EFFECT_NONE, &ledHookEffects));
+        _idle_effect = holdOk(new EnumSetting("LED effect while idle", EXTENDED, WG, NULL, "LED/IdleEffect", EFFECT_NONE, &ledHookEffects));
+        _direction   = holdOk(new EnumSetting("LED ball direction", EXTENDED, WG, NULL, "LED/Direction", DIR_CW, &ledDirections));
+        _align       = holdOk(new IntSetting("LED ball alignment, degrees", EXTENDED, WG, NULL, "LED/Align", 0, 0, 359));
+        _ballsize    = holdOk(new IntSetting("LED ball glow size, LEDs", EXTENDED, WG, NULL, "LED/BallSize", 3, 1, 200));
+        _ballbg      = holdOk(new EnumSetting("LED ball background effect", EXTENDED, WG, NULL, "LED/BallBg", EFFECT_STATIC, &ledEffects));
+        _ballbright  = holdOk(new IntSetting("LED ball blob brightness", EXTENDED, WG, NULL, "LED/BallBright", 255, 0, 255));
+        _ballbgbright = holdOk(new IntSetting("LED ball background brightness", EXTENDED, WG, NULL, "LED/BallBgBright", 255, 0, 255));
     }
 
     log_info("leds: " << _num_leds << " WS2812 on pin " << _data_pin.name() << " order " << _color_order);

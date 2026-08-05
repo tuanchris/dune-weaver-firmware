@@ -15,6 +15,9 @@ transition than an abort), alternating with mid-pattern stops:
     (bounded 110 s); 25% start with clear=adaptive
   - /wifi_scan every 45 s, /sand_led write every 12 s, pause/resume every 45 s
   - a 20 s client-abort storm every 2.5 min
+  - mDNS queries: 6/s steady (under the responder's ~10/s answer ceiling) with
+    a 60/s burst for 15 s every 90 s (twice the rate that panicked a v0.1.17
+    board), sent unicast to port 5353 so the LAN is not sprayed
   - verdict: any reboot/panic/wedge alert, plus start-vs-end heap_largest
     decay >25% (catches per-operation leaks without wall-clock time)
 Feed override and motion are restored/stopped when the gate ends.
@@ -36,7 +39,9 @@ import json
 import os
 import random
 import signal
+import socket
 import statistics
+import struct
 import sys
 import threading
 import time
@@ -56,7 +61,10 @@ PROFILES = {
                       pattern_hold_s=0,     # patterns run to completion
                       complete_wait_s=0, feed_pct=0,
                       start_wait_s=75,      # how long to wait for motion to begin
-                      chaos_s=600, storm_s=0, telemetry_s=60),
+                      chaos_s=600, storm_s=0, telemetry_s=60,
+                      # ambient Bonjour chatter, comfortably under the ceiling
+                      mdns_qps=2, mdns_burst_qps=0,
+                      mdns_burst_every_s=0, mdns_burst_len_s=0),
     # The pre-release gate: 10 minutes, feed override 200% so several patterns
     # COMPLETE inside the window (natural pattern->next is a different
     # job-stack path than an abort), alternating with mid-pattern stops.
@@ -67,7 +75,14 @@ PROFILES = {
                       start_wait_s=75,      # a multi-MB .thr can take ~50s to
                                             # open+translate off the SD before
                                             # motion begins; poll, don't one-shot
-                      chaos_s=45, storm_s=150, telemetry_s=20),
+                      chaos_s=45, storm_s=150, telemetry_s=20,
+                      # Steady chatter under the ~10/s answer ceiling, plus
+                      # bursts that blow well through it.  60/s is twice the
+                      # rate that panicked a v0.1.17 board outright, so a run
+                      # that survives proves the shed guard, and a regression
+                      # that removes it reboots the table inside one burst.
+                      mdns_qps=6, mdns_burst_qps=60,
+                      mdns_burst_every_s=90, mdns_burst_len_s=15),
 }
 
 
@@ -87,7 +102,8 @@ class Soak:
         self.last_ok = time.time()  # any successful request, any thread
         self.counters = {"requests": 0, "failures": 0, "patterns": 0,
                          "scans": 0, "led": 0, "pauses": 0, "reboots": 0,
-                         "storm_aborts": 0, "no_start": 0, "run_lost": 0}
+                         "storm_aborts": 0, "no_start": 0, "run_lost": 0,
+                         "mdns": 0}
         self.lock = threading.Lock()
         self.patterns = []
         # A no-start can be a lost request (storm window), but a pattern that
@@ -154,6 +170,56 @@ class Soak:
             b = random.randint(30, 180)
             if self.get(f"/sand_led?effect={e}&brightness={b}") is not None:
                 self.counters["led"] += 1
+
+    def mdns(self):
+        # Inbound mDNS is a first-class load, not background noise.  The
+        # responder answers at most ~10 queries/sec -- IDF's
+        # _mdns_scheduler_run() dispatches exactly ONE queued response per
+        # 100 ms timer tick onto an unbounded tx queue -- so above that the
+        # backlog walks the heap to zero and, through v0.1.17, panicked the
+        # board (measured: 15/s lost 30 KB in 20 s, 30/s rebooted it).  Nothing
+        # else in this harness sends a single mDNS packet, which is exactly why
+        # that shipped and why the gate never caught it.
+        #
+        # Steady rate stays under the ceiling (a table must survive ordinary
+        # Bonjour chatter indefinitely); the bursts blow through it and must be
+        # absorbed by the heap-floor shed in Mdns::poll() rather than a reboot.
+        # Sent UNICAST to the table's port 5353 -- a soak run has no business
+        # spraying the whole LAN with multicast.
+        host = urllib.parse.urlparse(self.base).hostname
+        if not host or not self.p["mdns_qps"]:
+            return
+        # Only queries the table actually ANSWERS cost it anything; queries for
+        # names it does not own are free, so ask for the ones it advertises.
+        pkts = []
+        for name, qtype in (("_services._dns-sd._udp.local", 12),
+                            ("_http._tcp.local", 12),
+                            ("_telnet._tcp.local", 12)):
+            q = b"".join(bytes([len(l)]) + l.encode() for l in name.split("."))
+            pkts.append(struct.pack(">HHHHHH", 0, 0, 1, 0, 0, 0) + q + b"\x00"
+                        + struct.pack(">HH", qtype, 1))
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        every = self.p["mdns_burst_every_s"]
+        next_burst = time.time() + every if every else 0
+        burst_until = 0
+        i = 0
+        while not STOP.is_set():
+            now = time.time()
+            if next_burst and now >= next_burst:
+                burst_until = now + self.p["mdns_burst_len_s"]
+                next_burst = now + every
+                self.log("INFO", f"mDNS burst: {self.p['mdns_burst_qps']}/s for "
+                                 f"{self.p['mdns_burst_len_s']}s")
+            qps = self.p["mdns_burst_qps"] if now < burst_until else self.p["mdns_qps"]
+            try:
+                sock.sendto(pkts[i % len(pkts)], (host, 5353))
+                self.counters["mdns"] += 1
+            except OSError:
+                pass  # transient send failure is not a table fault
+            i += 1
+            if STOP.wait(1.0 / qps):
+                break
 
     def driver(self):
         # keep a pattern playing at all times; occasionally with a clear
@@ -375,7 +441,7 @@ class Soak:
         threads = [threading.Thread(target=self.poller, args=(p,), daemon=True)
                    for p in self.p["pollers"]]
         threads += [threading.Thread(target=f, daemon=True)
-                    for f in (self.scanner, self.led, self.driver, self.chaos)]
+                    for f in (self.scanner, self.led, self.driver, self.chaos, self.mdns)]
         if self.p["storm_s"]:
             threads.append(threading.Thread(target=self.storm, daemon=True))
         for t in threads:
@@ -401,8 +467,8 @@ class Soak:
                          f"({c['failures']} failed), {c['patterns']} patterns, "
                          f"{c['scans']} scans, {c['led']} led, {c['pauses']} pauses, "
                          f"{c['storm_aborts']} storm aborts, {c['no_start']} no-starts, "
-                         f"{c['run_lost']} runs lost, {c['reboots']} reboots, "
-                         f"{len(ALERTS)} alerts")
+                         f"{c['run_lost']} runs lost, {c['mdns']} mdns queries, "
+                         f"{c['reboots']} reboots, {len(ALERTS)} alerts")
         return 1 if ALERTS else 0
 
 

@@ -101,39 +101,44 @@ namespace {
 
 void Playlist::init() {
     if (!_mode) {
-        _mode             = new EnumSetting("Playlist run mode", EXTENDED, WG, NULL, "Playlist/Mode", MODE_SINGLE, &modeOptions);
-        _shuffle          = new EnumSetting("Playlist shuffle", EXTENDED, WG, NULL, "Playlist/Shuffle", 0, &onOffOptions);
-        _pause_time       = new IntSetting("Seconds between patterns", EXTENDED, WG, NULL, "Playlist/PauseTime", 0, 0, 86400);
-        _pause_from_start = new EnumSetting(
-            "Measure pause from pattern start", EXTENDED, WG, NULL, "Playlist/PauseFromStart", 0, &onOffOptions);
-        _clear_mode = new EnumSetting("Clear pattern mode", EXTENDED, WG, NULL, "Playlist/ClearPattern", PlaylistParse::CLEAR_NONE, &clearOptions);
+        // Every setting here is holdOk(): playback policy, not machine config.
+        // The app's Settings screen writes these, and it must stay usable when
+        // the owner pauses the table instead of stopping it -- see
+        // Setting::check_state().  They are read at pattern boundaries, so a
+        // value changed during a pause takes effect on the next pattern.
+        _mode             = holdOk(new EnumSetting("Playlist run mode", EXTENDED, WG, NULL, "Playlist/Mode", MODE_SINGLE, &modeOptions));
+        _shuffle          = holdOk(new EnumSetting("Playlist shuffle", EXTENDED, WG, NULL, "Playlist/Shuffle", 0, &onOffOptions));
+        _pause_time       = holdOk(new IntSetting("Seconds between patterns", EXTENDED, WG, NULL, "Playlist/PauseTime", 0, 0, 86400));
+        _pause_from_start = holdOk(new EnumSetting(
+            "Measure pause from pattern start", EXTENDED, WG, NULL, "Playlist/PauseFromStart", 0, &onOffOptions));
+        _clear_mode = holdOk(new EnumSetting("Clear pattern mode", EXTENDED, WG, NULL, "Playlist/ClearPattern", PlaylistParse::CLEAR_NONE, &clearOptions));
         // App-configurable clear pattern files: default to the config.yaml
         // clear_from_in/clear_from_out so an unset NVS value keeps today's
         // behavior; a non-empty setting overrides the file to use.
-        _clear_in_set  = new StringSetting(
-            "Clear-from-in pattern file", EXTENDED, WG, NULL, "Playlist/ClearIn", _clear_in.c_str(), 0, 128);
-        _clear_out_set = new StringSetting(
-            "Clear-from-out pattern file", EXTENDED, WG, NULL, "Playlist/ClearOut", _clear_out.c_str(), 0, 128);
-        _clear_speed   = new IntSetting(
-            "Clear pattern feed, motor mm/min (0 = use THR/Feed)", EXTENDED, WG, NULL, "Playlist/ClearSpeed", 0, 0, 100000);
-        _auto_home  = new IntSetting("Home every n patterns", EXTENDED, WG, NULL, "Playlist/AutoHome", 0, 0, 1000);
-        _sands_enabled = new EnumSetting("Still Sands quiet hours", EXTENDED, WG, NULL, "Sands/Enabled", 0, &onOffOptions);
-        _sands_slots   = new StringSetting(
-            "Quiet hour slots HH:MM-HH:MM@days,...", EXTENDED, WG, NULL, "Sands/Slots", "21:00-08:00@daily", 0, 100);
-        _sands_led_off = new EnumSetting("Still Sands turn LEDs off", EXTENDED, WG, NULL, "Sands/LedOff", 0, &onOffOptions);
-        _sands_finish  = new EnumSetting(
-            "Still Sands finish current pattern before pausing", EXTENDED, WG, NULL, "Sands/FinishPattern", 1, &onOffOptions);
-        _autostart = new StringSetting(
-            "Playlist to auto-run on boot (empty = off)", EXTENDED, WG, NULL, "Playlist/Autostart", "", 0, 100);
+        _clear_in_set  = holdOk(new StringSetting(
+            "Clear-from-in pattern file", EXTENDED, WG, NULL, "Playlist/ClearIn", _clear_in.c_str(), 0, 128));
+        _clear_out_set = holdOk(new StringSetting(
+            "Clear-from-out pattern file", EXTENDED, WG, NULL, "Playlist/ClearOut", _clear_out.c_str(), 0, 128));
+        _clear_speed   = holdOk(new IntSetting(
+            "Clear pattern feed, motor mm/min (0 = use THR/Feed)", EXTENDED, WG, NULL, "Playlist/ClearSpeed", 0, 0, 100000));
+        _auto_home  = holdOk(new IntSetting("Home every n patterns", EXTENDED, WG, NULL, "Playlist/AutoHome", 0, 0, 1000));
+        _sands_enabled = holdOk(new EnumSetting("Still Sands quiet hours", EXTENDED, WG, NULL, "Sands/Enabled", 0, &onOffOptions));
+        _sands_slots   = holdOk(new StringSetting(
+            "Quiet hour slots HH:MM-HH:MM@days,...", EXTENDED, WG, NULL, "Sands/Slots", "21:00-08:00@daily", 0, 100));
+        _sands_led_off = holdOk(new EnumSetting("Still Sands turn LEDs off", EXTENDED, WG, NULL, "Sands/LedOff", 0, &onOffOptions));
+        _sands_finish  = holdOk(new EnumSetting(
+            "Still Sands finish current pattern before pausing", EXTENDED, WG, NULL, "Sands/FinishPattern", 1, &onOffOptions));
+        _autostart = holdOk(new StringSetting(
+            "Playlist to auto-run on boot (empty = off)", EXTENDED, WG, NULL, "Playlist/Autostart", "", 0, 100));
         // Boot-run overrides: let auto-play use its own mode/pause/shuffle/clear,
         // independent of the manual-run $Playlist/* settings.
-        _autostart_mode    = new EnumSetting("Auto-play run mode", EXTENDED, WG, NULL, "Playlist/AutostartMode", MODE_LOOP, &modeOptions);
-        _autostart_shuffle = new EnumSetting("Auto-play shuffle", EXTENDED, WG, NULL, "Playlist/AutostartShuffle", 0, &onOffOptions);
-        _autostart_pause   = new IntSetting("Auto-play seconds between patterns", EXTENDED, WG, NULL, "Playlist/AutostartPause", 0, 0, 86400);
-        _autostart_pfs     = new EnumSetting(
-            "Auto-play measure pause from start", EXTENDED, WG, NULL, "Playlist/AutostartPauseFromStart", 0, &onOffOptions);
-        _autostart_clear   = new EnumSetting(
-            "Auto-play clear mode", EXTENDED, WG, NULL, "Playlist/AutostartClear", PlaylistParse::CLEAR_NONE, &clearOptions);
+        _autostart_mode    = holdOk(new EnumSetting("Auto-play run mode", EXTENDED, WG, NULL, "Playlist/AutostartMode", MODE_LOOP, &modeOptions));
+        _autostart_shuffle = holdOk(new EnumSetting("Auto-play shuffle", EXTENDED, WG, NULL, "Playlist/AutostartShuffle", 0, &onOffOptions));
+        _autostart_pause   = holdOk(new IntSetting("Auto-play seconds between patterns", EXTENDED, WG, NULL, "Playlist/AutostartPause", 0, 0, 86400));
+        _autostart_pfs     = holdOk(new EnumSetting(
+            "Auto-play measure pause from start", EXTENDED, WG, NULL, "Playlist/AutostartPauseFromStart", 0, &onOffOptions));
+        _autostart_clear   = holdOk(new EnumSetting(
+            "Auto-play clear mode", EXTENDED, WG, NULL, "Playlist/AutostartClear", PlaylistParse::CLEAR_NONE, &clearOptions));
 
         // Handlers may run outside the protocol task and must not block
         // on motion, so synchronous=false and flag-setting only.

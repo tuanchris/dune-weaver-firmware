@@ -90,6 +90,15 @@ table exists: the **DWG "Desert Compass"**.)
   change something **while a pattern runs**, add a non-gated path that applies
   in-memory and persists on the return to idle — e.g. `/sand_led` + `$Sand/Led`
   (a `UserCommand` with `cmdChecker=nullptr`) driving `Leds::setLive()`.
+  **While a pattern is merely PAUSED**, the sand-table policy settings are
+  writable: mark them `holdOk(new …Setting(…))` at their definition and
+  `check_state` also accepts `State::Hold` (nothing steps in a feed hold, and
+  NVS is internal flash, not the SD the job streams). `$Playlist/*`, `$Sands/*`,
+  `$LED/*`, `$Hostname`, `$Sand/Password` and `$Sand/HomingMode`/`ThetaOffset`
+  (read at home time only) are marked; machine configuration and `$THR/Feed`
+  deliberately are not. This is
+  what lets the app unlock its Settings screen on a pause instead of a stop —
+  **a new sand setting added without `holdOk` will silently be Idle-only there.**
 - **Motion from a web/non-protocol task must signal the main loop**, never block
   inline — `$H`/jogs run in `protocol_main_loop` via an event (`/sand_home` →
   `startHomeEvent`); running blocking motion in the web task starves segment prep
@@ -182,6 +191,29 @@ table exists: the **DWG "Desert Compass"**.)
   off the SD `.txt` on demand (`Playlist::resolveCurrent` via `scanValidLines`), once
   per pattern advance. Anything that touches the SD in the poller must also degrade
   gracefully (catch `std::exception`), never let an allocation failure escape.
+- **mDNS answers ~10 queries/sec, full stop — above that it kills the board.** IDF's
+  `_mdns_scheduler_run()` dispatches exactly ONE queued response per 100 ms timer tick
+  (no loop), while the `_mdns_server->tx_queue_head` they queue on is an **unbounded**
+  linked list, and each answered query holds ~128 bytes until it is transmitted.
+  Measured on DWMP: 10/s flat, 15/s loses 30 KB in 20 s, 20/s loses 61 KB, 30/s panics.
+  It is a pure backlog, not a leak — silence returns every byte (4 bytes unrecovered of
+  74088 after 4 min). **Raising the mDNS task priority does nothing** (measured: zero
+  change) — the scheduler runs on the *esp_timer* task, and one-per-tick is structural,
+  not starvation. Only queries we actually answer cost anything (`_http._tcp`,
+  `_telnet._tcp`, `_services._dns-sd._udp`, `<host>.local`); queries for other names are
+  free. `Mdns::poll()` therefore sheds the responder under a 24 KB free-heap floor and
+  restores it after a backoff — it must shed *above* the web server's floors (15 KB warn
+  / 10 KB 503 / 6 KB RST) so discovery gives way before the app's lifeline does.
+  Anything added to `Mdns::add`/`addTxt` is replayed on restore, so it must stay
+  recorded in `_services`/`_txt`.
+- **A heap at zero reboots via a bizarre route — don't chase the backtrace's top frame.**
+  IDF logs an OOM through `ESP_LOGE`, which is the board's *first* stdio write (the IDF
+  log level is ERROR and nothing else ever logs), so `uart_write` lazily creates its VFS
+  mutex, `xQueueCreateMutex` fails too, and `lock_init_generic` answers with `abort()`.
+  A backtrace ending `_udp_recv → esp_log_write → uart_write → lock_init_generic → abort`
+  means **"the heap was already empty"**, not "mDNS is broken" — whatever allocated first
+  is just the messenger. The next boot then shows `Skipping configuration file due to
+  panic` → Test Drive → `SDCard not configured`.
 
 ## Key files
 

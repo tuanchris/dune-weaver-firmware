@@ -227,11 +227,12 @@ Effects (`$LED/Effect=<name>`):
 
 ### Live control while a pattern is running
 
-The `$LED/*` settings above are **idle-gated** — sending one while the table is
-moving returns `Error: Command requires idle state` (FluidNC blocks NVS/flash
-writes mid-motion). Use `/sand_led` (or `$Sand/Led`) for live control instead:
-it applies in memory immediately (no flash write) and is persisted to NVS
-automatically when the table next returns to idle.
+The `$LED/*` settings above are **idle-or-paused-gated** — they are accepted at
+Idle/Alarm and while the table is PAUSED (`Hold`, since v0.1.18-rc3), but sending one
+while the table is actually moving returns `Error: Command requires idle state`
+(FluidNC blocks NVS/flash writes mid-motion). Use `/sand_led` (or `$Sand/Led`)
+for live control instead: it applies in memory immediately (no flash write) and
+is persisted to NVS automatically when the table next returns to idle.
 
 ```bash
 # Works any time, including mid-pattern.
@@ -410,7 +411,7 @@ boot). Serial over USB is never gated — that's the recovery path. Full route
 split: API.md → "Security / constraints".
 
 ```bash
-curl "$B/command?plain=\$Sand/Password=hunter2"   # set (idle-gated; last open call)
+curl "$B/command?plain=\$Sand/Password=hunter2"   # set (idle or paused; last open call)
 curl "$B/sand_home?key=hunter2"                   # key as query arg
 curl -H "X-Sand-Key: hunter2" "$B/command?plain=\$Sand/Status"   # key as header
 curl "$B/command?plain=\$Sand/Password=&key=hunter2"             # clear the lock
@@ -480,6 +481,21 @@ config.yaml the factory name is per-board — `duneweaver-<last 2 MAC bytes>`, e
 named the same way (`DuneWeaver-4B90`, `$AP/SSID` to override). *(Before v0.1.18 the
 config.yaml key overrode `$Hostname` instead: a rename was accepted and stored but
 then ignored on every boot, so every table stayed stuck on its config name.)*
+
+### Turning discovery off
+
+```bash
+curl "$B/command?plain=\$MDNS/Enable"             # ON / OFF
+curl "$B/command?plain=\$MDNS/Enable=OFF"         # then reboot; the table is IP-only
+```
+
+Kills `<name>.local` and the service browse the app uses to find tables; **every HTTP
+route keeps working by IP**. Worth reaching for if a table reboots on a busy network
+while reachable fine in hotspot mode — the responder can only answer ~10 queries/sec,
+and something browsing harder than that used to take the board down (fixed in v0.1.18,
+which pauses the responder instead; `OFF` is still the way to rule it out entirely).
+The firmware may pause discovery on its own under memory pressure — look for
+`mDNS off: only N bytes free` in the log. That is the guard working, not a fault.
 
 ---
 

@@ -92,6 +92,15 @@ Setting::Setting(const char* description, type_t type, permissions_t permissions
 }
 
 Error Setting::check_state() {
+    // A feed hold is a job standing still: no stepping, nothing streaming off
+    // the SD card, and NVS lives on the internal flash the job never touches.
+    // So settings that opted in (allowInHold(), the sand-table policy ones)
+    // accept writes while paused -- the app's Settings screen is usable after
+    // a pause instead of demanding a full stop.  Everything else still waits
+    // for Idle/Alarm.
+    if (_allow_hold && state_is(State::Hold)) {
+        return Error::Ok;
+    }
     if (notIdleOrAlarm()) {
         return Error::IdleError;
     }

@@ -34,6 +34,17 @@ Advertised when connected in STA mode (`WebUI/Mdns.cpp`):
     (same value as `/sand_status` `mac`)
 - Also advertises `_telnet._tcp` on port 23.
 
+**Discovery can pause, so never make it the only way a client finds a table.** The
+responder answers at most ~10 queries/sec (an ESP-IDF limit, see CLAUDE.md), and above
+that its unbounded response backlog would eat the heap and panic the board, so the
+firmware drops the responder when free heap falls under 24 KB and brings it back once
+the heap recovers (60 s later, doubling per repeat up to 30 min). While it is down
+`<host>.local` does not resolve and the table does not appear in a service browse — but
+**every HTTP route keeps working normally by IP**. Clients should cache the last known
+IP (keyed on the TXT `mac`) and fall back to it rather than treating a failed mDNS
+lookup as "table offline". A client that browses aggressively can *cause* this: keep
+discovery to occasional browses, not a tight poll.
+
 App flow: browse `_http._tcp`, keep services whose TXT has `model=dune-weaver`, key saved tables by the
 `mac` TXT value (dedupes a discovered table against one saved by IP; survives DHCP changes and hostname
 edits). Manual-IP entry is the fallback — read `mac` from `/sand_status` there.
@@ -137,8 +148,9 @@ Effect names: `off static rainbow breathe colorloop theater scan running sine gr
 Palette names: `rainbow ocean lava forest party cloud heat sunset`
 Live LED keys (`/sand_led?…` or `$Sand/Led=`): `effect palette color color2 brightness speed direction align size bg fgbright bgbright` (`bg`=ball background sub-effect, `fgbright`=blob brightness, `bgbright`=background brightness)
 
-The `$LED/*` settings are idle-gated (NVS writes are blocked mid-motion). For
-live control during a pattern use:
+The `$LED/*` settings are idle-gated, and since v0.1.18-rc3 also accepted while the
+table is PAUSED (`Hold`) — see "Settings and the machine state" below. For live
+control during a pattern use:
 | Command | Notes |
 |---------|-------|
 | `/sand_led?effect=&palette=&color=&color2=&brightness=&speed=` | HTTP; any subset of keys; applies in-memory live, persisted to NVS on return to idle |
@@ -411,7 +423,8 @@ password locks the network **control** surfaces; reads stay open so status polle
 need no credentials.
 
 - **Set / change / clear**: `$Sand/Password=<pw>` (1–32 chars) over `/command` or
-  serial; `$Sand/Password=` clears. Idle-gated like all NVS settings. Once set,
+  serial; `$Sand/Password=` clears. Accepted at idle or while paused (see
+  "Settings and the machine state"). Once set,
   changing it requires the key (it rides `/command`). USB **serial is never
   gated** — a lost password is read or cleared over USB.
 - **Sending the key**: `?key=<pw>` query arg or `X-Sand-Key: <pw>` header on the
@@ -436,6 +449,29 @@ need no credentials.
 Scope: this is a LAN convenience lock (plain HTTP, no TLS — the key is visible to
 anyone sniffing the LAN). It keeps guests and stray scripts from driving the table;
 it is not a defense against a hostile network.
+
+### Settings and the machine state
+NVS-backed `$Key=value` writes are **state-gated**: FluidNC refuses them outside
+`Idle`/`Alarm` with `Error: Command requires idle state` (`IdleError`), because a
+flash write under a running job can disturb it and a machine-config change would
+corrupt the rest of the run.
+
+Since **v0.1.18-rc3** the sand-table *policy* settings are additionally accepted while
+the table is **paused** (`Hold`) — a feed hold is a job standing still, so nothing
+is stepping and nothing is streaming off the SD card. That is what lets a client
+offer "pause to change settings" instead of demanding a stop:
+
+- accepted while paused: `$Playlist/*` (including the `Autostart*` overrides),
+  `$Sands/*`, `$LED/*`, `$Hostname`, `$Sand/Password`, `$Sand/HomingMode`,
+  `$Sand/ThetaOffset` (the last two are consulted at HOME time, and resuming a
+  paused job never re-homes, so they cannot disturb the job in flight).
+- still `Idle`/`Alarm` only: everything else — machine configuration, `$THR/Feed`,
+  WiFi credentials (`/wifi_save` reboots the table, which a paused job would not
+  survive), and `$Sand/Goto` jogs (`SandApi::goTo` requires Idle), which is what
+  the orientation-alignment flow uses.
+
+Unrelated to this, SD file operations and OTA (`/updatefw`) treat `Hold` as busy:
+the paused job still holds its file open, and a flash+reboot ends it.
 
 ### Other constraints
 - **No CORS headers** in the `sandtable` build. Native apps are unaffected by
