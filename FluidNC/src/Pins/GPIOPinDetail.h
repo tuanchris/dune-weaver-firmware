@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <sdkconfig.h>  // CONFIG_IDF_TARGET_*
+
 #include "PinDetail.h"
 #include "Driver/PwmPin.h"
 
@@ -21,7 +23,11 @@ namespace Pins {
         PwmPin*     _pwm;
 
     public:
-        static const int nGPIOPins = 40;
+#ifdef CONFIG_IDF_TARGET_ESP32S3
+        static const int nGPIOPins = 49;  // GPIO0..GPIO48
+#else
+        static const int nGPIOPins = 40;  // GPIO0..GPIO39
+#endif
 
         GPIOPinDetail(pinnum_t index, PinOptionsParser options);
 

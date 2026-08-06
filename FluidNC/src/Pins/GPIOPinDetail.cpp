@@ -15,6 +15,22 @@ namespace Pins {
     std::vector<bool> GPIOPinDetail::_claimed(nGPIOPins, false);
 
     PinCapabilities GPIOPinDetail::GetDefaultCapabilities(pinnum_t index) {
+#ifdef CONFIG_IDF_TARGET_ESP32S3
+        // The ESP32-S3 pinout is different enough that the ESP32 table below is
+        // actively wrong for it, not merely incomplete: GPIO6-8 and 11 are SPI
+        // flash on the ESP32 but ordinary pins here (the DLC32 MAX puts a step
+        // pin on 7 and the shared driver-disable on 8), and GPIO34-39 are
+        // input-only on the ESP32 but full-featured here (the LED strip drives
+        // 38). GPIO22-25 do not exist, 26-32 are the flash/PSRAM bus, and 33-34
+        // are taken by octal-PSRAM modules so we exclude them as well. ADC is
+        // only on the low bank. Mirrors upstream FluidNC 4.0's esp32s3 table.
+        if (index <= 21 || (index >= 35 && index <= 48)) {
+            return PinCapabilities::Native | PinCapabilities::Input | PinCapabilities::Output | PinCapabilities::PullUp |
+                   PinCapabilities::PullDown | PinCapabilities::PWM | PinCapabilities::ISR | PinCapabilities::UART |
+                   (index <= 20 ? PinCapabilities::ADC : PinCapabilities::None);
+        }
+        return PinCapabilities::None;
+#else
         // See https://randomnerdtutorials.com/esp32-pinout-reference-gpios/ for an overview:
         switch (index) {
             case 0:  // Outputs PWM signal at boot
@@ -80,6 +96,7 @@ namespace Pins {
             default:  // Not mapped to actual GPIO pins
                 return PinCapabilities::None;
         }
+#endif
     }
 
     GPIOPinDetail::GPIOPinDetail(pinnum_t index, PinOptionsParser options) :

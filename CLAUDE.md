@@ -37,6 +37,65 @@ table exists: the **DWG "Desert Compass"**.)
 - **LEDs**: 49 WS2812 on `gpio.18`, color order **RGB**, via RMT (channel 7). (`uart1`
   was removed to free gpio.18.)
 
+### Second board target: MKS DLC32 MAX (ESP32-S3)
+
+Built from the same v3.9.5 base — **no FluidNC 4.0 rebase**; upstream's 4.0 S3 work is
+mostly the I2S shift register and native USB CDC, and this board has neither. ESP32-S3
+QFN56 rev v0.2, **8MB quad flash, no PSRAM**, **CH340** USB (so the normal UART0 console
+works). Config: `config_dlc32max_thetarho.yaml`.
+
+- **No i2so** — step/dir are direct GPIO (X 16/15, Y 7/6, Z 5/4, A 20/19, shared
+  disable gpio.8); `stepping: engine: Timed`. Theta's direction pin is inverted
+  (`gpio.15:low`) on our unit.
+- SD is SPI on miso 12 / mosi 14 / sck 13, cs 21. **`card_detect_pin` must be
+  `NO_PIN`** — the wiki says gpio.10, but IDF reads card-detect active-low and this
+  board's line idles high, so a seated card reports `ESP_ERR_NOT_FOUND`.
+- **LED data on `gpio.2`** (the laser TTL output on J4/J5), *not* an endstop header.
+- Build `pio run -e sandtable_s3` (51% of a 3MB OTA slot vs 85% of 1.875MB on ESP32);
+  partitions `sandtable_8MB.csv`. Upload identically with `-t upload`. CI builds both
+  envs — the S3 differences are compile-time, so an ESP32-only build cannot catch a
+  break on the other side.
+- **Releases ship both boards.** `build-dw-release.py` loops over `TARGETS`, prefixes
+  the staged filenames with the MCU (the release namespace is flat and both envs emit
+  `firmware.bin`), and emits one manifest listing both processors. The offsets are per
+  target and must never be shared: the S3 bootloader flashes at **0x0**, not 0x1000,
+  and its littlefs sits at 0x610000. The website installer asks which board you have
+  before flashing and verifies the answer against the chip esptool reports.
+- **The torture gate is a coin flip on this board — do not read `[CLEAN]` as healthy**
+  (2026-08-06, two back-to-back runs from a `$Bye` boot: `[FAIL]` then `[CLEAN]`, 0
+  reboots both times). The FAIL was one pattern that never started, and the serial log
+  gives the chain: the gate's mDNS burst (60/s, ~6x the ~10/s ceiling) drains the heap →
+  `mount_to_vfs failed code 0x101` (`ESP_ERR_NO_MEM`) → `did not start: Failed to mount
+  device`. **The SD remount is what runs out of memory, not the pattern reader.**
+  The trap: the **CLEAN run reached a *lower* floor than the failing one** — 7724 bytes
+  free / largest **1620**, vs 10460 / 9972 on the FAIL — with the same three mDNS sheds
+  (60→120→240s backoff) in both. The gate passed only because no SD remount happened to
+  land in the trough. So the pass/fail is timing, and the real signal is the board's own
+  `heap_min`, not the harness verdict. Shedding mDNS at ~24k is far too late to keep the
+  floor above the point where an SD remount can allocate.
+  Every defense fired correctly: mDNS shed at ~24k with escalating backoff
+  (60→120→240s), `Low memory:` warnings naming the in-flight URI, and the STA
+  supervisor recovered a `reason 7 (NOT_ASSOCED)` drop in 5s.
+  **Do not read the S3's roomy idle heap as headroom** — 139k largest at idle still
+  collapses to ~10k under this load. Whether the ESP32 fails identically is **unknown**:
+  run the same gate against DWMP before calling any of this S3-specific, especially
+  since the mDNS shed guard has never been exercised by a gate on shipped ESP32 code.
+- **Multi-segment HTTP responses can stall while the board reports itself healthy.**
+  Seen twice: a 58k `GET /sand_patterns` returns HTTP 200 then **zero bytes** (or a
+  truncated 4k/15k), and eventually even `/sand_status` returns 0 bytes — while the
+  board reports 131k largest free, `sd_ok:true`, and a ranged `/sd/` read still
+  completes in 2.5s. So it is neither memory nor the SD. It does not self-heal; a
+  reboot fixes it instantly and the manifest then returns all 58175 bytes in ~1s.
+  **Cause not established.** Both episodes were bracketed by
+  `WiFi Disconnected, reason 8 (ASSOC_LEAVE)` in the serial log, which alone would
+  break in-flight TCP and is the simpler explanation — so do not assume server-side
+  connection exhaustion without evidence. Note the STA retry window is
+  machine-state-gated (Idle, or a job finishing), so a link drop with a pattern running
+  may have no window to recover in; one episode left the board unreachable even to ping
+  for >1 min with **no crash and no coredump**. Also: soak runs abort at startup
+  (`could not fetch pattern manifest`) when the board is in this state — `$Bye` and
+  re-check the manifest before blaming the run.
+
 ## Build / test / flash
 
 - pio at `/opt/homebrew/bin/pio`.
@@ -154,6 +213,22 @@ table exists: the **DWG "Desert Compass"**.)
 
 ## Gotchas (these bit us; don't repeat)
 
+- **On the DLC32 MAX, endstop/probe/door header pins are shared nets and are useless
+  for high-speed data.** The pinout table shows `IO41` = Z− **and** Door, `IO40` = Y−
+  **and** Flame, `IO39` = X−, Probe **and** A−. They look like free GPIOs and they pass
+  every firmware check — `Pin` accepts them as outputs, RMT configures, the LED driver
+  logs success — but a WS2815 strip on `gpio.41` stays **completely dark** while the
+  identical strip on `gpio.2` works. Switch-input conditioning (pull-up + debounce cap,
+  doubled because two connectors share the net) swallows the 800 kHz waveform. Use a
+  real output pin: `gpio.2` is the laser TTL line on J4/J5. Do not debug this in
+  firmware — the firmware is fine, and the logs will keep telling you so.
+- **Anything on the ESP32 that indexes GPIOs or RMT channels needs a target check.**
+  Two ESP32 assumptions were wrong (not merely incomplete) on the S3: `RMT_CHANNEL_7`
+  is **RX-only** there (only 0-3 transmit — now derived from
+  `SOC_RMT_TX_CANDIDATES_PER_GROUP`), and `GPIOPinDetail`'s capability table marks 6-8
+  and 11 flash-Reserved and 34-39 input-only, which on the S3 rejects a step pin (7),
+  the shared disable (8) and an LED output (38), while `nGPIOPins = 40` makes gpio.40+
+  unrepresentable. Both failure modes are silent or look like hardware faults.
 - **Never `$SD/List=/patterns`, and no `$SD/ListJSON` on it either** — any on-device
   scan of that ~2000-entry tree can hang the web server / wedge an SD read mid-scan
   → poller task-WDT reboot, after which the card fails init (`ESP_ERR_INVALID_CRC`)

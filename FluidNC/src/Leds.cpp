@@ -10,6 +10,7 @@
 #include "Kinematics/ThetaRho.h"  // ballAngle() for the 'ball' effect
 
 #include <driver/rmt.h>
+#include <soc/soc_caps.h>  // SOC_RMT_TX_CANDIDATES_PER_GROUP
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <cmath>
@@ -18,12 +19,22 @@
 
 namespace {
     // Step engines allocate RMT channels from 0 upward (esp32/rmt_engine.c),
-    // so we take the highest one.
-    constexpr rmt_channel_t LED_RMT_CHANNEL = RMT_CHANNEL_7;
+    // so we take the highest one that can transmit. The ESP32 can transmit on
+    // all 8 channels; the ESP32-S3 also has 8 but only 0-3 are TX-capable
+    // (4-7 are receive-only), and rmt_config() rejects an RX channel in
+    // RMT_MODE_TX - a silent "leds: RMT init failed" with no other symptom.
+    constexpr rmt_channel_t LED_RMT_CHANNEL = (rmt_channel_t)(SOC_RMT_TX_CANDIDATES_PER_GROUP - 1);
 
-    // WS2812 bit timing in 25 ns ticks (80 MHz APB / clk_div 2)
-    constexpr rmt_item32_t WS2812_ZERO = {{{ 16, 1, 34, 0 }}};  // 0.4 us high, 0.85 us low
-    constexpr rmt_item32_t WS2812_ONE  = {{{ 32, 1, 18, 0 }}};  // 0.8 us high, 0.45 us low
+    // WS2812/WS2815 bit timing, filled in by init() from the RMT channel's
+    // actual counter clock instead of hardcoded tick counts. Both the ESP32
+    // and the S3 measure 40 MHz here (25 ns per tick), so this changes no
+    // timing today - but the S3's RMT has a group divider the ESP32 lacks
+    // (rmt_sclk = src / (1 + div_num + a/b)), so the tick period is a
+    // per-chip property rather than a constant, and getting it wrong is
+    // invisible: pulses come out a clean multiple too long and the strip
+    // simply stays dark. The init() log line reports the measured clock.
+    rmt_item32_t WS2812_ZERO;  // 0.4 us high, 0.85 us low
+    rmt_item32_t WS2812_ONE;   // 0.8 us high, 0.45 us low
 
     // Effect name <-> id maps (ids must match the EFFECT_* constants and
     // stay stable: they are persisted in NVS).
@@ -168,6 +179,25 @@ void Leds::init() {
         log_error("leds: RMT init failed");
         return;
     }
+
+    uint32_t clk_hz = 0;
+    if (rmt_get_counter_clock(LED_RMT_CHANNEL, &clk_hz) != ESP_OK || clk_hz == 0) {
+        log_error("leds: RMT clock query failed");
+        rmt_driver_uninstall(LED_RMT_CHANNEL);
+        return;
+    }
+    auto ticks = [clk_hz](uint32_t ns) -> uint32_t {
+        return uint32_t((uint64_t(clk_hz) * ns + 500000000ULL) / 1000000000ULL);
+    };
+    WS2812_ZERO.duration0 = ticks(400);
+    WS2812_ZERO.level0    = 1;
+    WS2812_ZERO.duration1 = ticks(850);
+    WS2812_ZERO.level1    = 0;
+    WS2812_ONE.duration0  = ticks(800);
+    WS2812_ONE.level0     = 1;
+    WS2812_ONE.duration1  = ticks(450);
+    WS2812_ONE.level1     = 0;
+    log_debug("leds: RMT " << clk_hz << " Hz, 0/1 high ticks " << ticks(400) << "/" << ticks(800));
 
     _pixels = new uint8_t[_num_leds * 3];
     _fb     = new uint8_t[_num_leds * 3];

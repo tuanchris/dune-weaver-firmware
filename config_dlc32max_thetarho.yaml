@@ -1,0 +1,184 @@
+# Dune Weaver ThetaRho on MKS DLC32 MAX V1.0 (ESP32-S3, 8MB flash, no PSRAM).
+# Bring-up config. Pin map comes from the FluidNC wiki page for this board and
+# from a working community config; MKS does not publish a schematic.
+# Differences from the DLC32 V2.1 config: no i2so shift register (step/dir are
+# direct GPIO), and the LED strip moves off gpio.18 (which is the RJ11 uart1
+# RXD here) onto gpio.2, the laser TTL output.
+# Verified on hardware 2026-08-06: SD mounts, both axes jog, both limit
+# switches read, homing completes. The values below include the calibration
+# found on the bench - theta's direction pin is inverted (gpio.15:low) and rho
+# is 164 steps/mm. gear_ratio is still the Gold table's figure and is the
+# reason a commanded F200 moved at roughly 25 mm/min; check it against this
+# table's mechanics. num_leds must match the actual strip.
+# TODO auto-home on boot is deliberately left out - add
+# macros: startup_line0: $Sand/Home once homing is trusted here.
+board: MKS DLC32 MAX V1.0
+name: Dune Weaver ThetaRho S3
+meta: DLC32 MAX bring-up
+hostname: DWMAX
+stepping:
+# Timed is the board default on the FluidNC wiki. RTM (RMT) also works here;
+# it takes one RMT channel per step pin from 0 up, and the LED driver takes
+# the top TX-capable channel (3 on the S3), so 2 axes leave no conflict.
+  engine: Timed
+  idle_ms: 0
+  pulse_us: 4
+  dir_delay_us: 1
+  disable_delay_us: 0
+  segments: 12
+spi:
+  miso_pin: gpio.12
+  mosi_pin: gpio.14
+  sck_pin: gpio.13
+sdcard:
+  cs_pin: gpio.21
+# The wiki lists card_detect on gpio.10, but IDF reads card-detect as
+# active-low and this board's line idles high, so a seated card reported
+# ESP_ERR_NOT_FOUND. We do not need detect; leave it unset.
+  card_detect_pin: NO_PIN
+  frequency_hz: 8000000
+kinematics:
+  ThetaRho:
+    theta_mm_per_rev: 50
+    rho_mm: 20
+    gear_ratio: 6.25
+    invert_coupling: false
+    default_feed_mm_per_min: 100
+axes:
+  shared_stepper_disable_pin: gpio.8
+  shared_stepper_reset_pin: NO_PIN
+  homing_runs: 2
+  x:
+    steps_per_mm: 200
+    max_rate_mm_per_min: 500
+    acceleration_mm_per_sec2: 40
+    max_travel_mm: 7
+    soft_limits: false
+    homing:
+      cycle: 1
+      allow_single_axis: true
+      positive_direction: true
+      mpos_mm: 0
+      feed_mm_per_min: 200
+      seek_mm_per_min: 200
+      settle_ms: 250
+      seek_scaler: 1.1
+      feed_scaler: 1.1
+    motor0:
+      limit_neg_pin: gpio.39:low
+      limit_pos_pin: NO_PIN
+      limit_all_pin: NO_PIN
+      hard_limits: false
+      pulloff_mm: 0.15
+      stepstick:
+        step_pin: gpio.16
+        direction_pin: gpio.15:low
+        disable_pin: NO_PIN
+        ms1_pin: NO_PIN
+        ms2_pin: NO_PIN
+        ms3_pin: NO_PIN
+        reset_pin: NO_PIN
+  y:
+    steps_per_mm: 164
+    max_rate_mm_per_min: 500
+    acceleration_mm_per_sec2: 40
+    max_travel_mm: 1.1
+    soft_limits: false
+    homing:
+      cycle: 2
+      allow_single_axis: true
+      positive_direction: false
+      mpos_mm: 0.12
+      feed_mm_per_min: 200
+      seek_mm_per_min: 200
+      settle_ms: 250
+      seek_scaler: 1.1
+      feed_scaler: 1.1
+    motor0:
+      limit_neg_pin: gpio.40:low
+      limit_pos_pin: NO_PIN
+      limit_all_pin: NO_PIN
+      hard_limits: false
+      pulloff_mm: 0.1
+      stepstick:
+        step_pin: gpio.7
+        direction_pin: gpio.6
+        disable_pin: NO_PIN
+        ms1_pin: NO_PIN
+        ms2_pin: NO_PIN
+        ms3_pin: NO_PIN
+        reset_pin: NO_PIN
+  z:
+    steps_per_mm: 80
+    max_rate_mm_per_min: 1000
+    acceleration_mm_per_sec2: 25
+    max_travel_mm: 1000
+    soft_limits: false
+    motor0:
+      limit_neg_pin: NO_PIN
+      limit_pos_pin: NO_PIN
+      limit_all_pin: NO_PIN
+      hard_limits: false
+      pulloff_mm: 1
+control:
+  safety_door_pin: NO_PIN
+  reset_pin: NO_PIN
+  feed_hold_pin: NO_PIN
+  cycle_start_pin: NO_PIN
+  macro0_pin: NO_PIN
+  macro1_pin: NO_PIN
+  macro2_pin: NO_PIN
+  macro3_pin: NO_PIN
+  fault_pin: NO_PIN
+  estop_pin: NO_PIN
+coolant:
+  flood_pin: NO_PIN
+  mist_pin: NO_PIN
+  delay_ms: 0
+probe:
+# gpio.38 is the probe signal pin on this board; it drives the LEDs instead.
+  pin: NO_PIN
+  toolsetter_pin: NO_PIN
+  check_mode_start: true
+  hard_stop: false
+macros:
+  Macro0: G90
+  after_homing: G90 G1 X0 Y0 F100
+start:
+  must_home: false
+  deactivate_parking: false
+  check_limits: true
+parking:
+  enable: false
+  axis: Z
+  target_mpos_mm: -5
+  rate_mm_per_min: 800
+  pullout_distance_mm: 5
+  pullout_rate_mm_per_min: 250
+arc_tolerance_mm: 0.002
+junction_deviation_mm: 0.04
+verbose_errors: true
+report_inches: false
+enable_parking_override_control: false
+use_line_numbers: false
+planner_blocks: 16
+playlist:
+  folder: /playlists
+  clear_from_in: /patterns/clear_from_in.thr
+  clear_from_out: /patterns/clear_from_out.thr
+  clear_sideway: /patterns/clear_sideway.thr
+leds:
+# gpio.2 is the laser TTL output on J4/J5 - a signal-level output by design,
+# with GND on the same header. Do NOT use the endstop/probe/door headers for
+# LED data even though they look free: those nets are shared (IO41 is both Z-
+# and Door, IO40 is Y- and Flame, IO39 is X-, Probe and A-) and carry switch
+# input conditioning. Verified on hardware: a strip on gpio.41 stayed dark
+# while the identical strip on gpio.2 works.
+  data_pin: gpio.2
+  num_leds: 49
+  color_order: RGB
+  frame_ms: 33
+time:
+  ntp: true
+  server: pool.ntp.org
+  tz: EST5EDT,M3.2.0,M11.1.0

@@ -1,9 +1,13 @@
 name: CI
 
-# Dune Weaver Firmware ships a single target: the `sandtable` PlatformIO env
-# (MKS-DLC32 / ESP32, 4M). This CI does the two things that matter for the fork:
+# Dune Weaver Firmware ships two board targets: `sandtable` (MKS-DLC32 / ESP32,
+# 4M) and `sandtable_s3` (MKS DLC32 MAX / ESP32-S3, 8M). This CI does the two
+# things that matter for the fork:
 #   1. run the native unit tests (ASan/UBSan) — the fast gate on every change
-#   2. build the sandtable firmware — so a broken shipping target fails CI
+#   2. build both shipping targets — so a broken one fails CI. Both must build:
+#      they share every source file, and the S3 differences are compile-time
+#      (`CONFIG_IDF_TARGET_ESP32S3` branches in the pin map, the stubbed I2S
+#      engine), so an ESP32-only build cannot catch a break on the other side.
 # (Upstream FluidNC's noradio/wifi/bt build matrix and Windows portability legs
 # were dropped: the fork builds none of those targets and is developed on macOS.)
 
@@ -52,8 +56,10 @@ jobs:
         with:
           path: ~/.platformio
           key: platformio-sandtable-${{ runner.os }}
-      - name: Build sandtable firmware
+      - name: Build sandtable firmware (ESP32 / MKS-DLC32)
         run: pio run -e sandtable
+      - name: Build sandtable firmware (ESP32-S3 / MKS DLC32 MAX)
+        run: pio run -e sandtable_s3
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -62,3 +68,6 @@ jobs:
             .pio/build/sandtable/firmware.bin
             .pio/build/sandtable/partitions.bin
             .pio/build/sandtable/bootloader.bin
+            .pio/build/sandtable_s3/firmware.bin
+            .pio/build/sandtable_s3/partitions.bin
+            .pio/build/sandtable_s3/bootloader.bin

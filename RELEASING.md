@@ -1,9 +1,15 @@
 # Releasing
 
-Dune Weaver Firmware ships a single ESP32 target — the **`sandtable`** PlatformIO
-env (MKS-DLC32, 4M flash). Releases are published as **GitHub Release assets** on
+Dune Weaver Firmware ships two board targets — **`sandtable`** (MKS-DLC32,
+ESP32, 4M flash) and **`sandtable_s3`** (MKS DLC32 MAX, ESP32-S3, 8M flash).
+Releases are published as **GitHub Release assets** on
 `tuanchris/dune-weaver-firmware`: the flat `.bin` images plus a `manifest.json`
 that a web installer consumes.
+
+Every release carries **both** boards. `build-dw-release.py` builds each env in
+turn and prefixes the staged filenames with the MCU (`esp32-firmware.bin`,
+`esp32s3-firmware.bin`, …), because the release namespace is flat and both envs
+emit the same `firmware.bin`.
 
 ## Cut a release (automated)
 
@@ -84,9 +90,9 @@ bundled mklittlefs ever breaks).
    git tag -a v0.1.0 -m "Dune Weaver Firmware v0.1.0"
    ```
 
-2. **Build the artifacts** — compiles `sandtable` firmware + the littlefs image,
-   then writes flat images, `manifest.json`, and a convenience zip to
-   `release/<tag>/`:
+2. **Build the artifacts** — compiles both envs' firmware + littlefs images,
+   then writes flat MCU-prefixed images, a combined `manifest.json`, and one
+   convenience zip per board to `release/<tag>/`:
 
    ```sh
    python3 build-dw-release.py        # add -v for full PlatformIO output
@@ -98,19 +104,27 @@ bundled mklittlefs ever breaks).
    git push origin main v0.1.0
    gh release create v0.1.0 \
      --title "v0.1.0" --notes-file <notes> \
-     release/v0.1.0/manifest.json \
-     release/v0.1.0/bootloader.bin release/v0.1.0/partitions.bin \
-     release/v0.1.0/boot_app0.bin release/v0.1.0/firmware.bin \
-     release/v0.1.0/littlefs.bin \
-     release/v0.1.0/dune-weaver-firmware-v0.1.0-esp32.zip
+     release/v0.1.0/*
    ```
+
+   (The automated workflow uploads the same glob — one manifest, ten images and
+   two zips — so there is no per-filename list to keep in sync as boards are
+   added.)
 
 ## The manifest
 
 `manifest.json` follows the [fluid-installer](https://github.com/breiler/fluid-installer)
-schema but is trimmed to one MCU / one variant (`esp32` → `sandtable`) with three
-install types: `fresh-install`, `firmware-update`, `filesystem-update`. Each image
-`path` is a **bare filename** (not a nested path), resolved relative to the manifest.
+schema, trimmed to one variant per MCU (`esp32` → `sandtable`, `esp32s3` →
+`sandtable`) with three install types each: `fresh-install`, `firmware-update`,
+`filesystem-update`. Each image `path` is a **bare filename** (not a nested
+path), resolved relative to the manifest.
+
+The installer picks the MCU at the manifest's *"Processor type"* level — First
+Weave asks which board you have before flashing and selects it, and
+`flashDevice` re-checks the answer against the chip esptool reports before it
+writes anything. **Never share offsets between the two:** they disagree on
+where the bootloader goes, so a mismatched install writes a valid image to the
+wrong address and leaves a board that will not boot.
 
 **The installer downloads the binaries from `releases/<tag>/` on the default
 branch** (`raw.githubusercontent.com/<owner>/<repo>/<branch>/releases/<tag>/…`),
@@ -126,8 +140,16 @@ mkdir -p releases/v0.1.0 && cp release/v0.1.0/* releases/v0.1.0/
 git add releases/v0.1.0 && git commit -m "Track v0.1.0 release artifacts" && git push
 ```
 
-Flash offsets (4M ESP32, see `min_littlefs.csv`): bootloader `0x1000`, partitions
-`0x8000`, boot_app0 `0xe000`, firmware `0x10000`, littlefs `0x3d0000`.
+Flash offsets, per board (the source of truth is `TARGETS` in
+`build-dw-release.py`):
+
+| image      | ESP32 4M (`min_littlefs.csv`) | ESP32-S3 8M (`sandtable_8MB.csv`) |
+| ---------- | ----------------------------- | --------------------------------- |
+| bootloader | `0x1000`                      | **`0x0`**                         |
+| partitions | `0x8000`                      | `0x8000`                          |
+| boot_app0  | `0xe000`                      | `0xe000`                          |
+| firmware   | `0x10000`                     | `0x10000`                         |
+| littlefs   | `0x3d0000`                    | **`0x610000`**                    |
 
 ## Toolchain note (Apple Silicon)
 
