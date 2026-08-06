@@ -48,6 +48,29 @@ the commit message. The workflow now re-fetches the tag object and checks
 commit message is the symptom to watch for — fix with
 `gh release edit <tag> --notes-file <file>`.
 
+### Never let two tags share one commit
+
+Cutting a final release at the same commit as its last RC — the obvious move,
+since the code is identical — used to publish the RC instead. Everything
+downstream read the tag from `git describe --tags --abbrev=0`, and describe
+tie-breaks arbitrarily when a commit carries more than one tag: `actions/checkout`
+leaves the **triggering** tag lightweight, describe prefers the annotated
+candidate, so pushing `v0.1.18` at `v0.1.18-rc3`'s commit made the runner stage,
+version and publish the whole release as `v0.1.18-rc3`. It failed loudly only
+because that release already existed; with a fresh RC name it would have shipped
+silently, firmware version string included.
+
+The workflow now resolves the tag **once**, from `github.ref_name`, and exports it
+as `DW_RELEASE_TAG`. `build-dw-release.py` (staging dir + manifest) and
+`git-version.py` (the version baked into the firmware) both honor it and fall
+back to `git describe` when it is unset, so local builds are unchanged. A
+`workflow_dispatch` from a branch has no tag ref and takes the describe fallback,
+which is why dispatching against the **tag** is still the reliable way to re-run.
+
+Two habits follow from this: tag the release commit itself rather than moving a
+tag onto a commit that already carries one, and after any release check that
+`gh release view <tag>` and the firmware's own `$I` report the same version.
+
 The manual steps
 below are the equivalent local flow (useful for a dry run, or if the runner's
 bundled mklittlefs ever breaks).

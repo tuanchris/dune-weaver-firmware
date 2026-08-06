@@ -64,9 +64,15 @@ def sha256(path):
         return hashlib.sha256(f.read()).hexdigest()
 
 
-tag = git("describe", "--tags", "--abbrev=0")
+# CI exports the tag that triggered the release as DW_RELEASE_TAG. `git describe`
+# tie-breaks arbitrarily when a commit carries more than one tag -- cutting a
+# final release at the same commit as its last RC staged the whole release under
+# the RC's name -- so an explicit tag always wins. Unset (a local build) keeps
+# the original describe behaviour.
+tag = os.environ.get("DW_RELEASE_TAG", "").strip() or git("describe", "--tags", "--abbrev=0")
 try:
-    git("describe", "--tags", "--exact-match", "HEAD")
+    if git("rev-parse", tag + "^{commit}") != git("rev-parse", "HEAD"):
+        raise subprocess.CalledProcessError(1, "rev-parse")
 except subprocess.CalledProcessError:
     print("WARNING: HEAD is not exactly on tag %s; firmware version string will\n"
           "         include a branch-commit suffix. Tag this commit first to ship\n"

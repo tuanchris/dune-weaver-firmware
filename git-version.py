@@ -14,14 +14,21 @@ if gitFail:
     rev = " (noGit)"
     url = " (noGit)"
 else:
-    try:
-        tag = (
-            subprocess.check_output(["git", "describe", "--tags", "--abbrev=0"], stderr=subprocess.DEVNULL)
-            .strip()
-            .decode("utf-8")
-        )
-    except:
-        tag = "v3.0.x"
+    # DW: the release workflow exports the tag it is building as DW_RELEASE_TAG.
+    # `git describe` tie-breaks arbitrarily when a commit carries more than one
+    # tag, so a final release cut at its last RC's commit baked the RC's version
+    # string into the firmware while the release itself said otherwise. An
+    # explicit tag wins; local builds (unset) keep the describe behaviour.
+    tag = os.environ.get("DW_RELEASE_TAG", "").strip()
+    if not tag:
+        try:
+            tag = (
+                subprocess.check_output(["git", "describe", "--tags", "--abbrev=0"], stderr=subprocess.DEVNULL)
+                .strip()
+                .decode("utf-8")
+            )
+        except:
+            tag = "v3.0.x"
 
     # Check to see if the head commit exactly matches a tag.
     # If so, the revision is "release", otherwise it is BRANCH-COMMIT

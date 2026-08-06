@@ -25,7 +25,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # build-dw-release.py reads the version from `git describe`
+          fetch-depth: 0  # tags must be present: the dispatch fallback below and
+                          # the annotated-tag re-fetch both need full history
+      - name: Resolve the release tag
+        run: |
+          # The tag being released is the ref that TRIGGERED the run, not
+          # whatever `git describe` picks. describe tie-breaks arbitrarily when
+          # a commit carries more than one tag, and cutting a final release at
+          # the same commit as its last RC does exactly that: pushing v0.1.18 at
+          # v0.1.18-rc3's commit made describe answer "v0.1.18-rc3" on the runner
+          # (actions/checkout leaves the TRIGGERING tag lightweight, and describe
+          # prefers the annotated candidate), so the run staged, versioned and
+          # tried to publish the whole release as the RC. It only failed loudly
+          # because that release already existed -- otherwise it would have
+          # silently shipped a v0.1.18 tag as an rc3 release, firmware version
+          # string included.
+          # DW_RELEASE_TAG is exported for every later step; build-dw-release.py
+          # and git-version.py honor it and fall back to describe when unset, so
+          # local builds are unchanged.
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            # workflow_dispatch from a branch has no tag ref to read.
+            TAG="$(git describe --tags --abbrev=0)"
+            echo "::notice::dispatched from ${{ github.ref_type }} '${{ github.ref_name }}'; falling back to $TAG"
+          fi
+          echo "DW_RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "releasing $TAG"
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -46,9 +72,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Match the dir build-dw-release.py staged (named from `git describe`),
-          # so a tag push and a manual dispatch on the same tag both resolve here.
-          TAG="$(git describe --tags --abbrev=0)"
+          # Same tag the build staged under release/<tag>/ (both read
+          # DW_RELEASE_TAG), so the asset glob below cannot miss.
+          TAG="$DW_RELEASE_TAG"
           # Release notes come from the annotated tag's BODY (everything after
           # the subject line) -- write the changelog into `git tag -a` per
           # RELEASING.md. `--generate-notes` only summarizes merged PRs, which
@@ -98,7 +124,10 @@ jobs:
           # artifacts there or the installer 404s ("Could not download the release
           # asset"). release/<tag>/ is gitignored + untracked, so it survives the
           # branch checkout; we copy it into the tracked releases/<tag>/.
-          TAG="$(git describe --tags --abbrev=0)"
+          # NOTE: this step checks out the default BRANCH, where `git describe`
+          # would answer with the branch's last tag rather than the one being
+          # released -- another reason the tag is resolved once, up front.
+          TAG="$DW_RELEASE_TAG"
           BRANCH="${{ github.event.repository.default_branch }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
