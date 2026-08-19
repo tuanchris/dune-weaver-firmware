@@ -26,6 +26,7 @@ namespace Spindles {
         void setSpeedfromISR(uint32_t dev_speed) override;
         void setState(SpindleState state, SpindleSpeed speed) override;
         void config_message() override;
+        bool isNull() override { return true; }
 
         // Configuration handlers:
         void group(Configuration::HandlerBase& handler) override {}

@@ -151,8 +151,10 @@ works). Config: `config_dlc32max_thetarho.yaml`.
   (a `UserCommand` with `cmdChecker=nullptr`) driving `Leds::setLive()`.
   **While a pattern is merely PAUSED**, the sand-table policy settings are
   writable: mark them `holdOk(new …Setting(…))` at their definition and
-  `check_state` also accepts `State::Hold` (nothing steps in a feed hold, and
-  NVS is internal flash, not the SD the job streams). `$Playlist/*`, `$Sands/*`,
+  `check_state` also accepts `State::Hold` — but only once the hold has
+  *completed* (`!Stepper::isStepping()`): state reads Hold the moment the hold
+  is requested, while the decel ramp still steps, and an NVS write under a
+  live step ISR was the cache-panic repro (see the flash-vs-ISR gotcha). `$Playlist/*`, `$Sands/*`,
   `$LED/*`, `$Hostname`, `$Sand/Password` and `$Sand/HomingMode`/`ThetaOffset`
   (read at home time only) are marked; machine configuration and `$THR/Feed`
   deliberately are not. This is
@@ -226,6 +228,25 @@ works). Config: `config_dlc32max_thetarho.yaml`.
   item's own pattern (the one the clear is preparing for), not the following item.
 
 ## Gotchas (these bit us; don't repeat)
+
+- **An internal-flash write (NVS, littlefs) concurrent with stepping used to
+  panic the board** — `Guru Meditation … Cache disabled but cached memory
+  region accessed`, PC `0xbad00bad`, backtrace CORRUPTED (don't chase it; the
+  registers are the deterministic IPC-stall frame). The step ISRs are
+  `ESP_INTR_FLAG_IRAM` (both the S3 Timed timer and the ESP32 I2S FIFO), so
+  they keep firing while a flash op has the cache disabled — and
+  `Stepper::pulse_func` reached flash twice: the virtual
+  `spindle->setSpeedfromISR()` (a vtable read lands in DROM even though the
+  Null override is IRAM) and `state_is()`. Fixed 2026-08-19 (skip the
+  dispatch when `spindle->isNull()`, cached at `wake_up()`; `state_is` in
+  IRAM) — reproduced and verified on DWMAX with alternating-value holdOk
+  writes fired into the pause decel ramp (same-value writes skip NVS, which
+  is why naive repros fail). **Anything new reachable from `pulse_func` must
+  stay IRAM/DRAM-only: no virtual calls, no logging, no flash-resident
+  tables.** The writers are everywhere (`flushLive`, `TimePersist`,
+  `$THR/Feed` persist, WiFi creds, any `$Setting=` over HTTP) and all gate on
+  an instantaneous idle check that races the protocol task's next job start —
+  the ISR-side cleanliness is what makes them safe.
 
 - **On the DLC32 MAX, endstop/probe/door header pins are shared nets and are useless
   for high-speed data.** The pinout table shows `IO41` = Z− **and** Door, `IO40` = Y−

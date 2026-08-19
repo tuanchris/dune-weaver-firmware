@@ -230,7 +230,10 @@ Effects (`$LED/Effect=<name>`):
 The `$LED/*` settings above are **idle-or-paused-gated** — they are accepted at
 Idle/Alarm and while the table is PAUSED (`Hold`, since v0.1.18-rc3), but sending one
 while the table is actually moving returns `Error: Command requires idle state`
-(FluidNC blocks NVS/flash writes mid-motion). Use `/sand_led` (or `$Sand/Led`)
+(FluidNC blocks NVS/flash writes mid-motion). "Moving" includes the brief
+deceleration ramp right after a pause: pause-tolerant settings are accepted
+only once the hold has fully stopped the motors (~a quarter second) — retry
+on `IdleError` if you write immediately after `/sand_pause`. Use `/sand_led` (or `$Sand/Led`)
 for live control instead: it applies in memory immediately (no flash write) and
 is persisted to NVS automatically when the table next returns to idle.
 

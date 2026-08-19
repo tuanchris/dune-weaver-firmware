@@ -2,6 +2,7 @@
 
 #include "System.h"    // sys
 #include "Protocol.h"  // protocol_buffer_synchronize
+#include "Stepper.h"   // Stepper::isStepping
 #include "Machine/MachineConfig.h"
 
 #include <map>
@@ -92,13 +93,17 @@ Setting::Setting(const char* description, type_t type, permissions_t permissions
 }
 
 Error Setting::check_state() {
-    // A feed hold is a job standing still: no stepping, nothing streaming off
-    // the SD card, and NVS lives on the internal flash the job never touches.
-    // So settings that opted in (allowInHold(), the sand-table policy ones)
-    // accept writes while paused -- the app's Settings screen is usable after
-    // a pause instead of demanding a full stop.  Everything else still waits
-    // for Idle/Alarm.
-    if (_allow_hold && state_is(State::Hold)) {
+    // A COMPLETED feed hold is a job standing still: no stepping, nothing
+    // streaming off the SD card, and NVS lives on the internal flash the job
+    // never touches.  So settings that opted in (allowInHold(), the
+    // sand-table policy ones) accept writes while paused -- the app's
+    // Settings screen is usable after a pause instead of demanding a full
+    // stop.  But sys.state reads Hold the moment the hold is REQUESTED,
+    // while the steppers still run the deceleration ramp -- an NVS write in
+    // that window disables the flash cache under the live step ISR (cache
+    // panic, reproduced 2026-08-19), so wait for stepping to actually stop.
+    // Everything else still waits for Idle/Alarm.
+    if (_allow_hold && state_is(State::Hold) && !Stepper::isStepping()) {
         return Error::Ok;
     }
     if (notIdleOrAlarm()) {

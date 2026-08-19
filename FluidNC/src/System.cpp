@@ -12,8 +12,9 @@
 #include "Machine/MachineConfig.h"  // config
 #include "src/Stepping.h"           // config
 
-#include <cstring>  // memset
-#include <cmath>    // roundf
+#include <cstring>   // memset
+#include <cmath>     // roundf
+#include <esp_attr.h>  // IRAM_ATTR
 
 // Declare system global variable structure
 system_t sys;
@@ -119,7 +120,9 @@ const std::map<State, const char*> StateName = {
 void set_state(State s) {
     sys.state = s;
 }
-bool state_is(State s) {
+// IRAM: called from Stepper::pulse_func, whose ISR stays enabled while a
+// flash write has the cache disabled -- flash-resident code there panics.
+bool IRAM_ATTR state_is(State s) {
     return sys.state == s;
 }
 

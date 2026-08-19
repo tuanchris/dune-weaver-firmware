@@ -24,6 +24,10 @@ namespace Stepper {
     // Stops stepping and disables stepper (not ISR-safe)
     void go_idle();
 
+    // True while the step ISR is producing pulses -- including a feed-hold's
+    // deceleration ramp, when sys.state already reads Hold.
+    bool isStepping();
+
     // Stops stepping (ISR-safe)
     void stop_stepping();
 

@@ -22,6 +22,13 @@ using namespace Stepper;
 
 static bool awake = false;
 
+// Cached in wake_up() (task context).  The step ISR must not do the virtual
+// setSpeedfromISR() dispatch for the Null spindle: the vtable read hits
+// flash-mapped .rodata, and this ISR keeps running (ESP_INTR_FLAG_IRAM)
+// while a concurrent NVS write has the flash cache disabled -- that access
+// is the "Cache disabled but cached memory region accessed" panic.
+static bool spindle_speed_from_isr = false;
+
 // Stores the planner block Bresenham algorithm execution data for the segments in the segment
 // buffer. Normally, this buffer is partially in-use, but, for the worst case scenario, it will
 // never exceed the number of accessible stepper buffer segments (Stepping::_segments-1).
@@ -232,13 +239,15 @@ bool IRAM_ATTR Stepper::pulse_func() {
                 st.steps[axis] = st.exec_block->steps[axis] >> st.exec_segment->amass_level;
             }
             // Set real-time spindle output as segment is loaded, just prior to the first step.
-            spindle->setSpeedfromISR(st.exec_segment->spindle_dev_speed);
+            if (spindle_speed_from_isr) {
+                spindle->setSpeedfromISR(st.exec_segment->spindle_dev_speed);
+            }
         } else {
             // Segment buffer empty. Shutdown.
             stop_stepping();
             if (!state_is(State::Jog)) {  // added to prevent ... jog after probing crash
                 // Ensure pwm is set properly upon completion of rate-controlled motion.
-                if (st.exec_block != NULL && st.exec_block->is_pwm_rate_adjusted) {
+                if (spindle_speed_from_isr && st.exec_block != NULL && st.exec_block->is_pwm_rate_adjusted) {
                     spindle->setSpeedfromISR(0);
                 }
             }
@@ -276,6 +285,7 @@ void Stepper::wake_up() {
         return;
     }
     awake = true;
+    spindle_speed_from_isr = spindle && !spindle->isNull();
     // Cancel any pending stepper disable
     protocol_cancel_disable_steppers();
     // Enable stepper drivers.
@@ -283,6 +293,10 @@ void Stepper::wake_up() {
 
     // Enable Stepping Driver Interrupt
     Stepping::startTimer();
+}
+
+bool Stepper::isStepping() {
+    return awake;
 }
 
 void Stepper::go_idle() {

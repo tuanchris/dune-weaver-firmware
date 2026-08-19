@@ -61,6 +61,11 @@ namespace Spindles {
         void            stop() { setState(SpindleState::Disable, 0); }
         virtual void    config_message() = 0;
         virtual bool    isRateAdjusted();
+        // True only for the Null spindle.  Cached by Stepper::wake_up() so the
+        // step ISR can skip the virtual setSpeedfromISR() dispatch: the vtable
+        // read hits flash-mapped .rodata, which panics when a concurrent NVS
+        // write has the flash cache disabled.
+        virtual bool isNull() { return false; }
         virtual bool    use_delay_settings() const { return true; }
         virtual uint8_t get_current_tool_num() { return _current_tool; }
         virtual bool    tool_change(uint32_t tool_number, bool pre_select, bool set_tool);
