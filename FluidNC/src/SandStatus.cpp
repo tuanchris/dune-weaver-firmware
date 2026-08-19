@@ -119,6 +119,17 @@ namespace SandStatus {
         if (d.has_led) {
             o += ",\"led\":{";
             member_str(o, "effect", d.led_effect);
+            // "active" is what the strip is showing right now.  It differs from
+            // "effect" whenever a state hook or Still Sands is overriding the
+            // user's choice, and "override" says which -- a client that reads
+            // only "effect" will tell the user the LEDs are on while a
+            // $LED/IdleEffect=off table sits dark.
+            o += ',';
+            member_str(o, "active", d.led_active && *d.led_active ? d.led_active : d.led_effect);
+            if (d.led_override && *d.led_override) {
+                o += ',';
+                member_str(o, "override", d.led_override);
+            }
             o += ",\"brightness\":";
             append_int(o, d.led_brightness);
             o += '}';

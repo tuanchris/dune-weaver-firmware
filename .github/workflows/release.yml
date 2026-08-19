@@ -114,6 +114,29 @@ jobs:
               --generate-notes \
               "release/$TAG"/*
           fi
+      - name: Publish the legacy firmware.bin alias
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The mobile app finds a release's flashable image by looking for an
+          # asset named exactly `firmware.bin`, and DROPS any release without
+          # one -- so a release with only MCU-prefixed images (every release
+          # since the S3 board landed) is invisible in the app's version picker
+          # and its update check, rather than merely un-installable.
+          # Already-shipped app versions cannot be fixed, so publish an
+          # unprefixed copy of the ESP32 image as a compatibility alias.
+          # ESP32, not S3, because every table in the field is an ESP32; an S3
+          # handed this image rejects it at esp_ota_set_boot_partition (the
+          # 0xE9 magic byte is identical on both, so nothing upstream of that
+          # catches it) and keeps running the slot it booted from.
+          # Uploaded as an ASSET ONLY -- deliberately not staged into
+          # release/<tag>/, because the next step commits that directory and the
+          # installer resolves the manifest's MCU-prefixed paths from it, so a
+          # tracked duplicate would add ~1.6 MB per release to the repo forever
+          # and never be read.
+          TAG="$DW_RELEASE_TAG"
+          cp "release/$TAG/esp32-firmware.bin" "$RUNNER_TEMP/firmware.bin"
+          gh release upload "$TAG" "$RUNNER_TEMP/firmware.bin" --clobber
       - name: Track artifacts on the default branch
         env:
           GH_TOKEN: ${{ github.token }}

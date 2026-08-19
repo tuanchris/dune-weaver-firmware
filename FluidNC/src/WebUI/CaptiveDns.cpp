@@ -79,15 +79,25 @@ namespace WebUI {
                 if (n <= 0) {
                     break;  // EWOULDBLOCK (nothing pending) or error -> done
                 }
-                DnsQuery::Question q = DnsQuery::parse(buf, static_cast<size_t>(n));
-                if (!q.valid) {
-                    continue;  // malformed / not a query -> ignore
-                }
-                DnsQuery::Action action = DnsQuery::decide(q, fallback);
-                std::vector<uint8_t> resp =
-                    DnsQuery::buildResponse(buf, static_cast<size_t>(n), q, action, s_ip[0], s_ip[1], s_ip[2], s_ip[3]);
-                if (!resp.empty()) {
-                    lwip_sendto(s_sock, resp.data(), resp.size(), 0, reinterpret_cast<sockaddr*>(&from), fromlen);
+                // parse()/buildResponse() allocate (std::string, std::vector).
+                // This poll runs in AP / AP_STA mode, which is exactly the
+                // low-heap recovery state where a phone's captive-portal probes
+                // flood DNS -- so a std::bad_alloc here is realistic.  Contain
+                // it to dropping this one datagram rather than letting it escape
+                // to the poller loop and abort the board.
+                try {
+                    DnsQuery::Question q = DnsQuery::parse(buf, static_cast<size_t>(n));
+                    if (!q.valid) {
+                        continue;  // malformed / not a query -> ignore
+                    }
+                    DnsQuery::Action     action = DnsQuery::decide(q, fallback);
+                    std::vector<uint8_t> resp =
+                        DnsQuery::buildResponse(buf, static_cast<size_t>(n), q, action, s_ip[0], s_ip[1], s_ip[2], s_ip[3]);
+                    if (!resp.empty()) {
+                        lwip_sendto(s_sock, resp.data(), resp.size(), 0, reinterpret_cast<sockaddr*>(&from), fromlen);
+                    }
+                } catch (...) {
+                    continue;
                 }
             }
         }

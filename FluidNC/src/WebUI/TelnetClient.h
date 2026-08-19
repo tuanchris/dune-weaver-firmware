@@ -23,6 +23,14 @@ namespace WebUI {
 
         int _state = 0;
 
+        // Telnet IAC (0xFF) negotiation state, consumed in read() so option
+        // bytes never reach the Grbl realtime parser.  A scanner's "IAC WILL
+        // TERMINAL-TYPE" is literally FF FB 18, and 0x18 == Ctrl-X == reset:
+        // ordinary telnet negotiation used to soft-reset the controller.
+        // 0 = normal, 1 = after IAC, 2 = after WILL/WONT/DO/DONT (option
+        // follows), 3 = in subnegotiation, 4 = in subnegotiation after IAC.
+        int _iac = 0;
+
     public:
         TelnetClient(WiFiClient* wifiClient);
 

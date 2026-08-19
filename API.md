@@ -14,7 +14,7 @@ This document is the stable contract — treat command names and the `$Sand/Stat
 | **WebSocket (webui-v3)** | HTTP+2 (default **82**) | **Primary** — commands + live status stream | queued to **main loop** ✅ |
 | HTTP `/command` | HTTP (default **80**) | Fire-and-forget cmds + `$/` reads (output of `$Sand/*` goes to WS, not the HTTP body) | runs **inline in the polling_loop task** ⚠️ |
 | HTTP file routes | 80 | Upload, fetch `.thr`/files | — |
-| Telnet | 23 | Raw line channel (scripting) | main loop |
+| Telnet | 23 | Raw line channel (scripting) — **off by default**, enable with `$Telnet/Enable=ON` | main loop |
 
 ⚠️ **Prefer WebSocket for anything that starts motion.** Commands sent over `/command?plain=` execute
 synchronously inside `Web_Server::poll()` (the polling_loop task); a blocking motion command there fights
@@ -157,6 +157,15 @@ control during a pattern use:
 | `$Sand/Led=<key>=<val> [<key>=<val> ...]` | command form, not idle-gated; same behavior |
 `/sand_status` `led` reflects the live value during a run.
 
+**`$LED/RunEffect` / `$LED/IdleEffect` yield to an explicit effect change.** Setting
+the effect (`$Sand/Led=effect=…`, `/sand_led?effect=…` or `$LED/Effect=…`) suppresses
+the hook for the current machine state until the table next starts or stops moving —
+otherwise `$LED/IdleEffect=off` makes every "turn the LEDs on" a silent no-op at an
+idle table (the setting is written and the hook keeps the strip dark). Clearing a hook
+(`=none`) takes effect immediately. `led.active` in `/sand_status` always names the
+effect actually being rendered, and `led.override` names what is holding it apart from
+`led.effect`, so a client never has to infer it.
+
 ### Playlist / quiet-hours settings (NVS)
 `$Playlist/Mode=single|loop` · `$Playlist/Shuffle=ON|OFF` · `$Playlist/PauseTime=<sec>` ·
 `$Playlist/PauseFromStart=ON|OFF` · `$Playlist/ClearPattern=none|adaptive|in|out|sideway|random`
@@ -297,7 +306,14 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   //  pause_remaining = seconds left in the between-patterns pause ($Playlist/PauseTime),
   //  counting down live; pause_total = that pause's full length in seconds; both -1
   //  when not pausing. Progress bar fill = (pause_total - pause_remaining) / pause_total.
-  "led": { "effect": "rainbow", "brightness": 40 },  // omitted if no leds: config
+  "led": { "effect": "rainbow", "active": "rainbow", "brightness": 40 },  // omitted if no leds: config
+  //  effect = the chosen effect ($LED/Effect, or a live mid-run override).
+  //  active = what the strip is ACTUALLY showing (since v0.1.19; fall back to effect).
+  //  These differ while something overrides the choice, and then an "override" member
+  //  names it: "idle"/"run" = the $LED/IdleEffect / $LED/RunEffect state hook,
+  //  "quiet" = Still Sands holding the strip off. Absent when nothing overrides.
+  //  Show `active` to the user: reading only `effect` reports LEDs "on · rainbow" at a
+  //  table whose $LED/IdleEffect=off is keeping it dark.
   "sd_ok": true,              // boot-time SD readability probe; omitted if no SD configured.
   //  false = card didn't mount or root unreadable at boot (unseated/corrupt) -> surface
   //  a "check SD card" banner. Re-tested only on reboot.
@@ -350,10 +366,17 @@ Three floors. The warn line is on total free heap; **the two shedding floors are
 the largest allocatable BLOCK** (`heap_largest`), not total free — a fragmented heap can sit
 at 11–14 KB free while the largest block collapses to ~5 KB, which is what actually fails an
 allocation or an SD remount:
-- **< 15 KB free** — `[MSG:WARN: Low memory: N bytes, largest M, http busy <uri> for Tms, pend=P]`
-  in `/sand_log`. Reports the boot-session low-water mark (each value appears once) plus what
-  the web server was serving at that instant — the usual culprit behind a crater is a
-  connection pileup while one long request monopolizes the single-threaded server.
+- **< 15 KB free** — `[MSG:WARN: Low memory: dipped to N bytes (largest M), now F free/L largest,
+  http busy <uri> for Tms, pend=P]` in `/sand_log`. `N`/`M` are **this dip's** trough and the
+  largest block *at* that trough; `F`/`L` are the heap **at the instant the line was printed**,
+  so a wide gap between the pairs means the board has already recovered. The `http …` tail
+  names what the web server was serving — the usual culprit behind a crater is a connection
+  pileup while one long request monopolizes the single-threaded server. The warning re-arms
+  once free heap climbs back over 30 KB, so a table that craters repeatedly logs **every**
+  crater. *(Before v0.1.19 the line was `Low memory: N bytes, largest M, …` where `N` was the
+  boot-lifetime minimum and `M` was sampled live at print time — two different instants, which
+  produced impossible readings like `2452 bytes, largest 65524`, and only the single deepest
+  dip of the whole boot was ever reported.)*
 - **largest block < 10 KB** — non-exempt routes get **503** `busy: low memory` before the
   handler runs; `/sand_status`, stop/pause/resume, and a `/sand_patterns` *revalidation*
   (conditional GET with `If-None-Match`) still work.
@@ -441,8 +464,11 @@ need no credentials.
   `/sand_settings` (never includes the password), `/sand_bootlog`, `/sand_log`,
   `/sand_coredump` (read), `/sand_time` (read), `/wifi_status`, `/wifi_scan`, and
   plain file downloads (e.g. `GET /config.yaml`).
-- **Telnet** (port 23) refuses clients while a password is set — it has no key
-  mechanism and would bypass the lock.
+- **Telnet** (port 23) is **disabled by default** (`$Telnet/Enable=ON` to turn it
+  on): it is a raw Grbl console with no auth, and on a shared LAN network scanners'
+  option negotiation injects realtime bytes (a soft reset / door). When enabled it
+  refuses clients while a password is set — it has no key mechanism and would bypass
+  the lock — strips telnet IAC negotiation, and caps concurrent clients.
 - **ArduinoOTA** (port 3232) requires the same password (`espota --auth`); it reads
   the setting at boot, so a password change applies to OTA after the next reboot.
 

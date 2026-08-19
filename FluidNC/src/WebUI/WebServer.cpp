@@ -717,7 +717,43 @@ namespace WebUI {
             return;
         }
         char line[256];
-        strncpy(line, cmd, 255);
+        // strncpy does NOT terminate when the source is >= the count, so the
+        // old strncpy(line, cmd, 255) left line[255] as stack garbage for a
+        // 255+ byte command.  settings_execute_line() is entirely NUL-driven
+        // (it scans for '=' and writes a terminator), so it then read off the
+        // end of the buffer and wrote a NUL past it.  Reject over-long commands
+        // and always terminate.
+        if (strlen(cmd) >= sizeof(line)) {
+            _webserver->send(414, "text/plain", "command too long\n");
+            return;
+        }
+        strncpy(line, cmd, sizeof(line) - 1);
+        line[sizeof(line) - 1] = '\0';
+
+        // $H (and $H<axis>) runs a blocking homing loop that pumps
+        // Stepper::prep_buffer().  Executed inline here it runs in the poller
+        // task, racing the main loop's own prep_buffer -> stepper ISR fault /
+        // homing crawl.  Route it through the main loop exactly as /sand_home
+        // does -- which is also the mode-aware home (honors $Sand/HomingMode +
+        // $Sand/ThetaOffset).  Match ONLY the homing command: $H alone, or $H +
+        // a single axis letter, then end of string -- never a setting such as
+        // $Hostname that merely starts with "$H".
+        {
+            const char* p = line;
+            while (*p == ' ' || *p == '\t') {
+                ++p;
+            }
+            if (p[0] == '$' && (p[1] == 'H' || p[1] == 'h')) {
+                char c2     = p[2];
+                bool isHome = (c2 == '\0') || (strchr("XYZABCxyzabc", c2) != nullptr && p[3] == '\0');
+                if (isHome) {
+                    protocol_send_event(&startHomeEvent);
+                    _webserver->send(200, "text/plain", "ok");
+                    return;
+                }
+            }
+        }
+
         webClient.attachWS(_webserver, silent);
         Error err = settings_execute_line(line, webClient, auth_level);
         if (err != Error::Ok) {

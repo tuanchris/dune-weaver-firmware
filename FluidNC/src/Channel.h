@@ -46,6 +46,15 @@ public:
 
     static constexpr int maxLine = 255;
 
+    // Hard cap on the receive stash queue.  While a job runs, pollLine(nullptr)
+    // keeps pushing bytes here and nothing drains them until the job ends, so a
+    // scanner (or any client that never sends a newline) could grow it without
+    // bound -> heap exhaustion -> bad_alloc -> panic.  rx_buffer_available()
+    // already advertises a 256-byte soft limit for well-behaved senders; this
+    // is the backstop for the rest.  Realtime chars are dispatched before the
+    // stash, so dropping buffered line bytes past the cap is safe.
+    static constexpr size_t maxRxQueue = 1024;
+
     int _message_level = MsgLevelVerbose;
 
 protected:

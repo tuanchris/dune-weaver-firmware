@@ -12,8 +12,9 @@ namespace WebUI {
     std::vector<Mdns::Service> Mdns::_services;
     std::vector<Mdns::TxtItem> Mdns::_txt;
 
-    bool     Mdns::_running    = false;
-    bool     Mdns::_shed       = false;
+    bool     Mdns::_running        = false;
+    bool     Mdns::_shed           = false;
+    bool     Mdns::_off_by_setting = false;
     uint32_t Mdns::_shed_ms    = 0;
     uint32_t Mdns::_shed_count = 0;
     uint32_t Mdns::_up_since   = 0;
@@ -111,6 +112,11 @@ namespace WebUI {
     void Mdns::init() {
         _enable = new EnumSetting("mDNS enable", WEBSET, WA, NULL, "MDNS/Enable", true, &onoffOptions);
 
+        // Record when the SETTING -- rather than a down radio -- is why we are
+        // not running, so a table booted with mDNS off can be switched back on
+        // from the app without a reboot.
+        _off_by_setting = !_enable->get();
+
         if (active() && startResponder()) {
             log_info("Start mDNS with hostname:http://" << WiFi.getHostname() << ".local/");
         }
@@ -146,8 +152,35 @@ namespace WebUI {
     // it.  mdns_free() releases the whole backlog at once, which is exactly the
     // memory we are trying to reclaim.
     void Mdns::poll() {
-        if (!_enable || !_enable->get()) {
+        if (!_enable) {
             return;
+        }
+
+        // $MDNS/Enable=OFF has to take the responder DOWN, not merely stop
+        // watching it.  Returning early here left an already-running responder
+        // answering queries with the heap guard below switched off -- strictly
+        // more dangerous than leaving mDNS enabled -- and the setting looked
+        // like it worked only because it was always followed by a reboot, where
+        // init() never starts the responder in the first place.
+        if (!_enable->get()) {
+            if (_running) {
+                stopResponder();
+                _off_by_setting = true;
+                _shed           = false;  // a deliberate stop cancels any owed shed-restore
+                log_info("mDNS off ($MDNS/Enable=OFF); the table stays reachable by IP");
+            }
+            return;
+        }
+
+        // ...and back ON at runtime restarts it, so the switch is symmetric.
+        // Deliberately scoped to a responder WE stopped for this reason: a
+        // responder that never started (radio down at boot) stays that way.
+        if (_off_by_setting && !_running) {
+            if (!active() || !startResponder()) {
+                return;
+            }
+            _off_by_setting = false;
+            log_info("mDNS back on with hostname:http://" << WiFi.getHostname() << ".local/");
         }
 
         const uint32_t now = millis();

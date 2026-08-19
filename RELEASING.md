@@ -109,7 +109,36 @@ bundled mklittlefs ever breaks).
 
    (The automated workflow uploads the same glob — one manifest, ten images and
    two zips — so there is no per-filename list to keep in sync as boards are
-   added.)
+   added. It then adds the `firmware.bin` alias below.)
+
+   ```sh
+   # Compatibility alias for already-shipped app versions -- see below.
+   cp release/v0.1.0/esp32-firmware.bin /tmp/firmware.bin
+   gh release upload v0.1.0 /tmp/firmware.bin --clobber
+   ```
+
+## The `firmware.bin` compatibility alias
+
+The mobile app locates a release's flashable image by looking for an asset named
+**exactly `firmware.bin`**, and **drops any release that has none** — so a
+release carrying only MCU-prefixed images (every release since the S3 board
+landed) does not appear as un-installable in the app, it does not appear *at
+all*: not in the version picker, not in the update check. Already-installed app
+versions cannot be fixed retroactively, so every release also publishes an
+unprefixed copy of the **ESP32** image under that name.
+
+- **ESP32, not S3** — every table in the field is an ESP32. An S3 handed this
+  image rejects it at `esp_ota_set_boot_partition`; the `0xE9` magic byte is
+  identical on both, so neither the app's header check nor Arduino's
+  `Update._verifyHeader` catches the mismatch first. The running slot is left
+  untouched either way.
+- **Asset only, never committed.** It is not staged into `release/<tag>/`,
+  because that directory is committed to the default branch and the installer
+  resolves the manifest's MCU-prefixed paths from it — a tracked duplicate would
+  add ~1.6 MB per release to the repo forever and never be read.
+- This is a **shim for old clients**. New app versions should prefer
+  `<mcu>-firmware.bin`, chosen against the board's own reported target, and fall
+  back to `firmware.bin` for releases up to v0.1.18.
 
 ## The manifest
 

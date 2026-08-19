@@ -12,7 +12,20 @@
 int FluidPath::_refcnt = 0;
 
 FluidPath::FluidPath(const char* name, const char* fs, std::error_code* ecptr) : std::filesystem::path(canonicalPath(name, fs)) {
-    auto mount = *(++begin());  // Use the path iterator to get the first component
+    // canonicalPath() can return an empty or root-only path -- e.g. it refuses
+    // an over-long input (a scanner's long-URL probe), returning "".  Such a
+    // path has no mount component, so *(++begin()) below would dereference the
+    // path iterator PAST end() -> LoadProhibited (a hardware fault, NOT a C++
+    // exception, so no try/catch upstream can save it: this is a real reboot).
+    // Reject it as an invalid, non-SD, non-openable path instead.
+    auto it = begin();
+    if (it == end() || ++it == end()) {
+        if (ecptr) {
+            *ecptr = std::make_error_code(std::errc::invalid_argument);
+        }
+        return;  // _isSD stays false; ~FluidPath() and callers treat this as "not found"
+    }
+    auto mount = *it;  // the first component after the leading '/' is the mount name
     _isSD      = mount == "sd";
 
     if (_isSD) {

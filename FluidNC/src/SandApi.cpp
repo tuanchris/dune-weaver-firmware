@@ -365,6 +365,10 @@ std::string SandApi::statusJson() {
             if (lb >= 0) {
                 d.led_brightness = lb;
             }
+            // ... and what the strip is really showing, which a Run/Idle state
+            // hook or Still Sands can hold different from the chosen effect.
+            d.led_active   = leds->activeEffect();
+            d.led_override = leds->overrideSource();
         }
     }
 

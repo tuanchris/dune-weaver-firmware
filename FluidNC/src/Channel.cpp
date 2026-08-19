@@ -205,7 +205,7 @@ void Channel::handleRealtimeCharacter(uint8_t ch) {
 void Channel::push(uint8_t byte) {
     if (is_realtime_command(byte)) {
         handleRealtimeCharacter(byte);
-    } else {
+    } else if (_queue.size() < maxRxQueue) {
         _queue.push(byte);
     }
 }
@@ -231,7 +231,9 @@ Error Channel::pollLine(char* line) {
                 continue;
             }
             if (!line) {
-                _queue.push(ch);
+                if (_queue.size() < maxRxQueue) {
+                    _queue.push(ch);
+                }
                 continue;
             }
             // Fall through if line is non-null and it is not a realtime character
@@ -348,7 +350,13 @@ void Channel::sendLine(MsgLevel level, const std::string* line) {
 // It is used only rarely.
 void Channel::sendLine(MsgLevel level, const std::string& line) {
     if (outputTask) {
-        sendLine(level, new std::string(line));
+        // nothrow: the async output path must not abort under low heap.  If the
+        // copy can't be allocated, drop the message rather than throw out of a
+        // caller (often a catch handler) that never expected it.
+        auto copy = new (std::nothrow) std::string(line);
+        if (copy) {
+            sendLine(level, copy);
+        }
     } else {
         print_msg(level, line.c_str());
     }

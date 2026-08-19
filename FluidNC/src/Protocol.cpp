@@ -192,76 +192,101 @@ void polling_loop(void* unused) {
     // Poll the input sources waiting for a complete line to arrive
     for (; true; /*feedLoopWDT(), */ vTaskDelay(0)) {
         esp_task_wdt_reset();
-        // Polling is paused when xmodem is using a channel for binary upload
-        if (pollingPaused) {
-            vTaskDelay(100);
-            continue;
-        }
 
-        // A clean pattern stop (Cmd::StopJob) flagged a theta normalize;
-        // do it once the machine has settled at Idle with the job aborted.
-        if (rtStopJob && !Job::active() && state_is(State::Idle)) {
-            rtStopJob = false;
-            config->_kinematics->stop();
-        }
+        // Every operation the poller performs each pass -- channel input +
+        // realtime dispatch, the whole web server, telnet accept/disconnect,
+        // playlist sequencing, mDNS -- runs inside this try.  A std::bad_alloc
+        // from a heap crater (network scan burst), or any other escaping throw,
+        // would otherwise be an uncaught exception = terminate() = abort() = an
+        // instant reboot.  Catching it here sheds just that one operation and
+        // keeps the table alive.  The handler stays allocation-light and
+        // LogStream is nothrow, so logging the recovery cannot re-throw.
+        try {
+            // Polling is paused when xmodem is using a channel for binary upload
+            if (pollingPaused) {
+                vTaskDelay(100);
+                continue;
+            }
 
-        // Polling without an argument checks for realtime characters
-        // Polling with an argument both checks for realtime characters and
-        // returns a line-oriented command if one is ready.
-        pollChannels();
-        for (auto const& module : Modules()) {
-            module->poll();
-        }
+            // NOTE: the Cmd::StopJob theta normalize used to run HERE, in the
+            // poller task.  It calls config->_kinematics->stop() ->
+            // normalize_theta() -> protocol_buffer_synchronize(), which pumps
+            // the realtime engine and Stepper::prep_buffer() -- running that
+            // from the poller raced the main loop's own prep_buffer and a
+            // concurrent reset, faulting the stepper ISR.  It now lives in
+            // protocol_main_loop() (the main task), where all other deferred
+            // motion (rtStartHome/rtStartGoto) runs.
 
-        // If activeChannel is non-null, it means that we have recieved a line
-        // but the task running protocol_main_loop() has not yet picked it up.
-        // activeChannel is thus a form of flow control between the protocol
-        // task that processes GCode lines and other events and this task that
-        // handles IO from channels.
-        if (!activeChannel) {
-            // Job channels have priority
-            if (!Job::active()) {
-                unwind_cause = nullptr;
-                // No job channel is active, so poll all of the serial-style
-                // channels to see if one has a line ready.
-                activeChannel = pollChannels(activeLine);
-            } else {
-                if (state_is(State::Alarm) || state_is(State::ConfigAlarm) || state_is(State::Critical)) {
-                    log_debug("Unwinding from Alarm");
-                    Job::abort();
+            // Polling without an argument checks for realtime characters
+            // Polling with an argument both checks for realtime characters and
+            // returns a line-oriented command if one is ready.
+            pollChannels();
+            for (auto const& module : Modules()) {
+                module->poll();
+            }
+
+            // If activeChannel is non-null, it means that we have recieved a line
+            // but the task running protocol_main_loop() has not yet picked it up.
+            // activeChannel is thus a form of flow control between the protocol
+            // task that processes GCode lines and other events and this task that
+            // handles IO from channels.
+            if (!activeChannel) {
+                // Job channels have priority
+                if (!Job::active()) {
                     unwind_cause = nullptr;
-                    continue;
-                }
-                if (unwind_cause) {
-                    Job::abort();
-                    unwind_cause = nullptr;
-                    continue;
-                }
-                // A job channel is active, so accept line-oriented input only
-                // from the job channel on top of the job stack.
-                auto channel = Job::channel();
-                auto status  = channel->pollLine(activeLine);
-                switch (status) {
-                    case Error::Ok:
-                        activeChannel = channel;
-                        break;
-                    case Error::NoData:
-                        break;
-                    case Error::Eof:
-                        notifyf("Job done", "%s job sent", channel->name());
-                        log_debug(channel->name() << " job sent");
-                        Job::unnest();
-                        break;
-                    default:
-                        if (Job::leader) {
-                            log_error_to(*Job::leader,
-                                         static_cast<int>(status) << " (" << errorString(status) << ") in " << channel->name()
-                                                                  << " at line " << channel->lineNumber());
-                        }
+                    // No job channel is active, so poll all of the serial-style
+                    // channels to see if one has a line ready.
+                    activeChannel = pollChannels(activeLine);
+                } else {
+                    if (state_is(State::Alarm) || state_is(State::ConfigAlarm) || state_is(State::Critical)) {
+                        log_debug("Unwinding from Alarm");
                         Job::abort();
-                        break;
+                        unwind_cause = nullptr;
+                        continue;
+                    }
+                    if (unwind_cause) {
+                        Job::abort();
+                        unwind_cause = nullptr;
+                        continue;
+                    }
+                    // A job channel is active, so accept line-oriented input only
+                    // from the job channel on top of the job stack.
+                    auto channel = Job::channel();
+                    if (!channel) {
+                        // The job was aborted by another task between the
+                        // Job::active() check above and here (the job-stack
+                        // check-then-use is two separate lock acquisitions).
+                        // Treat it as "no active job" this pass instead of
+                        // dereferencing a null channel.
+                        continue;
+                    }
+                    auto status = channel->pollLine(activeLine);
+                    switch (status) {
+                        case Error::Ok:
+                            activeChannel = channel;
+                            break;
+                        case Error::NoData:
+                            break;
+                        case Error::Eof:
+                            notifyf("Job done", "%s job sent", channel->name());
+                            log_debug(channel->name() << " job sent");
+                            Job::unnest();
+                            break;
+                        default:
+                            if (Job::leader) {
+                                log_error_to(*Job::leader,
+                                             static_cast<int>(status) << " (" << errorString(status) << ") in " << channel->name()
+                                                                      << " at line " << channel->lineNumber());
+                            }
+                            Job::abort();
+                            break;
+                    }
                 }
             }
+        } catch (const std::exception& ex) {
+            log_error("poller recovered from exception: " << ex.what());
+        } catch (...) {
+            log_error("poller recovered from exception");
         }
     }
 }
@@ -344,9 +369,26 @@ static void check_startup_state() {
 
 const uint32_t heapWarnThreshold = 15000;
 
+// Free heap at which a dip is considered over and the warning re-arms.  Without
+// this the report is once-per-boot: heapLowWater only ever decreases, so a table
+// that craters to 2 KB every five minutes logs the FIRST crater and then goes
+// silent forever, which reads in the log exactly like "it dipped once and never
+// recovered".  Hysteresis is 2x the warn threshold so the re-arm can never
+// interact with the reporting rate limit below.
+const uint32_t heapRearmThreshold = 2 * heapWarnThreshold;
+
+// Boot-lifetime minimum.  Never reset -- /sand_status reports it as heap_min and
+// the soak harness trends it across releases, so its meaning must not change.
 uint32_t heapLowWater           = UINT_MAX;
 uint32_t heapLowWaterReported   = UINT_MAX;
 int32_t  heapLowWaterReportTime = 0;
+
+// Per-DIP state, cleared once the heap climbs back over heapRearmThreshold, so
+// each crater reports its own trough instead of being masked by a deeper one
+// that happened hours earlier.
+static uint32_t heapDipLow     = UINT_MAX;  // min free heap seen in this dip
+static uint32_t heapDipLargest = 0;         // largest free block AT that trough
+static uint32_t heapDipSampled = 0;         // free level when heapDipLargest was taken
 
 void protocol_main_loop() {
     start_polling();
@@ -394,6 +436,19 @@ void protocol_main_loop() {
         protocol_execute_realtime();  // Runtime command check point.
         if (sys.abort) {
             sys.abort = false;
+        }
+
+        // A clean pattern stop (Cmd::StopJob) flagged a theta normalize.  This
+        // MUST run in the main task, not the poller: config->_kinematics->stop()
+        // -> normalize_theta() calls protocol_buffer_synchronize(), which pumps
+        // the realtime engine and Stepper::prep_buffer().  Run from the poller it
+        // raced the main loop's prep_buffer / a concurrent reset and faulted the
+        // stepper ISR.  Fires once the stopped job has aborted and settled Idle.
+        if (rtStopJob && !Job::active() && state_is(State::Idle)) {
+            rtStopJob = false;
+            if (config && config->_kinematics) {
+                config->_kinematics->stop();
+            }
         }
 
         // Run a web-requested home (/sand_home) here in the main task so its
@@ -463,8 +518,38 @@ void protocol_main_loop() {
         if (newHeapSize < heapLowWater) {
             heapLowWater = newHeapSize;
         }
-        // Consider reporting when the minimum has not yet been reported and it is low enough.
-        if (heapLowWater < heapLowWaterReported && heapLowWater < heapWarnThreshold) {
+
+        // Out of the woods: end this dip so the next one reports independently.
+        // Gated on a dip deep enough to have been worth reporting, so an ordinary
+        // healthy loop never touches any of this state.
+        if (newHeapSize >= heapRearmThreshold && heapDipLow < heapWarnThreshold) {
+            heapDipLow           = UINT_MAX;
+            heapDipLargest       = 0;
+            heapDipSampled       = 0;
+            heapLowWaterReported = UINT_MAX;
+        }
+
+        if (newHeapSize < heapDipLow) {
+            // Sample the largest free block AT the trough rather than when the
+            // warning is finally printed.  Pairing a historical minimum with a
+            // live largest-block is what produced log lines like "Low memory:
+            // 2452 bytes, largest 65524" -- arithmetically impossible for one
+            // instant, and read in the field as a dying board when in fact the
+            // heap had already recovered.
+            //
+            // Walking the free list is not free, so only sample in the danger
+            // zone and only when the trough moves 256+ bytes past the last
+            // sample: that bounds a whole dip to ~60 walks no matter how slowly
+            // it drains, and costs nothing at all above the threshold.
+            if (newHeapSize < heapWarnThreshold && (!heapDipSampled || heapDipSampled - newHeapSize >= 256)) {
+                heapDipLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+                heapDipSampled = newHeapSize;
+            }
+            heapDipLow = newHeapSize;
+        }
+
+        // Consider reporting when this dip's minimum has not yet been reported and it is low enough.
+        if (heapDipLow < heapLowWaterReported && heapDipLow < heapWarnThreshold) {
             // typecast to uint32_t handles roll-over for this case
             uint32_t ticksSinceReported = (getCpuTicks() - heapLowWaterReportTime);
             uint32_t tickLimit          = usToCpuTicks(200000);
@@ -472,16 +557,20 @@ void protocol_main_loop() {
             // dropped significantly (2k bytes) since the last report.
             // This prevents a cycle where the reporting itself consumes some heap and triggers another
             // report, but the true minimum is reported eventually, and large drops are reported immediately.
-            if ((heapLowWater < heapLowWaterReported - 2048) || (ticksSinceReported > tickLimit)) {
+            if ((heapDipLow < heapLowWaterReported - 2048) || (ticksSinceReported > tickLimit)) {
                 // Name the traffic in flight: heap craters have always come
                 // from connection pileups behind whatever the single-threaded
                 // web server was serving, and the low-water mark alone can't
                 // say what that was after the fact.
                 char httpctx[80];
                 sand_http_heap_context(httpctx, sizeof(httpctx));
-                log_warn("Low memory: " << heapLowWater << " bytes, largest " << heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) << ", "
-                                        << httpctx);
-                heapLowWaterReported   = heapLowWater;
+                // "dipped to X (largest Y)" is the trough; "now" is this instant.
+                // Both pairs are internally consistent, and the gap between them
+                // is what says whether the board is still in trouble.
+                log_warn("Low memory: dipped to " << heapDipLow << " bytes (largest " << heapDipLargest << "), now " << newHeapSize
+                                                  << " free/" << heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) << " largest, "
+                                                  << httpctx);
+                heapLowWaterReported   = heapDipLow;
                 heapLowWaterReportTime = getCpuTicks();
             }
         }

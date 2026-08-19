@@ -49,6 +49,11 @@
     $LED/IdleEffect=none|<effect>  while Idle/Hold
   "none" (the default) leaves the strip fully manual.  The module
   receives its own auto-reports (like Status_Outputs) to track state.
+  A hook yields to an explicit effect change ($Sand/Led=effect=... or
+  $LED/Effect=...) until the machine next changes state category, so
+  e.g. $LED/IdleEffect=off can never make the app's power button a
+  no-op; /sand_status reports the effect actually showing plus which
+  hook, if any, is overriding it.
 
   Like Status_Outputs, this is a Channel + ConfigurableModule; the
   channel-polling task calls pollLine() continuously (even while a job
@@ -63,6 +68,7 @@
 #include "Module.h"
 #include "Channel.h"
 #include "Pin.h"
+#include "LedHook.h"
 
 #include <string>
 #include <cstdlib>
@@ -92,6 +98,15 @@ public:
     // return to idle.  Reached from $Sand/Led and /sand_led.
     static Leds* instance() { return _instance; }
     Error        setLive(const std::string& key, const std::string& value);
+
+    // What the strip is ACTUALLY showing, and why that differs from
+    // $LED/Effect (nullptr = it does not).  Reported by /sand_status: without
+    // it a table whose $LED/IdleEffect=off holds the strip dark still answers
+    // "effect":"rainbow", so the app claims the LEDs are on and its power
+    // button looks broken.  Sources: "quiet" (Still Sands), "run"/"idle" (the
+    // $LED/RunEffect / $LED/IdleEffect state hooks).
+    const char* activeEffect();
+    const char* overrideSource();
 
     // Still Sands: force the strip off (or back on) during quiet hours, in
     // memory only - no NVS write, works whether idle or running, and overrides
@@ -169,6 +184,8 @@ private:
     static constexpr int kBalls = 3;
 
     void render();
+    int  hookEffect();       // the state hook in force, or -1
+    int  effectiveEffect();  // what the strip shows: quiet > live > hook > setting
     void renderEffect(int effect, uint8_t speed, bool nested = false);  // fills _fb (0..255 per channel)
     void commit(uint8_t brightness);               // _fb -> _pixels, applies master brightness
     void parse_state_report();
@@ -223,7 +240,11 @@ private:
     // Machine-state tracking (poll task only: reports arrive via our
     // own autoReport, which runs inside pollLine)
     std::string _report;                 // partial report line being received
-    int         _auto_effect = -1;       // -1: no override; else EFFECT_*
+
+    // State-hook override ($LED/RunEffect while Run/Jog/Home, $LED/IdleEffect
+    // while Idle/Hold) and whose choice currently wins -- see LedHook.h.
+    LedHook _hook;
+    int     _last_setting_effect = -1;  // $LED/Effect as of the last frame
 
     // Live overrides ($Sand/Led / /sand_led).  Empty string = unset, so the
     // persisted setting is used.  Set while moving, flushed to NVS at idle.

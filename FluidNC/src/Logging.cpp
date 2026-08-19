@@ -16,7 +16,12 @@ bool atMsgLevel(MsgLevel level) {
 }
 
 LogStream::LogStream(Channel& channel, MsgLevel level) : _channel(channel), _level(level) {
-    _line = new std::string();
+    // nothrow: logging must never be the thing that panics the board.  Under a
+    // heap crater the old throwing `new` turned a caught std::bad_alloc back
+    // into an uncaught one the instant any catch handler tried to log it (the
+    // Playlist load handlers did exactly that).  A null _line makes write() and
+    // the dtor no-ops, so the message is dropped instead of aborting.
+    _line = new (std::nothrow) std::string();
 }
 
 LogStream::LogStream(Channel& channel, MsgLevel level, const char* name) : LogStream(channel, level) {
@@ -27,13 +32,28 @@ LogStream::LogStream(Channel& channel, const char* name) : LogStream(channel, Ms
 LogStream::LogStream(MsgLevel level, const char* name) : LogStream(allChannels, level, name) {}
 
 size_t LogStream::write(uint8_t c) {
-    *_line += (char)c;
+    if (_line) {
+        // The append itself can throw bad_alloc while growing under low heap.
+        // Swallow it, drop the rest of the message, and never propagate -- a
+        // dropped log line is always preferable to abort().
+        try {
+            *_line += (char)c;
+        } catch (...) {
+            delete _line;
+            _line = nullptr;
+        }
+    }
     return 1;
 }
 
 LogStream::~LogStream() {
-    if ((*_line).length() && (*_line)[0] == '[') {
-        *_line += ']';
+    if (!_line) {
+        return;  // message was dropped under low heap; see the ctor and write()
     }
-    _channel.sendLine(_level, _line);
+    if (_line->length() && (*_line)[0] == '[') {
+        try {
+            *_line += ']';
+        } catch (...) {}
+    }
+    _channel.sendLine(_level, _line);  // takes ownership of _line
 }

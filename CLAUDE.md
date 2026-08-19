@@ -192,6 +192,20 @@ works). Config: `config_dlc32max_thetarho.yaml`.
   radio mode.
 - **Config-gated modules**: `Playlist` and `Leds` only exist if their config section
   is present.
+- **A `$LED/RunEffect`/`$LED/IdleEffect` state hook must never outrank an explicit
+  effect change.** The hooks override `$LED/Effect` while the machine is Run/Jog/Home
+  resp. Idle/Hold, and `off` is a legal hook value — so `$LED/IdleEffect=off` used to
+  make every "turn the LEDs on" at an idle table a silent no-op: `$Sand/Led=effect=…`
+  takes the *idle* branch (persist to NVS), the hook keeps rendering `off`, and
+  `/sand_status` still answered `"effect":"rainbow"`, so the app claimed the LEDs were
+  on. Customers report this as **"only Brightness 0 will work"** and "it works during
+  the boot homing but not after" — during homing the *run* hook (usually `none`) is in
+  force and a live override beats the hook anyway. `LedHook` (std-only, unit-tested)
+  now suspends the hook for the current state category on any explicit effect change
+  and re-arms it when the category changes; `/sand_status` reports `led.active` (what
+  is really rendering) plus `led.override` (`idle`/`run`/`quiet`). The app judges its
+  power button on `active`, not `effect`. When touching this, remember the hooks must
+  be read fresh every frame or `=none` stops taking effect immediately.
 - **Progress %** = executed motion, not file-read position (the reader leads motion by
   the queued planner blocks); reported `-1` during a pre-execution clear.
 - **A playlist tolerates unplayable entries; a single `$Sand/Run` does not.** In a
@@ -294,7 +308,7 @@ works). Config: `config_dlc32max_thetarho.yaml`.
 
 `FluidNC/src/`: `SandApi.{h,cpp}` (`$Sand/*`, `/sand_*` JSON), `SandStatus.{h,cpp}`
 (status JSON + progress math), `Playlist.{h,cpp}` + `PlaylistParse.{h,cpp}` (playlist
-state machine + clear policy, single-run `$Sand/Run … clear=`), `Leds.{h,cpp}`,
+state machine + clear policy, single-run `$Sand/Run … clear=`), `Leds.{h,cpp}` + `LedHook.h` (state-hook precedence, std-only),
 `Kinematics/ThetaRho.cpp`, `InputFile.cpp` (progress), `Protocol.cpp` (homing event,
 job stack), `WebUI/WebServer.cpp` (routes), `WebUI/WifiConfig.{h,cpp}` +
 `WebUI/WifiPortalPage.h` (WiFi setup portal: fallback AP = captive setup page,

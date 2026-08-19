@@ -123,11 +123,18 @@ void AllChannels::listChannels(Channel& out) {
 }
 
 void AllChannels::flushRx() {
-    _mutex_general.lock();
+    // Uses _mutex_pollLine, NOT _mutex_general.  flushRx() discards per-channel
+    // receive state (_queue / _line / _linelen) that the poller task grows
+    // inside AllChannels::poll() under _mutex_pollLine.  Guarding it with a
+    // different mutex let flushRx() -- called from the protocol task on a 0x18
+    // soft reset -- pop() a std::deque the poller was concurrently push()ing,
+    // corrupting the deque (StoreProhibited / heap_caps abort, several allocs
+    // later).  This was the top field-panic suspect: "0x18 over telnet during a
+    // job".  Same lock as the pusher => they can no longer overlap.
+    std::lock_guard<std::mutex> lock(_mutex_pollLine);
     for (auto channel : _channelq) {
         channel->flushRx();
     }
-    _mutex_general.unlock();
 }
 
 size_t AllChannels::write(uint8_t data) {
@@ -198,17 +205,20 @@ Channel* AllChannels::poll(char* line) {
     // To avoid starving other channels when one has a lot
     // of traffic, we poll the other channels before the last
     // one that returned a line.
-    _mutex_pollLine.lock();
+    //
+    // The lock is held across the _lastChannel retry below too.  Previously it
+    // was released first, so that pollLine() ran unguarded -- and it push()es
+    // the same _queue that flushRx() (protocol task) pop()s on a reset.  The
+    // lock_guard also guarantees the release on every return path.
+    std::lock_guard<std::mutex> lock(_mutex_pollLine);
 
     for (auto channel : _channelq) {
         // Skip the last channel in the loop
         if (channel != _lastChannel && channel->pollLine(line) == Error::Ok) {
             _lastChannel = channel;
-            _mutex_pollLine.unlock();
             return _lastChannel;
         }
     }
-    _mutex_pollLine.unlock();
     // If no other channel returned a line, try the last one
     if (_lastChannel && _lastChannel->pollLine(line) == Error::Ok) {
         return _lastChannel;

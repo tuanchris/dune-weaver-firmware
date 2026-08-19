@@ -99,9 +99,20 @@ uint64_t localfs_size() {
     return space.capacity;
 }
 
+// Size of the static buffer canonicalPath() builds into.  insertFsName() and
+// the length guard in canonicalPath() both key off this so the two can never
+// disagree.
+static constexpr size_t kCanonicalPathSize = 128;
+
 static void insertFsName(char* s, const char* prefix) {
     size_t slen = strlen(s);
     size_t plen = strlen(prefix);
+    // Second layer of overflow defense (canonicalPath() bounds its input too):
+    // the result is '/' + prefix + s + NUL.  A long URL reaching here used to
+    // memmove off the end of the 128-byte buffer -> .bss smash.  Refuse instead.
+    if (1 + plen + slen + 1 > kCanonicalPathSize) {
+        return;
+    }
     memmove(s + 1 + plen, s, slen + 1);
     memmove(s + 1, prefix, plen);
     *s = '/';
@@ -140,8 +151,19 @@ static bool replacedFsName(char* s, const char* replaced, const char* with) {
 }
 
 const char* canonicalPath(const char* filename, const char* defaultFs) {
-    static char path[128];
-    strncpy(path, filename, 128);
+    static char path[kCanonicalPathSize];
+    // Overflow guard: the old strncpy(path, filename, 128) left NO terminator
+    // for inputs >= 128 bytes, after which insertFsName()/strchrnul() scanned
+    // and memmove'd off the end -- a .bss overflow driven by GET /<long URL>
+    // (unauthenticated: handle_not_found falls through to here).  Reject any
+    // input that can't fit even after a '/'+prefix is prepended; an empty path
+    // just fails to open, so the caller returns 404.
+    if (!filename || (strlen(filename) + strlen(defaultFs) + 3) >= kCanonicalPathSize) {
+        path[0] = '\0';
+        return path;
+    }
+    strncpy(path, filename, kCanonicalPathSize - 1);
+    path[kCanonicalPathSize - 1] = '\0';
 
     // Map file system names to canonical form.  The input name is case-independent,
     // while the canonical name is lower case.

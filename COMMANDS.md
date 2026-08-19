@@ -270,6 +270,21 @@ idle, so it survives the next reboot.
 curl "$B/command?plain=\$LED/RunEffect=fire"     # while Run/Jog/Home
 curl "$B/command?plain=\$LED/IdleEffect=breathe" # while Idle/Hold
 #   values: none | <any effect name from the table above>
+curl "$B/command?plain=\$LED/IdleEffect=none"    # stop overriding while idle
+```
+
+A hook set to `off` keeps the strip dark for as long as the table is in that state —
+that is the usual reason for "the LEDs won't turn on any more". Setting an effect
+(`$Sand/Led=effect=…` / `$LED/Effect=…`) beats the hook until the table next starts or
+stops moving, so manual control always works; `=none` clears the hook for good. Check
+which one is winning:
+
+```bash
+curl -s "$B/sand_status" | python3 -c 'import json,sys; d=json.load(sys.stdin)["led"]; print(d)'
+#   {"effect": "rainbow", "active": "off", "override": "idle", "brightness": 40}
+#   active  = what the strip is really showing
+#   override= "idle"/"run" (a state hook) or "quiet" (Still Sands); absent = nothing
+curl -s "$B/sand_settings" | grep -i 'LED/IdleEffect\|LED/RunEffect\|Sands/'
 ```
 
 ---
@@ -406,7 +421,8 @@ curl "$B/command?plain=\$/macros/startup_line0"   # read a config value at runti
 When `$Sand/Password` is set, **control** routes need the key (`?key=` or an
 `X-Sand-Key` header) and answer **401** without it; **reads stay open**
 (`/sand_status`, `/sand_patterns`, logs, `/wifi_status`, file downloads). Telnet
-refuses clients while locked; ArduinoOTA needs the same password (applies on next
+is **off by default** (`$Telnet/Enable=ON` to enable) and refuses clients while
+locked; ArduinoOTA needs the same password (applies on next
 boot). Serial over USB is never gated — that's the recovery path. Full route
 split: API.md → "Security / constraints".
 
@@ -486,8 +502,14 @@ then ignored on every boot, so every table stayed stuck on its config name.)*
 
 ```bash
 curl "$B/command?plain=\$MDNS/Enable"             # ON / OFF
-curl "$B/command?plain=\$MDNS/Enable=OFF"         # then reboot; the table is IP-only
+curl "$B/command?plain=\$MDNS/Enable=OFF"         # takes effect at once; the table is IP-only
+curl "$B/command?plain=\$MDNS/Enable=ON"          # and back, no reboot either way
 ```
+
+*(Before v0.1.19 `OFF` only took effect on the next reboot: it left a running
+responder answering queries **and** switched off the heap guard that sheds it under
+pressure — strictly worse than leaving mDNS on. Always reboot after setting it on
+v0.1.18 and earlier.)*
 
 Kills `<name>.local` and the service browse the app uses to find tables; **every HTTP
 route keeps working by IP**. Worth reaching for if a table reboots on a busy network

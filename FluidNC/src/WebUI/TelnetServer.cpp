@@ -7,6 +7,7 @@
 
 #include "Mdns.h"
 #include "src/Report.h"               // report_init_message()
+#include "src/Protocol.h"             // drain_messages()
 #include "src/SettingsDefinitions.h"  // sand_password ($Sand/Password API lock)
 
 #include <WiFi.h>
@@ -19,6 +20,8 @@ namespace WebUI {
     uint16_t TelnetServer::_port = 0;
 
     std::queue<TelnetClient*> TelnetServer::_disconnected;
+    std::mutex                TelnetServer::_disconnected_mtx;
+    int                       TelnetServer::_client_count = 0;
 
     void TelnetServer::init() {
         if (WiFi.getMode() == WIFI_OFF) {
@@ -64,19 +67,46 @@ namespace WebUI {
             return;
         }
 
-        while (_disconnected.size()) {
+        while (true) {
+            TelnetClient* client = nullptr;
+            {
+                // Pop under the lock so we never race a concurrent push from
+                // TelnetClient::closeOnDisconnect() (output task).
+                std::lock_guard<std::mutex> lock(_disconnected_mtx);
+                if (_disconnected.empty()) {
+                    break;
+                }
+                client = _disconnected.front();
+                _disconnected.pop();
+            }
             log_debug("Telnet client disconnected");
-            TelnetClient* client = _disconnected.front();
-            _disconnected.pop();
+            // Flush the async output queue before deleting: it holds raw
+            // Channel pointers, and this client IS a Channel, so a still-queued
+            // log message would make output_loop call a method on freed memory
+            // (__cxa_pure_virtual -> abort()).  Same fix as Job::pop().
+            drain_messages();
             allChannels.deregistration(client);
             delete client;
+            if (_client_count > 0) {
+                --_client_count;
+            }
         }
 
         //check if there are any new clients
         if (_wifiServer->hasClient()) {
-            WiFiClient* tcpClient = new WiFiClient(_wifiServer->available());
+            // Refuse under low heap or at the client cap, BEFORE allocating the
+            // ~1.5 KB client.  Accepting-then-stopping drops the pending socket
+            // without a heap-heavy TelnetClient.  (The old `new` had no floor
+            // and its `if (!tcpClient)` guard was dead code -- a throwing new
+            // never returns null.)
+            if (ESP.getMaxAllocHeap() < ACCEPT_HEAP_FLOOR || _client_count >= MAX_TLNT_CLIENTS) {
+                WiFiClient reject = _wifiServer->available();
+                reject.stop();
+                return;
+            }
+            WiFiClient* tcpClient = new (std::nothrow) WiFiClient(_wifiServer->available());
             if (!tcpClient) {
-                log_error("Creating telnet client failed");
+                return;  // out of heap: drop the connection rather than abort
             }
             // $Sand/Password: telnet has no key mechanism and would bypass
             // the HTTP lock entirely, so a locked table refuses telnet
@@ -88,9 +118,15 @@ namespace WebUI {
                 delete tcpClient;
                 return;
             }
+            TelnetClient* tnc = new (std::nothrow) TelnetClient(tcpClient);
+            if (!tnc) {
+                tcpClient->stop();
+                delete tcpClient;
+                return;
+            }
             log_debug("Telnet from " << tcpClient->remoteIP());
-            TelnetClient* tnc = new TelnetClient(tcpClient);
             allChannels.registration(tnc);
+            ++_client_count;
         }
     }
 

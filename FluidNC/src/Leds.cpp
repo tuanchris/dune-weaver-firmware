@@ -121,6 +121,17 @@ namespace {
         auto it = m.find(name.c_str());
         return it == m.end() ? dflt : it->second;
     }
+
+    // id -> name.  Returns a string literal from the map, so the pointer stays
+    // valid for callers on other tasks (unlike one into a live std::string).
+    const char* enumName(const enum_opt_t& m, int id) {
+        for (const auto& kv : m) {
+            if (kv.second == id) {
+                return kv.first;
+            }
+        }
+        return "off";
+    }
 }
 
 Leds* Leds::_instance = nullptr;
@@ -225,6 +236,10 @@ void Leds::init() {
         _ballbright  = holdOk(new IntSetting("LED ball blob brightness", EXTENDED, WG, NULL, "LED/BallBright", 255, 0, 255));
         _ballbgbright = holdOk(new IntSetting("LED ball background brightness", EXTENDED, WG, NULL, "LED/BallBgBright", 255, 0, 255));
     }
+    // Seed render()'s change detector, or the first frame reads the loaded
+    // $LED/Effect as a fresh manual choice and suspends the hook for the boot
+    // homing.
+    _last_setting_effect = _effect->get();
 
     log_info("leds: " << _num_leds << " WS2812 on pin " << _data_pin.name() << " order " << _color_order);
 
@@ -341,9 +356,19 @@ Error Leds::setLive(const std::string& key, const std::string& value) {
         if (enumId(ledEffects, value, -1) < 0) {
             return Error::InvalidStatement;
         }
+        // Picking an effect (the app's power button included) outranks the state
+        // hook until the machine changes state category.  Without this,
+        // $LED/IdleEffect=off makes every "turn the LEDs on" a silent no-op
+        // while idle: the setting is written, the hook keeps the strip dark, and
+        // the only value that appears to work is brightness 0.
         if (idle) {
-            return _effect->setStringValue(value);
+            Error err = _effect->setStringValue(value);
+            if (err == Error::Ok) {
+                _hook.manualChoice();
+            }
+            return err;
         }
+        _hook.manualChoice();
         _live_effect = value;
     } else if (key == "palette") {
         if (enumId(ledPalettes, value, -1) < 0) {
@@ -438,6 +463,10 @@ void Leds::flushLive() {
     if (!_live_effect.empty()) {
         _effect->setStringValue(_live_effect);
         _live_effect.clear();
+        // Persisting the override is bookkeeping, not a new choice by the user:
+        // keep render()'s change detector from reading it as one, so the state
+        // hook for the state we just entered still applies.
+        _last_setting_effect = _effect->get();
     }
     if (!_live_palette.empty()) {
         _palette->setStringValue(_live_palette);
@@ -1141,6 +1170,42 @@ void Leds::commit(uint8_t brightness) {
     }
 }
 
+// The state hook in force, or -1 for none.  Suppressed while the user's own
+// effect choice stands for this state category (see LedHook).
+int Leds::hookEffect() {
+    return _hook.effect(_run_effect ? _run_effect->get() : -1, _idle_effect ? _idle_effect->get() : -1);
+}
+
+// Still Sands quiet-off wins over everything; then the live override beats the
+// state hook, which beats the persisted setting.
+int Leds::effectiveEffect() {
+    if (_quiet_off) {
+        return EFFECT_OFF;
+    }
+    if (!_live_effect.empty()) {
+        return enumId(ledEffects, _live_effect, _effect->get());
+    }
+    int hook = hookEffect();
+    return hook >= 0 ? hook : _effect->get();
+}
+
+const char* Leds::activeEffect() {
+    return enumName(ledEffects, effectiveEffect());
+}
+
+const char* Leds::overrideSource() {
+    if (_quiet_off) {
+        return "quiet";
+    }
+    if (!_live_effect.empty()) {
+        return nullptr;  // the live value IS the user's own choice
+    }
+    if (hookEffect() < 0) {
+        return nullptr;
+    }
+    return _hook.cat() == LedHook::CatRun ? "run" : "idle";
+}
+
 void Leds::render() {
     // Skip the frame if the previous transmission is still in flight;
     // the pixel buffer must not change while the translator reads it.
@@ -1148,16 +1213,16 @@ void Leds::render() {
         return;
     }
 
-    // Still Sands quiet-off wins over everything; then live override beats the
-    // state hook beats the persisted setting.
-    int effect;
-    if (_quiet_off) {
-        effect = EFFECT_OFF;
-    } else if (!_live_effect.empty()) {
-        effect = enumId(ledEffects, _live_effect, _effect->get());
-    } else {
-        effect = _auto_effect >= 0 ? _auto_effect : _effect->get();
+    // A change to $LED/Effect from any source -- including a bare
+    // "$LED/Effect=static" over serial, which never reaches setLive() -- is an
+    // explicit choice, so it releases the state hook the same way.
+    int setting_effect = _effect->get();
+    if (setting_effect != _last_setting_effect) {
+        _last_setting_effect = setting_effect;
+        _hook.manualChoice();
     }
+
+    int effect   = effectiveEffect();
     _cur_palette = _live_palette.empty() ? (_palette ? _palette->get() : 0) : enumId(ledPalettes, _live_palette, 0);
 
     uint8_t brightness = _live_bright.empty() ? static_cast<uint8_t>(_brightness->get()) : static_cast<uint8_t>(atoi(_live_bright.c_str()));
@@ -1198,15 +1263,15 @@ void Leds::parse_state_report() {
     }
     std::string state = _report.substr(1, endpos - 1);
 
-    int hook = -1;
+    LedHook::Cat cat;
     if (state == "Run" || state == "Jog" || state == "Home") {
-        hook = _run_effect ? _run_effect->get() : EFFECT_NONE;
+        cat = LedHook::CatRun;
     } else if (state == "Idle" || state.rfind("Hold", 0) == 0) {
-        hook = _idle_effect ? _idle_effect->get() : EFFECT_NONE;
+        cat = LedHook::CatIdle;
     } else {
         return;  // Alarm/Door/etc: leave the strip as it is
     }
-    _auto_effect = hook == EFFECT_NONE ? -1 : hook;
+    _hook.reportCat(cat);
 }
 
 Error Leds::pollLine(char* line) {

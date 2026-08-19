@@ -59,7 +59,9 @@ namespace SandStatus {
         bool        quiet             = false;  // Still Sands active
 
         bool        has_led        = false;
-        const char* led_effect     = "off";
+        const char* led_effect     = "off";    // $LED/Effect: what the user chose
+        const char* led_active     = nullptr;  // what the strip is really showing; null = same as led_effect
+        const char* led_override   = nullptr;  // why they differ: "idle"|"run"|"quiet"; omitted if null
         int         led_brightness = 0;
 
         bool has_sd = false;  // SD configured; sd_ok omitted from JSON otherwise

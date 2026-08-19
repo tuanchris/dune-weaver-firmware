@@ -37,9 +37,14 @@ namespace WebUI {
         static std::vector<TxtItem> _txt;
 
         // Responder lifecycle.  _running tracks whether mdns_init() is in
-        // effect; _shed says we took it down ourselves and owe a restore.
+        // effect; _shed says we took it down ourselves under heap pressure and
+        // owe a restore; _off_by_setting says $MDNS/Enable went OFF at runtime
+        // and we owe a restart if it comes back ON.  The two are distinct: a
+        // shed restore waits out a cooldown and a heap floor, a setting restore
+        // is immediate.
         static bool     _running;
         static bool     _shed;
+        static bool     _off_by_setting;
         static uint32_t _shed_ms;     // millis() when we last shed
         static uint32_t _shed_count;  // consecutive sheds, drives the backoff
         static uint32_t _up_since;    // millis() when the responder last came up

@@ -294,6 +294,17 @@ void WebServer::_parseArguments(String data) {
   }
   log_v("args count: %d", _currentArgCount);
 
+  // DW fork: cap the arg count.  The loop above counts '&' with no bound, so
+  // GET /?&&&&...  (thousands of ampersands) would ask for a multi-KB
+  // contiguous RequestArgument[] (each element holds two Arduino Strings) ->
+  // std::bad_alloc -> panic in the poller task, on a healthy board and with no
+  // auth.  No legitimate request has this many args; extras past the cap are
+  // ignored by the parse loop below (it stops at _currentArgCount).
+  static const int kMaxArgs = 32;
+  if (_currentArgCount > kMaxArgs) {
+    _currentArgCount = kMaxArgs;
+  }
+
   _currentArgs = new RequestArgument[_currentArgCount+1];
   int pos = 0;
   int iarg;

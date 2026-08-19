@@ -610,8 +610,11 @@ void report_realtime_status(Channel& channel) {
             }
         }
     }
-    if (Job::active()) {
-        msg << "|" << Job::channel()->_progress;
+    // One lock acquisition, null-safe: Job::channel() returns nullptr if no job
+    // is active (or if another task popped it), so this replaces the former
+    // active()-then-channel() two-step that could dereference a freed job.
+    if (auto ch = Job::channel()) {
+        msg << "|" << ch->_progress;
     }
 #ifdef DEBUG_STEPPER_ISR
     msg << "|ISRs:" << Stepper::isr_count;

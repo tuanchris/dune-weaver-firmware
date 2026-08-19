@@ -83,19 +83,25 @@ void Job::abort() {
     }
 }
 
+// These four take job.top() and were previously unchecked: std::stack::top()
+// on an empty stack is undefined behavior (reads garbage past a std::deque and
+// dereferences it).  A caller that does `if (Job::active()) ... Job::channel()`
+// drops the lock between the two calls, so another task can pop the last job in
+// the gap and turn top() into a use-after-free.  Guard each one; callers already
+// treat null / false as "no job" (see polling_loop's Job::channel() handling).
 bool Job::get_param(const std::string& name, float& value) {
     std::lock_guard<std::recursive_mutex> lock(job_mtx);
-    return job.top()->get_param(name, value);
+    return job.empty() ? false : job.top()->get_param(name, value);
 }
 bool Job::set_param(const std::string& name, float value) {
     std::lock_guard<std::recursive_mutex> lock(job_mtx);
-    return job.top()->set_param(name, value);
+    return job.empty() ? false : job.top()->set_param(name, value);
 }
 bool Job::param_exists(const std::string& name) {
     std::lock_guard<std::recursive_mutex> lock(job_mtx);
-    return job.top()->param_exists(name);
+    return job.empty() ? false : job.top()->param_exists(name);
 }
 Channel* Job::channel() {
     std::lock_guard<std::recursive_mutex> lock(job_mtx);
-    return job.top()->channel();
+    return job.empty() ? nullptr : job.top()->channel();
 }
