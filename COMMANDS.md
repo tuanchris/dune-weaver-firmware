@@ -406,7 +406,9 @@ Upload/file-op failures return a real HTTP error (503 fs-inaccessible, 507 no sp
 
 ```bash
 # OTA firmware update (rejected with 409 while a pattern runs; works in Alarm)
-curl "$B/updatefw"                        # probe: {"status":"ready"|"busy","fw":"<version>"}
+curl "$B/updatefw"                        # probe: {"status":"ready"|"busy","fw":"<version>","mcu":"esp32"|"esp32s3"}
+#   flash the image matching "mcu" (esp32-firmware.bin / esp32s3-firmware.bin): a
+#   wrong-MCU image uploads fully and only fails at the final chip-ID check.
 curl -F "firmware.binS=$(wc -c < .pio/build/sandtable/firmware.bin)" \
      -F "firmware.bin=@.pio/build/sandtable/firmware.bin;filename=firmware.bin" "$B/updatefw"
 #   "status":"ok" -> board reboots ~1s later; poll /sand_status until uptime resets,

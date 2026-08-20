@@ -327,6 +327,12 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   //  = fragmentation trending toward an OOM panic — alert well before it hits ~2 KB
   "fw": "v0.1.2 (main-8035bb6e)",  // firmware version — compare against the app's
   //  latest release to offer an update; re-read after POST /updatefw to verify
+  "mcu": "esp32",              // build target: "esp32" | "esp32s3". OTA clients MUST
+  //  flash the matching MCU-prefixed release image (esp32-firmware.bin /
+  //  esp32s3-firmware.bin) — a wrong image uploads fully and is only rejected by the
+  //  chip-ID check at the very end (the 0xE9 magic byte is identical on both).
+  //  Absent on firmware that predates the field: treat as "esp32" (every table in
+  //  the field before the S3 board is one).
   "mac": "a0:b1:c2:d3:e4:f5",  // lowercase STA MAC — the table's STABLE IDENTITY.
   //  Key saved tables by this (not IP, not hostname): it dedupes a table added
   //  by IP against the same one found via mDNS (whose TXT carries the same
@@ -418,10 +424,16 @@ app can tell the table is still alive.
 ## Firmware update (OTA)
 
 `POST /updatefw` multipart: field `<name>S` = size in bytes, field `<name>` = the
-`firmware.bin` (an ESP32 app image; it is written to the inactive OTA slot).
+app image, which **must match this board's MCU** — flash the release asset the
+status/probe `mcu` field names (`esp32-firmware.bin` / `esp32s3-firmware.bin`; the
+unprefixed `firmware.bin` release alias is the ESP32 image). A wrong-MCU image
+uploads fully and only fails at the final chip-ID check (`"failed"`, old firmware
+keeps running) — the 0xE9 magic byte is identical on both chips, so nothing catches
+it earlier. The image is written to the inactive OTA slot.
 `GET /updatefw` (no file) probes availability first.
 
-Response `{"status", "code", "fw"}`:
+Response `{"status", "code", "fw", "mcu"}` (`mcu` absent on firmware predating it —
+treat as `"esp32"`):
 - `"ok"` (HTTP 200) — flashed; the board reboots ~1 s after responding. Poll
   `/sand_status` until `uptime` resets, then verify `fw` shows the new version
   (~10–30 s WiFi rejoin).

@@ -80,6 +80,12 @@ namespace SandStatus {
         const char* fw = nullptr;  // firmware version (git_info); omitted if null.
         // Lets the app decide when to offer an update and verify one took.
 
+        const char* mcu = nullptr;  // build target ("esp32"|"esp32s3"); omitted if null.
+        // Lets the app pick the matching MCU-prefixed release image for OTA —
+        // the image's chip-ID check only fires at the very END of a flash
+        // (Update.end), so without this a client cannot tell an S3 apart from
+        // an ESP32 until a whole wrong-image upload has been rejected.
+
         // Stable device identity, so clients can dedupe a table across
         // discovery paths (mDNS vs manual IP) and across DHCP changes.
         const char* mac      = nullptr;  // STA MAC "aa:bb:cc:dd:ee:ff"; omitted if null

@@ -41,6 +41,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <WiFi.h>           // WiFi.getHostname() for the status "hostname"
+#include <sdkconfig.h>      // CONFIG_IDF_TARGET for the status "mcu"
 #include <esp_system.h>     // esp_reset_reason() for "last_reset", esp_read_mac() for "mac"
 #include <esp_timer.h>      // esp_timer_get_time() for the status "uptime"
 #include <esp_heap_caps.h>  // heap_caps_get_largest_free_block() for "heap_largest"
@@ -390,6 +391,12 @@ std::string SandApi::statusJson() {
     // Firmware version so the app can offer updates and verify one took
     // after POST /updatefw.
     d.fw = git_info;
+
+    // Build target ("esp32"/"esp32s3") so OTA clients flash the matching
+    // MCU-prefixed release image — the chip-ID check that rejects a wrong one
+    // only fires after the whole upload (Update.end), so this is the only way
+    // to pick right up front.
+    d.mcu = CONFIG_IDF_TARGET;
 
     // Stable identity: hardware MAC + configured hostname, so clients can
     // dedupe this table across discovery paths and DHCP changes.

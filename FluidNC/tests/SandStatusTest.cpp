@@ -82,6 +82,11 @@ TEST(SandStatusEncode, HealthFieldsWhenSet) {
     EXPECT_TRUE(has(encode(d), "\"fw\":\"v0.1.3 (test)\""));
     EXPECT_EQ('}', j.back());
 
+    // Build target, so OTA clients pick the matching release image.
+    EXPECT_FALSE(has(j, "\"mcu\":"));  // omitted while unset
+    d.mcu = "esp32s3";
+    EXPECT_TRUE(has(encode(d), "\"mcu\":\"esp32s3\""));
+
     d.sd_ok = true;
     EXPECT_TRUE(has(encode(d), "\"sd_ok\":true"));
 }

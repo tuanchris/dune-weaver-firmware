@@ -163,6 +163,10 @@ namespace SandStatus {
             o += ',';
             member_str(o, "fw", d.fw);
         }
+        if (d.mcu && *d.mcu) {
+            o += ',';
+            member_str(o, "mcu", d.mcu);
+        }
         if (d.mac && *d.mac) {
             o += ',';
             member_str(o, "mac", d.mac);

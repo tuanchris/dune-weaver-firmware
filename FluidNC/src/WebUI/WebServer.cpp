@@ -38,6 +38,7 @@
 #include "src/Job.h"         // Job::active() to gate OTA while a pattern runs
 #include "src/Report.h"      // git_info for the /updatefw response
 #include "src/SettingsDefinitions.h"  // sand_password ($Sand/Password API lock)
+#include <sdkconfig.h>                // CONFIG_IDF_TARGET for the /updatefw "mcu"
 #include <esp_task_wdt.h>             // feed the WDT during long /sd/ file streams
 
 #include "src/HashFS.h"
@@ -1721,6 +1722,11 @@ namespace WebUI {
         j.member("status", ok ? "ok" : probe ? (busy ? "busy" : "ready") : busy ? "busy" : "failed");
         j.member("code", std::to_string(int(_upload_status)));
         j.member("fw", git_info);
+        // Build target ("esp32"/"esp32s3") so the app's probe picks the
+        // matching MCU-prefixed release image before uploading anything — the
+        // chip-ID check that rejects a wrong image only fires at Update.end,
+        // after the whole flash has streamed.
+        j.member("mcu", CONFIG_IDF_TARGET);
         j.end();
         sendJSON(ok ? 200 : busy ? 409 : probe ? 200 : 500, s);
 
