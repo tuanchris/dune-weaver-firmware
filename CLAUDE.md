@@ -77,9 +77,13 @@ works). Config: `config_dlc32max_thetarho.yaml`.
   (60→120→240s), `Low memory:` warnings naming the in-flight URI, and the STA
   supervisor recovered a `reason 7 (NOT_ASSOCED)` drop in 5s.
   **Do not read the S3's roomy idle heap as headroom** — 139k largest at idle still
-  collapses to ~10k under this load. Whether the ESP32 fails identically is **unknown**:
-  run the same gate against DWMP before calling any of this S3-specific, especially
-  since the mDNS shed guard has never been exercised by a gate on shipped ESP32 code.
+  collapses to ~10k under this load. The ESP32 **fails identically** (2026-08-20,
+  DWMP2 on v0.2.0: back-to-back FAIL then CLEAN, 0 reboots both; the FAIL was one
+  no-start via `mount_to_vfs 0x101` after the burst trough hit 7668 largest, file
+  verified readable) — so none of this is S3-specific, and a single FAIL with 0
+  reboots and a healthy heap trend means re-run the gate, not hold the release.
+  The same run exercised the mDNS shed guard on shipped-path ESP32 code for the
+  first time (7630 answered burst queries, no panic).
 - **Multi-segment HTTP responses can stall while the board reports itself healthy.**
   Seen twice: a 58k `GET /sand_patterns` returns HTTP 200 then **zero bytes** (or a
   truncated 4k/15k), and eventually even `/sand_status` returns 0 bytes — while the
