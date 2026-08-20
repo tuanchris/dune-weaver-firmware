@@ -1,0 +1,191 @@
+{
+  "name": "Dune Weaver Firmware",
+  "version": "v0.2.0",
+  "source_url": "https://github.com/tuanchris/dune-weaver-firmware/tree/v0.2.0",
+  "release_url": "https://github.com/tuanchris/dune-weaver-firmware/releases/tag/v0.2.0",
+  "images": {
+    "esp32-bootloader": {
+      "size": 17568,
+      "offset": "0x1000",
+      "path": "esp32-bootloader.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "5b1b0cd6bcbfd6de6d388652a46e9b6e341f36adb9127d1e654d21dadeae74bd"
+      }
+    },
+    "esp32-partitions": {
+      "size": 3072,
+      "offset": "0x8000",
+      "path": "esp32-partitions.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "0a8b5720e7b77ff11f1462458c3a509dee79224e5279898f26d6a2e3ae0517b7"
+      }
+    },
+    "esp32-bootapp": {
+      "size": 8192,
+      "offset": "0xe000",
+      "path": "esp32-boot_app0.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"
+      }
+    },
+    "esp32-firmware": {
+      "size": 1682864,
+      "offset": "0x10000",
+      "path": "esp32-firmware.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "b5ff9399379cf3e44580b5c9b3437ca5984279551c4ff91b484a741698e80a21"
+      }
+    },
+    "esp32-filesystem": {
+      "size": 131072,
+      "offset": "0x3d0000",
+      "path": "esp32-littlefs.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "ad30ec6022d225958b12d9d0b40d17ab10489de0acdeac21b25ed73fe1b3a13f"
+      }
+    },
+    "esp32s3-bootloader": {
+      "size": 15104,
+      "offset": "0x0",
+      "path": "esp32s3-bootloader.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "1776e4dd896a69d0a5c2e79957b0e2a88aa4129b1381d6478683515a1f6af343"
+      }
+    },
+    "esp32s3-partitions": {
+      "size": 3072,
+      "offset": "0x8000",
+      "path": "esp32s3-partitions.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "e8785be76da37fe969c989688231b354011f108a630303bbb2b65ed7bd0d33fa"
+      }
+    },
+    "esp32s3-bootapp": {
+      "size": 8192,
+      "offset": "0xe000",
+      "path": "esp32s3-boot_app0.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "f94c5d786a7a8fab06ac5d10e33bf37711a6697636dc037559ea19cc410a17f0"
+      }
+    },
+    "esp32s3-firmware": {
+      "size": 1616176,
+      "offset": "0x10000",
+      "path": "esp32s3-firmware.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "3111c26d77a4bc4eca2d0ccd74b85832dcc46d9fa16cb38ca04ed8247278c770"
+      }
+    },
+    "esp32s3-filesystem": {
+      "size": 1966080,
+      "offset": "0x610000",
+      "path": "esp32s3-littlefs.bin",
+      "signature": {
+        "algorithm": "SHA2-256",
+        "value": "714415e75f15cbccd8f6abea502c013597200eb807375b4c66d3295a49d0ed2f"
+      }
+    }
+  },
+  "installable": {
+    "name": "installable",
+    "description": "Things you can install",
+    "choice-name": "Processor type",
+    "choices": [
+      {
+        "name": "esp32",
+        "description": "ESP32-WROOM (MKS DLC32)",
+        "choice-name": "Installation type",
+        "choices": [
+          {
+            "name": "sandtable",
+            "description": "Dune Weaver sand table (WiFi + HTTP/JSON API)",
+            "choice-name": "Installation type",
+            "choices": [
+              {
+                "name": "fresh-install",
+                "description": "Complete install, erasing all previous data. Upload your table's config.yaml afterward.",
+                "erase": true,
+                "images": [
+                  "esp32-bootloader",
+                  "esp32-partitions",
+                  "esp32-bootapp",
+                  "esp32-firmware",
+                  "esp32-filesystem"
+                ]
+              },
+              {
+                "name": "firmware-update",
+                "description": "Update firmware only, preserving the filesystem (config.yaml, patterns).",
+                "erase": false,
+                "images": [
+                  "esp32-bootapp",
+                  "esp32-firmware"
+                ]
+              },
+              {
+                "name": "filesystem-update",
+                "description": "Replace the filesystem only, erasing previous filesystem data.",
+                "erase": false,
+                "images": [
+                  "esp32-filesystem"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "esp32s3",
+        "description": "ESP32-S3 (MKS DLC32 MAX)",
+        "choice-name": "Installation type",
+        "choices": [
+          {
+            "name": "sandtable",
+            "description": "Dune Weaver sand table (WiFi + HTTP/JSON API)",
+            "choice-name": "Installation type",
+            "choices": [
+              {
+                "name": "fresh-install",
+                "description": "Complete install, erasing all previous data. Upload your table's config.yaml afterward.",
+                "erase": true,
+                "images": [
+                  "esp32s3-bootloader",
+                  "esp32s3-partitions",
+                  "esp32s3-bootapp",
+                  "esp32s3-firmware",
+                  "esp32s3-filesystem"
+                ]
+              },
+              {
+                "name": "firmware-update",
+                "description": "Update firmware only, preserving the filesystem (config.yaml, patterns).",
+                "erase": false,
+                "images": [
+                  "esp32s3-bootapp",
+                  "esp32s3-firmware"
+                ]
+              },
+              {
+                "name": "filesystem-update",
+                "description": "Replace the filesystem only, erasing previous filesystem data.",
+                "erase": false,
+                "images": [
+                  "esp32s3-filesystem"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
