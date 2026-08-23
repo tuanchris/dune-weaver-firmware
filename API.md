@@ -141,7 +141,8 @@ Effective speed = base feed (`feed`) × `feed_override`/100; both are in `/sand_
 
 ### LEDs (NVS-persisted; only present if `leds:` is configured)
 `$LED/Effect=<name>` · `$LED/Palette=<name>` · `$LED/Color=RRGGBB` · `$LED/Color2=RRGGBB` ·
-`$LED/Brightness=0..255` · `$LED/Speed=1..255` · `$LED/RunEffect=none|<name>` · `$LED/IdleEffect=none|<name>`
+`$LED/Brightness=0..255` · `$LED/Speed=1..255` · `$LED/RunEffect=none|<name>` · `$LED/IdleEffect=none|<name>` ·
+`$LED/White=none|brighter|accurate|max` (RGBW strips — a 4-letter `color_order` such as `GRBW` — only: how each pixel's W byte is derived from its RGB, WLED's auto-white modes; default `accurate`. No effect on 3-byte strips; `/sand_status` `led.rgbw` says which you have.)
 `$LED/Direction=cw|ccw` · `$LED/Align=0..359` · `$LED/BallSize=1..200` (the `ball` effect: ring winding vs theta, angular offset, glow size in LEDs).
 More `ball` settings: `$LED/Color`=blob colour · `$LED/BallBright=0..255`=blob brightness · `$LED/Color2`=solid background colour · `$LED/BallBg=<effect>`=background sub-effect (`static`=solid Color2, `off`=black, or any effect name like `rainbow`/`fire`/`plasma` rendered behind the blob) · `$LED/BallBgBright=0..255`=background brightness · `$LED/Speed`=tracking smoothness (low=smoother/laggier, high=snappier). Motion is sub-pixel/anti-aliased; master `$LED/Brightness` still scales the whole strip.
 Effect names: `off static rainbow breathe colorloop theater scan running sine gradient sinelon twinkle sparkle fire candle meteor bouncing wipe dualscan juggle multicomet glitter dissolve ripple drip lightning fireworks plasma heartbeat strobe police chase railway pacifica aurora pride colorwaves bpm ball`
@@ -306,7 +307,7 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   //  pause_remaining = seconds left in the between-patterns pause ($Playlist/PauseTime),
   //  counting down live; pause_total = that pause's full length in seconds; both -1
   //  when not pausing. Progress bar fill = (pause_total - pause_remaining) / pause_total.
-  "led": { "effect": "rainbow", "active": "rainbow", "brightness": 40 },  // omitted if no leds: config
+  "led": { "effect": "rainbow", "active": "rainbow", "brightness": 40, "rgbw": false },  // omitted if no leds: config
   //  effect = the chosen effect ($LED/Effect, or a live mid-run override).
   //  active = what the strip is ACTUALLY showing (since v0.1.19; fall back to effect).
   //  These differ while something overrides the choice, and then an "override" member
@@ -314,6 +315,8 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
   //  "quiet" = Still Sands holding the strip off. Absent when nothing overrides.
   //  Show `active` to the user: reading only `effect` reports LEDs "on · rainbow" at a
   //  table whose $LED/IdleEffect=off is keeping it dark.
+  //  rgbw = true when the strip is 4 bytes/pixel (color_order has a W); only then does
+  //  $LED/White do anything, so hide the white-mode control otherwise.
   "sd_ok": true,              // boot-time SD readability probe; omitted if no SD configured.
   //  false = card didn't mount or root unreadable at boot (unseated/corrupt) -> surface
   //  a "check SD card" banner. Re-tested only on reboot.

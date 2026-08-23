@@ -132,6 +132,10 @@ namespace SandStatus {
             }
             o += ",\"brightness\":";
             append_int(o, d.led_brightness);
+            // 4-byte (RGBW) strip: $LED/White applies, so the app can show the
+            // white-mode picker only where it does something.
+            o += ",\"rgbw\":";
+            o += d.led_rgbw ? "true" : "false";
             o += '}';
         }
 

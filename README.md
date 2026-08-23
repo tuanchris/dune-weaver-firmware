@@ -14,7 +14,7 @@ firmware folds all of that onto the ESP32:
 
 - **ThetaRho kinematics** and `.thr` pattern playback
 - **Playlists** with shuffle, pauses, adaptive clear-between-patterns
-- **WS2812 LED** effects driven directly from the board (no WLED)
+- **WS2812 / SK6812 RGBW LED** effects driven directly from the board (no WLED)
 - **Scheduler / quiet hours** ("Still Sands")
 - **Selectable homing** — limit-switch (sensor) or blind crash-into-stop, plus a
   configurable theta zero offset

@@ -4,13 +4,15 @@
 #pragma once
 
 /*
-  Leds drives a WS2812/NeoPixel strip from a GPIO via the RMT peripheral.
+  Leds drives a WS2812/SK6812/NeoPixel strip from a GPIO via the RMT
+  peripheral.
 
   Config:
     leds:
       data_pin: gpio.32
       num_leds: 60
-      color_order: GRB     # any permutation of R, G, B
+      color_order: GRB     # any permutation of R, G, B; add W for an RGBW
+                           # strip (e.g. GRBW for SK6812 RGBW = 4 bytes/pixel)
       frame_ms: 33         # animation tick, ~30 fps
 
   Runtime control is via NVS-persisted settings, so the strip remembers
@@ -22,6 +24,10 @@
     $LED/Color2=RRGGBB     (secondary color, used by 'gradient')
     $LED/Brightness=0..255 (master brightness over every effect)
     $LED/Speed=1..255      (animation speed)
+    $LED/White=none|brighter|accurate|max
+                           (RGBW strips only: how the W byte is derived
+                           from each pixel's RGB -- WLED's auto-white
+                           modes, see LedWhite.h; default accurate)
     $LED/Direction=cw|ccw  ('ball' effect: ring winding vs theta)
     $LED/Align=0..359      ('ball' effect: angular offset, degrees)
 
@@ -69,6 +75,7 @@
 #include "Channel.h"
 #include "Pin.h"
 #include "LedHook.h"
+#include "LedWhite.h"
 
 #include <string>
 #include <cstdlib>
@@ -115,6 +122,7 @@ public:
     // Effective values for status reporting (live override or persisted).
     const char*  liveEffect() { return _live_effect.empty() ? nullptr : _live_effect.c_str(); }
     int          liveBrightness() { return _live_bright.empty() ? -1 : atoi(_live_bright.c_str()); }
+    bool         rgbw() const { return _order.rgbw(); }  // 4-byte strip (color_order has a W)
 
     // Channel interface; receives status reports, produces no input
     size_t write(uint8_t data) override;
@@ -228,6 +236,7 @@ private:
     StringSetting* _color2      = nullptr;
     IntSetting*    _brightness  = nullptr;
     IntSetting*    _speed       = nullptr;
+    EnumSetting*   _white       = nullptr;  // RGBW strips: auto-white mode (LedWhite::Mode)
     EnumSetting*   _run_effect  = nullptr;
     EnumSetting*   _idle_effect = nullptr;
     EnumSetting*   _direction   = nullptr;  // 'ball' effect: ring winding vs theta (cw/ccw)
@@ -258,10 +267,11 @@ private:
 
     // Driver state
     bool     _ready = false;
-    uint8_t* _pixels = nullptr;  // 3 bytes per LED, in wire order
+    uint8_t* _pixels = nullptr;  // _order.bpp (3 or 4) bytes per LED, in wire order
     uint8_t* _fb     = nullptr;  // 3 bytes per LED, logical R,G,B working buffer
     uint8_t* _heat   = nullptr;  // 1 byte per LED, fire effect heat
-    int      _ri = 1, _gi = 0, _bi = 2;  // RGB -> wire-order byte offsets (GRB default)
+    LedWhite::Order _order;      // wire byte order incl. the W slot (from color_order)
+    LedWhite::Mode  _white_mode = LedWhite::Accurate;  // $LED/White, resolved once per frame
     uint16_t _phase      = 0;  // animation phase, 8.8 fixed point
     uint32_t _last_frame = 0;
 

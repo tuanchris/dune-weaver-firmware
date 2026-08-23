@@ -53,6 +53,10 @@ namespace {
     enum_opt_t ledDirections = {
         { "cw", 0 }, { "ccw", 1 },
     };
+    // $LED/White: WLED's auto-white modes (ids = LedWhite::Mode)
+    enum_opt_t ledWhiteModes = {
+        { "none", LedWhite::None }, { "brighter", LedWhite::Brighter }, { "accurate", LedWhite::Accurate }, { "max", LedWhite::Max },
+    };
     // Same list plus "none" (no override) for the state hooks. Derived from
     // ledEffects so the two can never drift as effects are added.
     enum_opt_t ledHookEffects = [] {
@@ -137,31 +141,11 @@ namespace {
 Leds* Leds::_instance = nullptr;
 
 void Leds::afterParse() {
-    // Reduce the color order string to byte offsets in wire order
-    if (_color_order.length() == 3) {
-        for (int i = 0; i < 3; i++) {
-            switch (_color_order[i]) {
-                case 'R':
-                case 'r':
-                    _ri = i;
-                    break;
-                case 'G':
-                case 'g':
-                    _gi = i;
-                    break;
-                case 'B':
-                case 'b':
-                    _bi = i;
-                    break;
-            }
-        }
-    }
-    bool distinct = _ri != _gi && _gi != _bi && _ri != _bi;
-    if (!distinct) {
+    // Reduce the color order string to wire byte offsets (+ the W slot and
+    // 3-vs-4 bytes per pixel for RGBW strips)
+    if (!LedWhite::parseOrder(_color_order.c_str(), _order)) {
         log_warn("leds: bad color_order '" << _color_order << "', using GRB");
-        _ri = 1;
-        _gi = 0;
-        _bi = 2;
+        _order = LedWhite::Order();
     }
 }
 
@@ -210,10 +194,10 @@ void Leds::init() {
     WS2812_ONE.level1     = 0;
     log_debug("leds: RMT " << clk_hz << " Hz, 0/1 high ticks " << ticks(400) << "/" << ticks(800));
 
-    _pixels = new uint8_t[_num_leds * 3];
+    _pixels = new uint8_t[_num_leds * _order.bpp];
     _fb     = new uint8_t[_num_leds * 3];
     _heat   = new uint8_t[_num_leds];
-    memset(_pixels, 0, _num_leds * 3);
+    memset(_pixels, 0, _num_leds * _order.bpp);
     memset(_fb, 0, _num_leds * 3);
     memset(_heat, 0, _num_leds);
     _rng ^= now_ms() * 2654435761U;  // seed the effect RNG
@@ -227,6 +211,7 @@ void Leds::init() {
         _color2      = holdOk(new StringSetting("LED secondary color RRGGBB", EXTENDED, WG, NULL, "LED/Color2", "0040FF", 0, 7));
         _brightness  = holdOk(new IntSetting("LED brightness", EXTENDED, WG, NULL, "LED/Brightness", 40, 0, 255));
         _speed       = holdOk(new IntSetting("LED effect speed", EXTENDED, WG, NULL, "LED/Speed", 50, 1, 255));
+        _white       = holdOk(new EnumSetting("LED RGBW auto-white mode", EXTENDED, WG, NULL, "LED/White", LedWhite::Accurate, &ledWhiteModes));
         _run_effect  = holdOk(new EnumSetting("LED effect while running", EXTENDED, WG, NULL, "LED/RunEffect", EFFECT_NONE, &ledHookEffects));
         _idle_effect = holdOk(new EnumSetting("LED effect while idle", EXTENDED, WG, NULL, "LED/IdleEffect", EFFECT_NONE, &ledHookEffects));
         _direction   = holdOk(new EnumSetting("LED ball direction", EXTENDED, WG, NULL, "LED/Direction", DIR_CW, &ledDirections));
@@ -241,7 +226,8 @@ void Leds::init() {
     // homing.
     _last_setting_effect = _effect->get();
 
-    log_info("leds: " << _num_leds << " WS2812 on pin " << _data_pin.name() << " order " << _color_order);
+    log_info("leds: " << _num_leds << (_order.rgbw() ? " RGBW" : " RGB") << " on pin " << _data_pin.name() << " order "
+                      << _color_order);
 
     _ready    = true;
     _instance = this;
@@ -515,11 +501,7 @@ void Leds::flushLive() {
 }
 
 void Leds::setPixel(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness) {
-    uint16_t scale         = brightness + 1;
-    uint8_t* p             = &_pixels[index * 3];
-    p[_ri]                 = (r * scale) >> 8;
-    p[_gi]                 = (g * scale) >> 8;
-    p[_bi]                 = (b * scale) >> 8;
+    LedWhite::pack(_order, _white_mode, &_pixels[index * _order.bpp], r, g, b, brightness);
 }
 
 // Classic 256-position color wheel: red -> green -> blue -> red
@@ -1165,6 +1147,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
 }
 
 void Leds::commit(uint8_t brightness) {
+    _white_mode = static_cast<LedWhite::Mode>(_white ? _white->get() : LedWhite::Accurate);
     for (int i = 0; i < _num_leds; i++) {
         setPixel(i, _fb[i * 3 + 0], _fb[i * 3 + 1], _fb[i * 3 + 2], brightness);
     }
@@ -1231,7 +1214,7 @@ void Leds::render() {
     renderEffect(effect, speed);
     commit(brightness);
 
-    rmt_write_sample(LED_RMT_CHANNEL, _pixels, _num_leds * 3, false);
+    rmt_write_sample(LED_RMT_CHANNEL, _pixels, _num_leds * _order.bpp, false);
     // The >= frame_ms gap to the next frame doubles as the WS2812 latch time.
 }
 

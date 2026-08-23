@@ -171,7 +171,17 @@ curl "$B/command?plain=\$LED/Color=FF0000"       # primary color, RRGGBB hex
 curl "$B/command?plain=\$LED/Color2=0040FF"      # secondary color (used by 'gradient')
 curl "$B/command?plain=\$LED/Brightness=80"      # 0..255, master over every effect
 curl "$B/command?plain=\$LED/Speed=50"           # animation speed 1..255
+curl "$B/command?plain=\$LED/White=accurate"     # RGBW strips only: none|brighter|accurate|max
 ```
+
+**RGBW strips (SK6812 RGBW etc.):** set a 4-letter `color_order` in config.yaml
+(`leds: color_order: GRBW` — the W can sit anywhere) and the driver sends 4 bytes
+per pixel. The effects stay 24-bit RGB; `$LED/White` picks how the W byte is derived
+per pixel, mirroring WLED's auto-white modes: `none` (W always 0, white die unused —
+WLED's "manual only"), `brighter` (W=min(R,G,B), RGB untouched), `accurate`
+(default: W=min(R,G,B) and subtracted from RGB, so colours stay true and whites move
+onto the white die), `max` (W=max(R,G,B)). Ignored on 3-byte strips;
+`/sand_status` `led.rgbw` tells a client whether it applies.
 
 Palettes (`$LED/Palette=<name>`): `rainbow ocean lava forest party cloud heat sunset`.
 `rainbow` is the classic wheel (default). The rest recolor every effect whose "Uses"

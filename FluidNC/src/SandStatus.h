@@ -63,6 +63,7 @@ namespace SandStatus {
         const char* led_active     = nullptr;  // what the strip is really showing; null = same as led_effect
         const char* led_override   = nullptr;  // why they differ: "idle"|"run"|"quiet"; omitted if null
         int         led_brightness = 0;
+        bool        led_rgbw       = false;    // color_order has a W slot (SK6812 RGBW etc.)
 
         bool has_sd = false;  // SD configured; sd_ok omitted from JSON otherwise
         bool sd_ok  = false;  // boot-time readability check result

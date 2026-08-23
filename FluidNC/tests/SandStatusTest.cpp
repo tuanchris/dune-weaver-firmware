@@ -165,7 +165,17 @@ TEST(SandStatusEncode, LedBlockWhenPresent) {
     d.led_brightness = 40;
     std::string j    = encode(d);
     // No override: "active" mirrors the chosen effect and "override" is omitted.
-    EXPECT_TRUE(has(j, "\"led\":{\"effect\":\"rainbow\",\"active\":\"rainbow\",\"brightness\":40}"));
+    EXPECT_TRUE(has(j, "\"led\":{\"effect\":\"rainbow\",\"active\":\"rainbow\",\"brightness\":40,\"rgbw\":false}"));
+}
+
+TEST(SandStatusEncode, LedBlockFlagsRgbwStrip) {
+    Data d;
+    d.state          = "Idle";
+    d.has_led        = true;
+    d.led_effect     = "static";
+    d.led_brightness = 40;
+    d.led_rgbw       = true;  // color_order: GRBW -> $LED/White is meaningful
+    EXPECT_TRUE(has(encode(d), "\"led\":{\"effect\":\"static\",\"active\":\"static\",\"brightness\":40,\"rgbw\":true}"));
 }
 
 TEST(SandStatusEncode, LedOverrideReportsWhatIsShowing) {
@@ -176,7 +186,7 @@ TEST(SandStatusEncode, LedOverrideReportsWhatIsShowing) {
     d.led_active     = "off";      // what $LED/IdleEffect=off is showing
     d.led_override   = "idle";
     d.led_brightness = 40;
-    EXPECT_TRUE(has(encode(d), "\"led\":{\"effect\":\"rainbow\",\"active\":\"off\",\"override\":\"idle\",\"brightness\":40}"));
+    EXPECT_TRUE(has(encode(d), "\"led\":{\"effect\":\"rainbow\",\"active\":\"off\",\"override\":\"idle\",\"brightness\":40,\"rgbw\":false}"));
 }
 
 TEST(SandStatusEncode, FeedIsIntegerFormatted) {

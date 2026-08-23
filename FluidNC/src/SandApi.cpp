@@ -370,6 +370,7 @@ std::string SandApi::statusJson() {
             // hook or Still Sands can hold different from the chosen effect.
             d.led_active   = leds->activeEffect();
             d.led_override = leds->overrideSource();
+            d.led_rgbw     = leds->rgbw();
         }
     }
 
@@ -548,7 +549,7 @@ std::string SandApi::settingsJson() {
     static const char* const keys[] = {
         "THR/Feed",         "Sand/HomingMode",  "Sand/ThetaOffset",
         "LED/Effect",      "LED/Palette",      "LED/Color",             "LED/Color2",
-        "LED/Brightness",  "LED/Speed",        "LED/RunEffect",         "LED/IdleEffect",
+        "LED/Brightness",  "LED/Speed",        "LED/White",             "LED/RunEffect",         "LED/IdleEffect",
         "LED/Direction",   "LED/Align",      "LED/BallSize",
         "LED/BallBg",      "LED/BallBright", "LED/BallBgBright",
         "Playlist/Mode",   "Playlist/Shuffle", "Playlist/PauseTime",    "Playlist/PauseFromStart",

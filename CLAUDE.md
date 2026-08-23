@@ -35,7 +35,9 @@ table exists: the **DWG "Desert Compass"**.)
   does sensor homing; `after_homing` re-centers to 0,0). Crash/sensorless homing
   is **not** implemented.
 - **LEDs**: 49 WS2812 on `gpio.18`, color order **RGB**, via RMT (channel 7). (`uart1`
-  was removed to free gpio.18.)
+  was removed to free gpio.18.) RGBW strips (SK6812) are supported: a 4-letter
+  `color_order` (e.g. `GRBW`) switches the bus to 4 bytes/pixel and `$LED/White`
+  (WLED's auto-white modes, std-only `LedWhite.h`) derives W from each pixel's RGB.
 
 ### Second board target: MKS DLC32 MAX (ESP32-S3)
 
