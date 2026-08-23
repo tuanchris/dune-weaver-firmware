@@ -1956,8 +1956,26 @@ namespace WebUI {
             }
         }
 
-        //check if no need build file list
-        if (_webserver->hasArg("dontlist") && _webserver->arg("dontlist") == "yes") {
+        // DW fork: upstream follows every action (delete/rename/createdir)
+        // with a full listing of `path`, built as one in-RAM JSON string.  On
+        // the ~2000-entry /patterns tree that is ~200 KB -> std::bad_alloc ->
+        // terminate -> panic, then a Test-Drive boot with no SD.  Every app
+        // pattern delete did exactly this until the app learned dontlist=yes,
+        // and any other client (curl, an old build) still could.  So:
+        //  - an action answers with no listing unless the client asks
+        //    (list=yes); the app never reads it anyway;
+        //  - any listing that does run stops at kMaxFileListEntries and says
+        //    so ("truncated"), which also bounds the SD walk that can wedge
+        //    the single-threaded server (see the $SD/List=/patterns gotcha);
+        //  - an allocation failure while encoding degrades to an error
+        //    response instead of escaping as an uncaught exception.
+        constexpr int kMaxFileListEntries = 100;
+        auto          argIs               = [&](const char* name, const char* want) {
+            return _webserver->hasArg(name) && _webserver->arg(name) == want;
+        };
+        if (argIs("dontlist", "yes")) {
+            list_files = false;
+        } else if (_webserver->hasArg("action") && !argIs("list", "yes")) {
             list_files = false;
         }
 
@@ -1966,22 +1984,44 @@ namespace WebUI {
         j.begin();
 
         if (list_files) {
-            auto iter = stdfs::directory_iterator { fpath, ec };
-            if (ec && serror.empty()) {
-                serror = "cannot list " + path + ": " + ec.message();
-                ecode  = ESP_ERROR_FILE_OP;
-            }
-            if (!ec) {
-                j.begin_array("files");
-                for (auto const& dir_entry : iter) {
-                    j.begin_object();
-                    j.member("name", dir_entry.path().filename());
-                    j.member("shortname", dir_entry.path().filename());
-                    j.member("size", dir_entry.is_directory() ? -1 : dir_entry.file_size());
-                    j.member("datetime", "");
-                    j.end_object();
+            bool truncated = false;
+            try {
+                auto iter = stdfs::directory_iterator { fpath, ec };
+                if (ec && serror.empty()) {
+                    serror = "cannot list " + path + ": " + ec.message();
+                    ecode  = ESP_ERROR_FILE_OP;
                 }
-                j.end_array();
+                if (!ec) {
+                    int n = 0;
+                    j.begin_array("files");
+                    for (auto const& dir_entry : iter) {
+                        if (n++ >= kMaxFileListEntries) {
+                            truncated = true;
+                            break;
+                        }
+                        j.begin_object();
+                        j.member("name", dir_entry.path().filename());
+                        j.member("shortname", dir_entry.path().filename());
+                        j.member("size", dir_entry.is_directory() ? -1 : dir_entry.file_size());
+                        j.member("datetime", "");
+                        j.end_object();
+                    }
+                    j.end_array();
+                }
+            } catch (std::exception const& ex) {
+                // Out of memory (or a filesystem_error mid-walk): drop the
+                // partial listing and report, keeping the action's own status.
+                log_warn("file list " << path << " aborted: " << ex.what());
+                s.clear();
+                j = JSONencoder(&s);
+                j.begin();
+                if (serror.empty()) {
+                    serror = std::string("cannot list ") + path + ": " + ex.what();
+                    ecode  = ESP_ERROR_FILE_OP;
+                }
+            }
+            if (truncated) {
+                j.member("truncated", "true");
             }
         }
 

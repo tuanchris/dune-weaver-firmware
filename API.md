@@ -401,6 +401,16 @@ Pre-checks free space. Missing parent folders are created automatically (a card 
 computer often lacks `/playlists` / `/patterns`). (Serial alternative: `$Xmodem/Receive=<path>` /
 `$Xmodem/Send=<path>`.)
 
+### File ops (`GET /upload?path=<dir>&action=delete|deletedir|createdir|rename&filename=<name>[&newname=]`)
+Same JSON shape as upload. **An `action=` request carries no `files` listing** unless it
+also passes `list=yes` (since v0.2.1; before that every action re-listed `path` in one in-RAM
+string, which on a full `/patterns` folder was a `bad_alloc` panic + Test-Drive boot — send
+`dontlist=yes` to pre-v0.2.1 firmware). **Any listing (`GET /upload?path=<dir>` with no
+action, or `list=yes`) stops at 100 entries** and then carries `"truncated":"true"`; it is a
+maintenance view, not the catalog — use `/sand_patterns` for that. If building even the capped
+listing fails for memory, the response is a 500 `cannot list <dir>: …` with the action's own
+outcome still in `status`.
+
 ### File-op errors (upload, delete, createdir, rename, list)
 Success is HTTP **200** with `status` text. Any failure is a real HTTP error **plus** an
 `error` member: `{"status":"Upload failed", "error":{"code":"2","message":"<detail>"}}`

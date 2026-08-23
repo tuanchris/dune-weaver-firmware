@@ -270,6 +270,12 @@ works). Config: `config_dlc32max_thetarho.yaml`.
   and 11 flash-Reserved and 34-39 input-only, which on the S3 rejects a step pin (7),
   the shared disable (8) and an LED output (38), while `nGPIOPins = 40` makes gpio.40+
   unrepresentable. Both failure modes are silent or look like hardware faults.
+- **`handleFileOps` (`/upload?action=…`) no longer lists the directory after an action**
+  (v0.2.1): upstream re-listed `path` into one in-RAM JSON string, and on the
+  ~2000-entry `/patterns` tree that was a `std::bad_alloc` panic + Test-Drive boot on
+  **every app pattern delete** (the app worked around it with `dontlist=yes`). Now an
+  action answers without `files` unless `list=yes`, every listing stops at 100 entries
+  (`"truncated":"true"`), and encoder `bad_alloc` degrades to a 500. Verified on DWMAX.
 - **Never `$SD/List=/patterns`, and no `$SD/ListJSON` on it either** — any on-device
   scan of that ~2000-entry tree can hang the web server / wedge an SD read mid-scan
   → poller task-WDT reboot, after which the card fails init (`ESP_ERR_INVALID_CRC`)

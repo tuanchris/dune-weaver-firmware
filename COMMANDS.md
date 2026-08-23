@@ -381,7 +381,11 @@ curl "$B/command?commandText=%24SD/ListJSON=/patterns%7C100%7C50"   # entries 10
 curl -F "/patterns/my.thrS=$(wc -c < my.thr)" \
      -F "/patterns/my.thr=@my.thr;filename=/patterns/my.thr" "$B/upload"
 
-# Delete an SD file
+# Delete an SD file. An action answers WITHOUT a directory listing (add
+# &list=yes to get one, capped at 100 entries + "truncated":"true"); firmware
+# before v0.2.1 listed the whole folder after every action, which on the
+# ~2000-entry /patterns tree was an out-of-memory panic -- pass &dontlist=yes
+# when talking to those.
 curl "$B/upload?path=/patterns&action=delete&filename=my.thr"
 
 # Upload to the on-board flash / littlefs (e.g. config.yaml)
