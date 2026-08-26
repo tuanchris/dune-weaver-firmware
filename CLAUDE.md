@@ -200,6 +200,19 @@ works). Config: `config_dlc32max_thetarho.yaml`.
   radio mode.
 - **Config-gated modules**: `Playlist` and `Leds` only exist if their config section
   is present.
+- **Rectangular (CoreXY/Cartesian) tables play plain G-code patterns** — no polar
+  translation exists for them. `.thr` translation is a per-kinematics virtual
+  (`translate_line`, only ThetaRho overrides it), so with `kinematics: CoreXY:` the
+  whole sand layer (run/playlists/clears/progress/skip) plays `.gcode`/`.gc`/`.nc`
+  files untouched (extension list: `PlaylistParse::kPatternExts`). The API forks on
+  `Kinematics::ThetaRho::active()`: `/sand_status` reports `kinematics` plus `x`/`y`
+  in mm (no base `feed` — G-code carries its own F words; speed is
+  `/sand_feed?pct=`, and `?mm=` answers 400), `$Sand/Goto` takes `x=`/`y=`
+  (travel-clamped; theta/rho and x/y forms reject on the wrong kinematics), and the
+  `playlist:` clear slots point at G-code wipe files (`adaptive` can't read a
+  first-rho from G-code → random in/out). Template config:
+  `config_dlc32_corexy.yaml` (soft limits on, both axes switch-homed; `$Sand/Home`
+  is just `$H` there — HomingMode/ThetaOffset are polar concepts).
 - **A `$LED/RunEffect`/`$LED/IdleEffect` state hook must never outrank an explicit
   effect change.** The hooks override `$LED/Effect` while the machine is Run/Jog/Home
   resp. Idle/Hold, and `off` is a legal hook value — so `$LED/IdleEffect=off` used to

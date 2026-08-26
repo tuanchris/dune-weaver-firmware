@@ -55,6 +55,11 @@ namespace Kinematics {
         bool translate_line(char* line, size_t maxlen, Channel& channel);
         void stop();
 
+        // Registered name of the active system ("ThetaRho", "CoreXY",
+        // "Cartesian", ...); surfaced in /sand_status so clients pick the
+        // right coordinate model.  Empty string until configuration runs.
+        const char* system_name() const;
+
     private:
         ::Kinematics::KinematicSystem* _system = nullptr;
     };

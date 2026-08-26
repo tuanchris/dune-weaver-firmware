@@ -59,6 +59,43 @@ TEST(SandStatusEncode, IdleDefaults) {
     EXPECT_EQ('}', j.back());
 }
 
+TEST(SandStatusEncode, PolarPositionAndKinematicsName) {
+    Data d;
+    d.state      = "Idle";
+    d.kinematics = "ThetaRho";
+    d.theta      = 1.2345f;
+    d.rho        = 0.5f;
+    std::string j = encode(d);
+    EXPECT_TRUE(has(j, "\"kinematics\":\"ThetaRho\""));
+    EXPECT_TRUE(has(j, "\"theta\":1.2345"));
+    EXPECT_TRUE(has(j, "\"rho\":0.5000"));
+    EXPECT_FALSE(has(j, "\"x\":"));
+    EXPECT_FALSE(has(j, "\"y\":"));
+}
+
+TEST(SandStatusEncode, CartesianPositionUsesXYMillimeters) {
+    Data d;
+    d.state      = "Idle";
+    d.kinematics = "CoreXY";
+    d.cartesian  = true;
+    d.theta      = 123.456f;  // cartesian X, mm
+    d.rho        = 78.9f;     // cartesian Y, mm
+    std::string j = encode(d);
+    EXPECT_TRUE(has(j, "\"kinematics\":\"CoreXY\""));
+    EXPECT_TRUE(has(j, "\"x\":123.456"));
+    EXPECT_TRUE(has(j, "\"y\":78.900"));
+    EXPECT_FALSE(has(j, "\"theta\":"));
+    EXPECT_FALSE(has(j, "\"rho\":"));
+    // No base feed on a cartesian table (G-code carries its own F words)
+    EXPECT_TRUE(has(j, "\"feed\":0"));
+}
+
+TEST(SandStatusEncode, KinematicsOmittedWhenUnset) {
+    Data d;
+    d.state = "Idle";
+    EXPECT_FALSE(has(encode(d), "\"kinematics\":"));
+}
+
 TEST(SandStatusEncode, HealthFieldsWhenSet) {
     Data d;
     d.state        = "Idle";

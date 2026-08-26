@@ -30,7 +30,8 @@ namespace SandApi {
 
     // Stream a JSON array of the files in ONE SD folder (non-recursive), e.g.
     // "/patterns" or "/playlists", to `emit` in bounded-size chunks.  If `ext`
-    // is given (e.g. ".thr") only files with that extension are listed (skips
+    // is given (a space-separated extension list, e.g. ".txt" or
+    // PlaylistParse::kPatternExts) only matching files are listed (skips
     // .webp thumbnails etc.); subfolders are NOT descended.  The full library
     // is ~1000 .thr nested deep on a slow SD - a recursive walk froze the
     // single-threaded server for minutes, so the app owns the full catalog and
@@ -42,7 +43,8 @@ namespace SandApi {
     // Stream the pattern catalog to `emit`: serves the prebuilt manifest
     // /patterns/index.json verbatim when present (the host generates + uploads
     // it, avoiding the slow on-device recursive walk), else falls back to a
-    // live top-level streamDirJson("/patterns", ".thr").  Backs /sand_patterns.
+    // live top-level streamDirJson over the pattern extensions (.thr plus
+    // plain G-code .gcode/.gc/.nc).  Backs /sand_patterns.
     void streamPatterns(const JsonSink& emit);
 
     // ETag for the /patterns manifest, enabling conditional GET on
@@ -91,8 +93,16 @@ namespace SandApi {
     // Jog to an absolute theta (radians) and/or rho (0..1) for manual
     // positioning between patterns.  At least one axis must be present.  rho is
     // clamped to 0..1; theta is the absolute machine angle in radians.  Requires
-    // Idle (returns Error::IdleError if a pattern is running or unhomed); the
-    // jog itself is run by the main loop (see protocol_request_goto).  Backs
-    // $Sand/Goto and /sand_goto.
+    // Idle (returns Error::IdleError if a pattern is running or unhomed) and
+    // the ThetaRho kinematics (Error::InvalidStatement otherwise -- a cartesian
+    // table uses goToXY); the jog itself is run by the main loop (see
+    // protocol_request_goto).  Backs $Sand/Goto and /sand_goto.
     Error goTo(bool hasTheta, float theta, bool hasRho, float rho);
+
+    // Cartesian sibling of goTo for CoreXY/Cartesian tables: absolute machine
+    // x and/or y in mm, clamped to the axis travel (limitsMin/MaxPosition).
+    // Same gating mirrored: requires Idle, and a NON-ThetaRho kinematics
+    // (Error::InvalidStatement on the round tables).  Backs the x=/y= form of
+    // $Sand/Goto and /sand_goto.
+    Error goToXY(bool hasX, float x, bool hasY, float y);
 }

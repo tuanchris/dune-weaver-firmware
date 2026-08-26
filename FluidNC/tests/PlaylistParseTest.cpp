@@ -6,6 +6,31 @@
 
 using namespace PlaylistParse;
 
+TEST(HasExtIn, SingleExtensionCaseInsensitive) {
+    EXPECT_TRUE(has_ext_in("star.thr", ".thr"));
+    EXPECT_TRUE(has_ext_in("STAR.THR", ".thr"));
+    EXPECT_TRUE(has_ext_in("list.TXT", ".txt"));
+    EXPECT_FALSE(has_ext_in("star.thr.webp", ".thr"));
+    EXPECT_FALSE(has_ext_in("star.gcode", ".thr"));
+    EXPECT_FALSE(has_ext_in("thr", ".thr"));  // shorter than the extension
+}
+
+TEST(HasExtIn, PatternExtensionListMatchesThrAndGcode) {
+    EXPECT_TRUE(has_ext_in("star.thr", kPatternExts));
+    EXPECT_TRUE(has_ext_in("grid.gcode", kPatternExts));
+    EXPECT_TRUE(has_ext_in("grid.GCode", kPatternExts));
+    EXPECT_TRUE(has_ext_in("grid.gc", kPatternExts));
+    EXPECT_TRUE(has_ext_in("grid.nc", kPatternExts));
+    EXPECT_FALSE(has_ext_in("grid.webp", kPatternExts));
+    EXPECT_FALSE(has_ext_in("index.json", kPatternExts));
+    EXPECT_FALSE(has_ext_in("notes.txt", kPatternExts));
+}
+
+TEST(HasExtIn, EmptyListMatchesEverything) {
+    EXPECT_TRUE(has_ext_in("anything.xyz", nullptr));
+    EXPECT_TRUE(has_ext_in("anything.xyz", ""));
+}
+
 TEST(ParsePlaylist, BasicLinesWithCommentsAndWhitespace) {
     std::string content = "# evening rotation\n"
                           "/patterns/star.thr\n"

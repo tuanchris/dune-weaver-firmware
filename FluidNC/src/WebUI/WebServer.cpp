@@ -570,11 +570,11 @@ namespace WebUI {
                          "Crash      GET /sand_coredump    (JSON; last panic backtrace; ?erase=1)\n"
                          "\n"
                          "Home       GET /sand_home\n"
-                         "Goto       GET /sand_goto?theta=<rad>&rho=<0..1>  (either/both; idle only)\n"
+                         "Goto       GET /sand_goto?theta=<rad>&rho=<0..1>  (cartesian tables: ?x=<mm>&y=<mm>; idle only)\n"
                          "Stop       GET /sand_stop\n"
                          "Pause      GET /sand_pause\n"
                          "Resume     GET /sand_resume\n"
-                         "Speed      GET /sand_feed?mm=<0..100000> | pct=<10..200> | d=up|down|reset\n"
+                         "Speed      GET /sand_feed?mm=<0..100000> (ThetaRho only) | pct=<10..200> | d=up|down|reset\n"
                          "Time       GET /sand_time [?epoch=<unix>] [?tz=<POSIX>]   (read / app-sync clock)\n"
                          "LEDs       GET /sand_led?effect=|palette=|color=|color2=|brightness=|speed=\n"
                          "WiFi       GET / or /wifi  (setup portal; /wifi_status /wifi_scan, POST /wifi_save /wifi_standalone)\n"
@@ -1229,15 +1229,33 @@ namespace WebUI {
         }
         bool  hasTheta = _webserver->hasArg("theta");
         bool  hasRho   = _webserver->hasArg("rho");
-        float theta    = hasTheta ? _webserver->arg("theta").toFloat() : 0.0f;
-        float rho      = hasRho ? _webserver->arg("rho").toFloat() : 0.0f;
-        Error err      = SandApi::goTo(hasTheta, theta, hasRho, rho);
+        bool  hasX     = _webserver->hasArg("x");
+        bool  hasY     = _webserver->hasArg("y");
+        Error err;
+        if ((hasX || hasY) && (hasTheta || hasRho)) {
+            err = Error::InvalidValue;  // mixed polar/cartesian forms
+        } else if (hasX || hasY) {
+            err = SandApi::goToXY(hasX,
+                                  hasX ? _webserver->arg("x").toFloat() : 0.0f,
+                                  hasY,
+                                  hasY ? _webserver->arg("y").toFloat() : 0.0f);
+        } else {
+            err = SandApi::goTo(hasTheta,
+                                hasTheta ? _webserver->arg("theta").toFloat() : 0.0f,
+                                hasRho,
+                                hasRho ? _webserver->arg("rho").toFloat() : 0.0f);
+        }
         if (err == Error::Ok) {
             _webserver->send(200, "text/plain", "ok");
         } else if (err == Error::IdleError) {
             _webserver->send(409, "text/plain", "busy: goto requires idle (home first / stop the pattern)");
+        } else if (err == Error::InvalidStatement) {
+            _webserver->send(400,
+                             "text/plain",
+                             Kinematics::ThetaRho::active() ? "this table is polar: use theta=<rad> and/or rho=<0..1>" :
+                                                              "this table is cartesian: use x=<mm> and/or y=<mm>");
         } else {
-            _webserver->send(400, "text/plain", "need theta=<rad> and/or rho=<0..1>");
+            _webserver->send(400, "text/plain", "need theta=<rad>/rho=<0..1> or x=<mm>/y=<mm> (forms not mixable)");
         }
     }
     void Web_Server::handleSandHome() {
@@ -1518,7 +1536,11 @@ namespace WebUI {
             return;
         }
         if (_webserver->hasArg("mm")) {
-            if (Kinematics::ThetaRho::setFeedLive(_webserver->arg("mm").toInt()) != Error::Ok) {
+            if (!Kinematics::ThetaRho::active()) {
+                // Cartesian tables run G-code patterns that carry their own F
+                // words; there is no base feed to set.  Scale with pct= instead.
+                _webserver->send(400, "text/plain", "mm= is for ThetaRho tables; use pct=<10..200>");
+            } else if (Kinematics::ThetaRho::setFeedLive(_webserver->arg("mm").toInt()) != Error::Ok) {
                 _webserver->send(400, "text/plain", "mm out of range (0..100000)");
             } else {
                 _webserver->send(200, "text/plain", "ok");

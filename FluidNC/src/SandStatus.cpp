@@ -69,10 +69,23 @@ namespace SandStatus {
         o += '{';
 
         member_str(o, "state", d.state);
-        o += ",\"theta\":";
-        append_float(o, d.theta, 4);
-        o += ",\"rho\":";
-        append_float(o, d.rho, 4);
+        if (d.kinematics) {
+            o += ',';
+            member_str(o, "kinematics", d.kinematics);
+        }
+        // Position under the names the kinematics defines: theta/rho for the
+        // round tables, x/y mm for a cartesian (CoreXY) gantry.
+        if (d.cartesian) {
+            o += ",\"x\":";
+            append_float(o, d.theta, 3);
+            o += ",\"y\":";
+            append_float(o, d.rho, 3);
+        } else {
+            o += ",\"theta\":";
+            append_float(o, d.theta, 4);
+            o += ",\"rho\":";
+            append_float(o, d.rho, 4);
+        }
         o += ",\"feed\":";
         append_float(o, d.feed, 0);
         o += ",\"feed_override\":";

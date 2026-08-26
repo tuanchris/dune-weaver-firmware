@@ -85,6 +85,11 @@ namespace Kinematics {
         // ThetaRho kinematics is configured.
         static float ballAngle();
 
+        // True when ThetaRho is the configured kinematics.  Lets the sand API
+        // pick the coordinate/feed semantics: theta/rho + .thr translation
+        // here, plain cartesian mm (G-code patterns) on CoreXY/Cartesian.
+        static bool active() { return _instance != nullptr; }
+
         ~ThetaRho() {}
 
     private:

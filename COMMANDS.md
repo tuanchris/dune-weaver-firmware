@@ -26,7 +26,10 @@ B=http://192.168.68.160       # LAN IP (preferred); or the mDNS name, e.g. http:
 ## Read state (JSON, safe during motion, any number of clients)
 
 ```bash
-curl "$B/sand_status"        # state, theta, rho, feed, feed_override, running, file, progress, elapsed,
+curl "$B/sand_status"        # state, kinematics, theta, rho, feed, feed_override, running, file, progress, elapsed,
+                             #   kinematics = "ThetaRho" (round: theta rad / rho 0..1) or "CoreXY"/"Cartesian"
+                             #   (rectangular: position reported as x/y in mm instead of theta/rho, feed=0
+                             #   because each G-code pattern carries its own F words)
                              #   playlist{active,index,total,name,next,last,clearing,quiet,pause_remaining,pause_total}, led{}
                              #   pause_remaining/pause_total = sec left / full length of between-patterns pause
                              #   (both -1 if not pausing); bar fill = (pause_total-pause_remaining)/pause_total
@@ -36,8 +39,8 @@ curl "$B/sand_status"        # state, theta, rho, feed, feed_override, running, 
                              #     the one the clear is preparing for; otherwise the following item);
                              #     last = just-finished pattern = what's on the table now
 curl "$B/sand_patterns"      # serves /patterns/index.json manifest if present (full recursive catalog,
-                             #   paths relative to /patterns); else top-level /patterns/*.thr (non-recursive).
-                             #   Run any pattern by full path: $Sand/Run=/patterns/sub/x.thr
+                             #   paths relative to /patterns); else top-level /patterns/* (non-recursive,
+                             #   .thr .gcode .gc .nc). Run any pattern by full path: $Sand/Run=/patterns/sub/x.thr
 curl -sD- "$B/sand_patterns" -o/dev/null | grep -i etag   # manifest carries an ETag; revalidate to skip re-downloads:
 curl -H 'If-None-Match: "<etag>"' "$B/sand_patterns"      #   unchanged catalog -> 304 Not Modified (no body)
 curl "$B/sand_playlists"     # JSON array of /playlists/*.txt
@@ -73,6 +76,11 @@ clear** `playlist.clearing` is `true` and `progress` tracks the *clear* file's o
 ```bash
 # Plain run (.thr translated on the fly by ThetaRho kinematics)
 curl "$B/command?plain=\$SD/Run=/patterns/star.thr"
+
+# Rectangular (CoreXY/Cartesian) tables run plain G-code patterns the same way
+# (.gcode/.gc/.nc, host-generated e.g. by Sandify; no translation, each file
+# carries its own feeds). .thr files only play on ThetaRho kinematics.
+curl "$B/command?plain=\$Sand/Run=/patterns/grid.gcode%20clear=sideway"
 
 # Run with a pre-execution clear (clear sequenced first, then the pattern)
 #   clear = none | adaptive | in | out | sideway | random   (adaptive picks in/out
@@ -128,6 +136,8 @@ curl "$B/command?plain=\$Sand/ThetaOffset"         # read current offset
   mode-aware command in config.yaml: `macros: startup_line0: $Sand/Home`
   (the older `startup_line0: $H` always does sensor homing).
 - `$Sand/HomingMode` is also returned by `GET /sand_settings`.
+- **Cartesian (CoreXY) tables**: `$Sand/Home` is always a plain `$H` — crash mode
+  and `$Sand/ThetaOffset` are polar concepts and are ignored there.
 
 ```bash
 # Goto an absolute theta (radians) and/or rho (0..1) - manual positioning between
@@ -136,6 +146,9 @@ curl "$B/sand_goto?theta=3.14159&rho=0.5"   # both
 curl "$B/sand_goto?rho=0"                    # rho only -> center
 curl "$B/sand_goto?theta=6.28318"            # theta only -> one turn from 0
 #   409 if a pattern is running / unhomed. Same via command: $Sand/Goto theta=.. rho=..
+#   Rectangular (CoreXY/Cartesian) tables use x/y in mm instead (clamped to the
+#   machine travel; forms not mixable, wrong form for the kinematics -> 400):
+curl "$B/sand_goto?x=200&y=150"              # same via command: $Sand/Goto x=200 y=150
 ```
 
 ---
@@ -143,7 +156,8 @@ curl "$B/sand_goto?theta=6.28318"            # theta only -> one turn from 0
 ## Speed
 
 ```bash
-curl "$B/sand_feed?mm=500"                # base rate in mm/min (0..100000), works mid-pattern
+curl "$B/sand_feed?mm=500"                # base rate in mm/min (0..100000), works mid-pattern (ThetaRho only:
+                                          #   G-code patterns carry their own F words -> 400, use pct= instead)
 curl "$B/command?plain=\$THR/Feed=2000"   # same base rate, but idle-only + NVS-persisted
 curl "$B/sand_feed?pct=150"               # scale the base rate by an absolute % (10..200), mid-pattern
 curl "$B/sand_feed?d=up"                  # override + (coarse, +10%)

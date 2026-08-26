@@ -98,7 +98,7 @@ the WebSocket for a *single* "active controller" that wants smooth high-rate liv
 | Endpoint | Returns |
 |----------|---------|
 | `GET /sand_status` | status object (schema below) |
-| `GET /sand_patterns` | JSON array of `.thr` paths. **If `/patterns/index.json` (a prebuilt manifest) exists, it is served verbatim** — a fast single-file read of the full recursive catalog (paths relative to `/patterns`, e.g. `custom_patterns/x.thr`; run via `$Sand/Run=/patterns/<path>`). Generate it on the host and upload to the card whenever patterns change (see COMMANDS.md). **Without a manifest** it falls back to a non-recursive top-level listing (subfolders omitted — enumerating the ~1000-file nested library on the slow SD froze the single-threaded server). Chunked/streamed. **Conditional GET**: when a manifest is present the response carries an `ETag` (a content hash) and `Cache-Control: no-cache`; send it back as `If-None-Match: <etag>` and an unchanged catalog answers **`304 Not Modified`** with no body instead of re-streaming the whole manifest. Clients that re-read the catalog on every launch/table-switch should cache the ETag and revalidate — the repeated full downloads, colliding with an app's launch connection burst, are what pushed the heap-tight board into low-memory shedding. The ETag changes whenever the manifest is re-uploaded; the live-listing fallback has no ETag (always `200`). **Ranged GET**: when the manifest is served the response carries `Accept-Ranges: bytes` and honors a single `Range:` header (`a-b`, `a-`, `-n`) with **`206`** + `Content-Range`, so a client can pull a large catalog in bounded windows instead of one multi-second transfer that leaves the single-threaded server deaf while pollers stack behind it (the live-listing fallback is not seekable — no Range). **Load-shedding**: a *revalidation* (a conditional GET carrying `If-None-Match`) is exempt from the low-heap `503` guard so the library stays usable on a stressed board; a *cold* full GET is sheddable (`503 busy: low memory`) — retry with backoff or ranged pulls |
+| `GET /sand_patterns` | JSON array of pattern paths (`.thr`, and plain G-code `.gcode`/`.gc`/`.nc`). **If `/patterns/index.json` (a prebuilt manifest) exists, it is served verbatim** — a fast single-file read of the full recursive catalog (paths relative to `/patterns`, e.g. `custom_patterns/x.thr`; run via `$Sand/Run=/patterns/<path>`). Generate it on the host and upload to the card whenever patterns change (see COMMANDS.md). **Without a manifest** it falls back to a non-recursive top-level listing (subfolders omitted — enumerating the ~1000-file nested library on the slow SD froze the single-threaded server). Chunked/streamed. **Conditional GET**: when a manifest is present the response carries an `ETag` (a content hash) and `Cache-Control: no-cache`; send it back as `If-None-Match: <etag>` and an unchanged catalog answers **`304 Not Modified`** with no body instead of re-streaming the whole manifest. Clients that re-read the catalog on every launch/table-switch should cache the ETag and revalidate — the repeated full downloads, colliding with an app's launch connection burst, are what pushed the heap-tight board into low-memory shedding. The ETag changes whenever the manifest is re-uploaded; the live-listing fallback has no ETag (always `200`). **Ranged GET**: when the manifest is served the response carries `Accept-Ranges: bytes` and honors a single `Range:` header (`a-b`, `a-`, `-n`) with **`206`** + `Content-Range`, so a client can pull a large catalog in bounded windows instead of one multi-second transfer that leaves the single-threaded server deaf while pollers stack behind it (the live-listing fallback is not seekable — no Range). **Load-shedding**: a *revalidation* (a conditional GET carrying `If-None-Match`) is exempt from the low-heap `503` guard so the library stays usable on a stressed board; a *cold* full GET is sheddable (`503 busy: low memory`) — retry with backoff or ranged pulls |
 | `GET /sand_playlists` | JSON array of `.txt` files in the top level of `/playlists` (non-recursive) |
 | `GET /sand_settings` | JSON object of app settings (speed, homing mode, LED, playlist, quiet hours), values as strings |
 | `GET /sand_time` | wall clock `{epoch, synced, local, tz}`. `?epoch=<unix>` sets the clock (app auto-sync / AP mode); `?tz=<POSIX>` sets + persists the timezone. Safe mid-run: the zone applies immediately and the (idle-gated) NVS write is deferred to the return to idle. Also surfaced in `/sand_status` under `time` |
@@ -114,15 +114,15 @@ reliably over the (single-client) WebSocket. Pattern/playlist **contents** are f
 ### Playback (asynchronous — poll `$Sand/Status` for progress)
 | Command | Action |
 |---------|--------|
-| `$SD/Run=/patterns/<file>.thr` | run a pattern (`.thr` translated on the fly by ThetaRho kinematics) |
+| `$SD/Run=/patterns/<file>.thr` | run a pattern (`.thr` translated on the fly by ThetaRho kinematics). Cartesian (CoreXY) tables run plain G-code patterns (`.gcode`/`.gc`/`.nc`, no translation) through the same commands and playlists; `.thr` plays only on ThetaRho |
 | `$Sand/Run=/patterns/<file>.thr [clear=<mode>]` | run a pattern, optionally preceded by a clear ("pre-execution"). `clear=none\|adaptive\|in\|out\|sideway\|random` (default none); `adaptive` picks in/out from the pattern's first rho (never sideway). Clear moves honor `$Playlist/ClearSpeed` (0 = same as `$THR/Feed`) and the `$Playlist/ClearIn\|ClearOut` file overrides. Sequenced by the firmware (clear→pattern, then stop); aborts any running job first. Requires a `playlist:` config section (the clear files live there). Filenames may contain spaces; `clear=` must be the **last** token (everything before it is the path). |
 | `$SD/Show=/patterns/<file>.thr` | dump file contents (preview; requires Idle/Alarm) |
 | `$Playlist/Run=<name>` | run playlist `/playlists/<name>.txt`. **Unplayable entries are skipped**, not fatal: a pattern that fails to start (missing/renamed file, SD read hiccup) or an unreadable playlist slot is logged (`playlist: skipping …`) and the run advances immediately (no between-pattern pause). A clear that fails to start skips the **whole item** — the run advances to the next item (its own clear→pattern) rather than drawing the pattern on an un-cleared table (`clear did not start, skipping item …`). 5 consecutive failures (no pattern started in between, clear-failures included) means the SD itself is broken → run cancels (`too many unplayable patterns in a row`). A single `$Sand/Run` still fails loudly (`canceled: file did not start`) |
 | `$Playlist/Stop` | stop after the current pattern |
 | `$Playlist/Skip` | skip the current item and jump straight to the next one — **no** between-patterns pause. Skipping while the **main pattern** draws advances to the next item; skipping while the **clear** draws skips the whole item too (not just the clear), so the current item's pattern is not drawn. Skipping during the between-patterns pause ends the pause immediately |
 | `$Playlist/List` | text listing + active playlist index/total/name |
-| `$Sand/Goto theta=<rad> rho=<0..1>` / `GET /sand_goto?theta=&rho=` | jog to an absolute θ (radians) and/or ρ (0..1); either or both axes (omitted axis stays put). For manual positioning **between patterns** — requires Idle (rejects with IdleError/HTTP 409 if a pattern is running or unhomed). ρ clamped to 0..1; uses the current feed; runs as a `G1` move (through ThetaRho kinematics) in the main loop — stop with `/sand_stop` |
-| `$Sand/Home` / `GET /sand_home` | home honoring `$Sand/HomingMode`; runs in the main loop (safe over HTTP). **sensor** = limit-switch `$H`; **crash** = drive ρ (Y) blindly into the center stop then zero θ/ρ |
+| `$Sand/Goto theta=<rad> rho=<0..1>` / `GET /sand_goto?theta=&rho=` | jog to an absolute θ (radians) and/or ρ (0..1); either or both axes (omitted axis stays put). For manual positioning **between patterns** — requires Idle (rejects with IdleError/HTTP 409 if a pattern is running or unhomed). ρ clamped to 0..1; uses the current feed; runs as a `G1` move (through ThetaRho kinematics) in the main loop — stop with `/sand_stop`. **Cartesian (CoreXY) tables use `x=<mm>`/`y=<mm>` instead** — clamped to the machine travel, fixed 1000 mm/min reposition feed. The forms are not mixable, and the wrong form for the active kinematics answers HTTP 400 (command: InvalidStatement) with a hint naming the right one |
+| `$Sand/Home` / `GET /sand_home` | home honoring `$Sand/HomingMode`; runs in the main loop (safe over HTTP). **sensor** = limit-switch `$H`; **crash** = drive ρ (Y) blindly into the center stop then zero θ/ρ. On a cartesian (CoreXY) table this is always a plain `$H` — crash mode and `$Sand/ThetaOffset` are polar concepts and are ignored there |
 | `$Sand/HomingMode=sensor\|crash` | persisted homing mode (NVS; default `sensor`). Honored by `/sand_home`, `$Sand/Home`, and the boot startup line (set `startup_line0: $Sand/Home`). Also returned by `GET /sand_settings` |
 | `$Sand/ThetaOffset=<deg>` | theta zero offset in degrees (UI "Sensor Offset"; NVS; -360..360; default 0). At home time (**both** modes) pattern θ=0 is placed this many degrees from the home reference (limit switch in sensor mode, crash position in crash mode). Idle-gated; takes effect on the next home. Honored on boot only via `startup_line0: $Sand/Home`. Returned by `GET /sand_settings` |
 | `$H` | force a sensor home (sets θ=0, normalizes; **send over WebSocket**) |
@@ -132,7 +132,7 @@ reliably over the (single-client) WebSocket. Pattern/playlist **contents** are f
 ### Speed
 | Command | Notes |
 |---------|-------|
-| `/sand_feed?mm=<0..100000>` | set base feed rate (motor mm/min) live; works mid-pattern. Idle → persists to `$THR/Feed`; running → in-memory override that **persists across the whole playlist/run** (no longer reset per pattern), then **flushed to `$THR/Feed`** on the return to idle so a speed set mid-pattern sticks as the new default — immediately on natural completion, and after a **stop** once motion drains to idle; a **pause** keeps it in memory (flash is blocked mid-Hold) and it persists at the next idle |
+| `/sand_feed?mm=<0..100000>` | **ThetaRho only** (a cartesian table's G-code patterns carry their own F words — `400`, use `pct=`). Set base feed rate (motor mm/min) live; works mid-pattern. Idle → persists to `$THR/Feed`; running → in-memory override that **persists across the whole playlist/run** (no longer reset per pattern), then **flushed to `$THR/Feed`** on the return to idle so a speed set mid-pattern sticks as the new default — immediately on natural completion, and after a **stop** once motion drains to idle; a **pause** keeps it in memory (flash is blocked mid-Hold) and it persists at the next idle |
 | `$THR/Feed=<mm_per_min>` | same base rate, NVS-persisted; idle-gated; applied on the next `.thr` move |
 | `/sand_feed?pct=<10..200>` | scale the base rate by an absolute override percentage; works mid-pattern |
 | `/sand_feed?d=up\|down\|reset` | HTTP one-shot coarse feed-override ±10% / reset to 100% |
@@ -264,11 +264,16 @@ Serial onboarding (used by the USB installer; ASCII SSIDs only over serial):
 
 ## `$Sand/Status` JSON schema
 
-Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 dp, progress 3 dp.
+Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, x/y 3 dp, feed 0 dp, progress 3 dp.
 
 ```json
 {
   "state": "Idle|Run|Hold|Alarm|Home|Jog|...",
+  "kinematics": "ThetaRho",   // coordinate model: "ThetaRho" (theta/rho below) or
+                              //   "CoreXY"/"Cartesian" — then the two position fields are
+                              //   "x" and "y" in machine mm instead of theta/rho, and
+                              //   "feed" is 0 (each G-code pattern carries its own F words;
+                              //   speed control is feed_override)
   "theta": 1.2340,            // radians, accumulates turns
   "rho": 0.5000,              // 0.0 center .. 1.0 perimeter
   "feed": 100,                // $THR/Feed programmed rate, motor mm/min
@@ -354,8 +359,11 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, feed 0 
 
 ### Storage layout (SD card)
 - `/patterns/*.thr` — patterns. Line format: `<theta_rad> <rho_0..1>`; `#` comments; blanks ignored.
+  Cartesian (CoreXY) tables use plain G-code patterns instead (`.gcode`/`.gc`/`.nc`, host-generated).
 - `/playlists/*.txt` — one SD-relative pattern path per line; `#` comments. Max 64 KB / 1024 items.
-- `/clear_from_in.thr`, `/clear_from_out.thr`, `/clear_sideway.thr` — clear templates.
+- `/clear_from_in.thr`, `/clear_from_out.thr`, `/clear_sideway.thr` — clear templates (a cartesian
+  table points the `playlist:` clear paths at G-code wipe files; `adaptive` can't read a first-ρ
+  from G-code, so it falls back to a random in/out pick).
 
 ### Fetch a file (for in-app preview)
 `GET /sd/patterns/<file>.thr` (and any `/sd/...` path) — served by the catch-all file handler. The app

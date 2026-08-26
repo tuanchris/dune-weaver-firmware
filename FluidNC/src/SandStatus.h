@@ -12,11 +12,15 @@
 
   The document is a compact single-line JSON object, e.g.
 
-    {"state":"Run","theta":1.2340,"rho":0.5000,"feed":100,"feed_override":110,"running":true,
+    {"state":"Run","kinematics":"ThetaRho","theta":1.2340,"rho":0.5000,
+     "feed":100,"feed_override":110,"running":true,
      "file":"/sd/star.thr","progress":0.425,"elapsed":312,
      "playlist":{"active":true,"index":2,"total":10,"name":"evening",
                  "clearing":false,"quiet":false},
      "led":{"effect":"rainbow","brightness":40}}
+
+  On a cartesian table (kinematics "CoreXY"/"Cartesian", G-code patterns)
+  the position fields are "x"/"y" in mm instead of "theta"/"rho".
 */
 
 #include <string>
@@ -28,9 +32,23 @@ namespace SandStatus {
     struct Data {
         const char* state = "Unknown";  // GRBL state name
 
-        float theta = 0.0f;  // radians (ThetaRho cartesian X)
-        float rho   = 0.0f;  // 0..1    (ThetaRho cartesian Y)
-        float feed  = 0.0f;  // $THR/Feed programmed rate, motor mm/min
+        // Active kinematics name ("ThetaRho", "CoreXY", "Cartesian", ...);
+        // omitted if null.  Tells the client which coordinate model the
+        // position fields use, and that pattern files are .thr (ThetaRho
+        // translates them) vs plain G-code (everything else).
+        const char* kinematics = nullptr;
+
+        // Machine position, cartesian X/Y as the kinematics defines them.
+        // ThetaRho (cartesian=false): emitted as "theta" (radians) and "rho"
+        // (0..1).  Cartesian/CoreXY (cartesian=true): emitted as "x"/"y" in mm.
+        bool  cartesian = false;
+        float theta = 0.0f;  // cartesian X (theta rad, or x mm)
+        float rho   = 0.0f;  // cartesian Y (rho 0..1, or y mm)
+
+        // $THR/Feed programmed rate, motor mm/min.  ThetaRho only: on a
+        // cartesian table each G-code file carries its own F words, so feed
+        // stays 0 and speed control is feed_override.
+        float feed  = 0.0f;
         int   feed_override = 100;  // live feed-rate override, percent (sys.f_override)
 
         bool        running  = false;  // a file job is active

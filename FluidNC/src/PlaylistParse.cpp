@@ -9,6 +9,28 @@
 
 namespace PlaylistParse {
 
+    bool has_ext_in(const std::string& name, const char* exts) {
+        if (!exts || !*exts) {
+            return true;
+        }
+        const char* p = exts;
+        while (*p) {
+            while (*p == ' ') {
+                ++p;
+            }
+            const char* e  = p;
+            while (*e && *e != ' ') {
+                ++e;
+            }
+            size_t el = static_cast<size_t>(e - p);
+            if (el && name.size() >= el && strncasecmp(name.c_str() + name.size() - el, p, el) == 0) {
+                return true;
+            }
+            p = e;
+        }
+        return false;
+    }
+
     std::string clean_line(const std::string& raw) {
         size_t end     = raw.size();
         size_t comment = raw.find('#');

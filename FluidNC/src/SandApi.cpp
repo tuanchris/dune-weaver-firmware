@@ -35,6 +35,7 @@
 #include "FluidPath.h"
 #include "FileStream.h"           // serve a prebuilt pattern manifest
 #include "Protocol.h"            // protocol_request_goto (deferred jog)
+#include "Limits.h"              // limitsMin/MaxPosition (goToXY travel clamp)
 #include "TimeKeeper.h"          // Clock:: for the time block / sync
 
 #include <cstring>
@@ -81,14 +82,11 @@ namespace {
     // /sand_patterns when present.
     constexpr const char* kPatternManifest = "/patterns/index.json";
 
-    // Case-insensitive "does name end with ext" (ext like ".thr"); a null/empty
-    // ext matches everything.
+    // Case-insensitive "does name end with one of ext" where ext is a
+    // space-separated list (PlaylistParse::has_ext_in, std-only + unit-tested);
+    // a null/empty ext matches everything.
     bool hasExt(const std::string& name, const char* ext) {
-        if (!ext || !*ext) {
-            return true;
-        }
-        size_t el = strlen(ext);
-        return name.size() >= el && strcasecmp(name.c_str() + name.size() - el, ext) == 0;
+        return PlaylistParse::has_ext_in(name, ext);
     }
 
     // Emits the matching files in ONE folder (non-recursive) as JSON-array
@@ -181,12 +179,13 @@ namespace {
         return static_cast<Error>(SandApi::applyLed(value, out));
     }
 
-    // $Sand/Goto theta=<rad> rho=<0..1> -- jog to an absolute theta and/or rho
-    // for manual positioning between patterns (at least one axis).
+    // $Sand/Goto theta=<rad> rho=<0..1> (round tables) or x=<mm> y=<mm>
+    // (cartesian/CoreXY tables) -- jog to an absolute position for manual
+    // positioning between patterns (at least one axis, forms not mixable).
     Error sandGoto(const char* value, AuthenticationLevel auth_level, Channel& out) {
         std::string v = value ? value : "";
-        bool        hasTheta = false, hasRho = false;
-        float       theta = 0.0f, rho = 0.0f;
+        bool        hasTheta = false, hasRho = false, hasX = false, hasY = false;
+        float       theta = 0.0f, rho = 0.0f, x = 0.0f, y = 0.0f;
         size_t      i = 0;
         while (i < v.size()) {
             size_t b = v.find_first_not_of(" \t,&", i);
@@ -208,13 +207,30 @@ namespace {
             } else if (strcasecmp(key.c_str(), "rho") == 0) {
                 rho    = val;
                 hasRho = true;
+            } else if (strcasecmp(key.c_str(), "x") == 0) {
+                x    = val;
+                hasX = true;
+            } else if (strcasecmp(key.c_str(), "y") == 0) {
+                y    = val;
+                hasY = true;
             }
         }
-        Error err = SandApi::goTo(hasTheta, theta, hasRho, rho);
+        Error err;
+        if ((hasX || hasY) && (hasTheta || hasRho)) {
+            err = Error::InvalidValue;  // mixed forms
+        } else if (hasX || hasY) {
+            err = SandApi::goToXY(hasX, x, hasY, y);
+        } else {
+            err = SandApi::goTo(hasTheta, theta, hasRho, rho);
+        }
         if (err == Error::InvalidValue) {
-            log_error_to(out, "Usage: $Sand/Goto theta=<rad> rho=<0..1> (at least one)");
+            log_error_to(out, "Usage: $Sand/Goto theta=<rad> rho=<0..1> | x=<mm> y=<mm> (at least one, forms not mixable)");
         } else if (err == Error::IdleError) {
             log_error_to(out, "goto requires idle (home first / stop the pattern)");
+        } else if (err == Error::InvalidStatement) {
+            const char* hint = Kinematics::ThetaRho::active() ? "this table is polar: use theta=<rad> rho=<0..1>" :
+                                                                "this table is cartesian: use x=<mm> y=<mm>";
+            log_error_to(out, hint);
         }
         return err;
     }
@@ -290,6 +306,11 @@ std::string SandApi::statusJson() {
     SandStatus::Data d;
     d.state = state_name();
 
+    // Which coordinate model the client should render: theta/rho for the round
+    // ThetaRho tables, x/y mm for a cartesian (CoreXY) gantry playing G-code.
+    d.kinematics = config->_kinematics ? config->_kinematics->system_name() : "";
+    d.cartesian  = !Kinematics::ThetaRho::active();
+
     // get_mpos() already returns the cartesian (theta, rho) machine position
     // (it runs motors_to_cartesian internally, see motor_steps_to_mpos), so use
     // it directly.  Re-applying motors_to_cartesian here double-transformed it
@@ -299,12 +320,17 @@ std::string SandApi::statusJson() {
         d.rho   = mpos[Y_AXIS];
     }
 
-    if (const char* feed = settingValue("THR/Feed")) {
-        d.feed = strtof(feed, nullptr);
-    }
-    // Reflect a live /sand_feed?mm base-feed override active during a run.
-    if (int live = Kinematics::ThetaRho::effectiveFeed(); live >= 0) {
-        d.feed = static_cast<float>(live);
+    // Base feed is a ThetaRho concept ($THR/Feed drives the translated .thr
+    // moves).  A G-code pattern on a cartesian table carries its own F words,
+    // so feed stays 0 there and speed control is the feed_override percent.
+    if (!d.cartesian) {
+        if (const char* feed = settingValue("THR/Feed")) {
+            d.feed = strtof(feed, nullptr);
+        }
+        // Reflect a live /sand_feed?mm base-feed override active during a run.
+        if (int live = Kinematics::ThetaRho::effectiveFeed(); live >= 0) {
+            d.feed = static_cast<float>(live);
+        }
     }
     // Live override (set by /sand_feed) so the app can read back the effective
     // rate: effective mm/min = feed * feed_override / 100.
@@ -433,7 +459,7 @@ void SandApi::streamPatterns(const JsonSink& emit) {
     } catch (...) {
         // no manifest / SD unavailable -> live listing below
     }
-    streamDirJson("/patterns", ".thr", emit);
+    streamDirJson("/patterns", PlaylistParse::kPatternExts, emit);
 }
 
 // Content-hash ETag cache for /patterns/index.json.  Keyed on file size: an
@@ -569,6 +595,9 @@ std::string SandApi::settingsJson() {
 }
 
 Error SandApi::goTo(bool hasTheta, float theta, bool hasRho, float rho) {
+    if (!Kinematics::ThetaRho::active()) {
+        return Error::InvalidStatement;  // cartesian table: use goToXY (x=/y=)
+    }
     if (!hasTheta && !hasRho) {
         return Error::InvalidValue;  // nothing to move
     }
@@ -587,6 +616,35 @@ Error SandApi::goTo(bool hasTheta, float theta, bool hasRho, float rho) {
     // Deferred to the main loop so the jog is planned in the main task, never
     // concurrently with it from the web/command task.
     protocol_request_goto(hasTheta, theta, hasRho, rho, feed);
+    return Error::Ok;
+}
+
+Error SandApi::goToXY(bool hasX, float x, bool hasY, float y) {
+    if (Kinematics::ThetaRho::active()) {
+        return Error::InvalidStatement;  // round table: use goTo (theta=/rho=)
+    }
+    if (!hasX && !hasY) {
+        return Error::InvalidValue;  // nothing to move
+    }
+    if (!state_is(State::Idle)) {
+        return Error::IdleError;
+    }
+    // Clamp to the machine envelope so a bad request parks at the edge instead
+    // of grinding the gantry into a frame (soft limits would alarm instead).
+    auto clampTravel = [](float v, size_t axis) {
+        float lo = limitsMinPosition(axis), hi = limitsMaxPosition(axis);
+        return v < lo ? lo : (v > hi ? hi : v);
+    };
+    if (hasX) {
+        x = clampTravel(x, X_AXIS);
+    }
+    if (hasY) {
+        y = clampTravel(y, Y_AXIS);
+    }
+    // G-code patterns carry their own feeds, so there is no base-feed setting
+    // to borrow here; a fixed moderate rate serves the manual reposition (the
+    // planner still caps it at the axis max_rate).
+    protocol_request_goto(hasX, x, hasY, y, 1000.0f);
     return Error::Ok;
 }
 

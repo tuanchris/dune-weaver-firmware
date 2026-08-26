@@ -19,6 +19,7 @@
 
 #include "SettingsDefinitions.h"  // gcode_echo, homing_mode
 #include "System.h"               // set_motor_steps_from_mpos (crash home)
+#include "Kinematics/ThetaRho.h"  // active(): $Sand/Home's crash/offset logic is polar-only
 #include "Machine/LimitPin.h"
 #include "Job.h"
 #include "Driver/restart.h"
@@ -455,18 +456,23 @@ void protocol_main_loop() {
         // blocking homing loop is the only thing pumping segment prep.
         if (rtStartHome && (state_is(State::Idle) || state_is(State::Alarm))) {
             rtStartHome = false;
+            // Crash homing and the theta offset are polar concepts: on a
+            // cartesian (CoreXY) gantry a blind crash drive or an X-mpos
+            // override would fight the switch-homed machine envelope, so
+            // $Sand/Home degrades to a plain $H there.
             // Theta zero offset (UI "Sensor Offset"): pattern theta=0 sits this
-            // many radians from the home reference.  Applied to both modes.
+            // many radians from the home reference.  Applied to both polar modes.
             float theta_offset_rad = theta_offset ? (theta_offset->get() * DEG_TO_RAD) : 0.0f;
-            if (homing_mode && homing_mode->get() == HomingCrash) {
+            if (Kinematics::ThetaRho::active() && homing_mode && homing_mode->get() == HomingCrash) {
                 protocol_run_crash_home(theta_offset_rad);
             } else {
                 // Set the theta limit-switch home position so $H (and any
                 // after_homing recenter to X0) land theta=0 the offset away
                 // from the switch.  In-memory only; reloaded from config each
-                // boot, re-applied on every home.
-                if (config && config->_axes && config->_axes->_numberAxis > X_AXIS && config->_axes->_axis[X_AXIS] &&
-                    config->_axes->_axis[X_AXIS]->_homing) {
+                // boot, re-applied on every home.  Polar only: on a cartesian
+                // gantry X's homing mpos_mm comes from the config.
+                if (Kinematics::ThetaRho::active() && config && config->_axes && config->_axes->_numberAxis > X_AXIS &&
+                    config->_axes->_axis[X_AXIS] && config->_axes->_axis[X_AXIS]->_homing) {
                     config->_axes->_axis[X_AXIS]->_homing->_mpos = theta_offset_rad;
                 }
                 char line[] = "$H";

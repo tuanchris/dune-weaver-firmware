@@ -70,6 +70,10 @@ namespace Kinematics {
         }
     }
 
+    const char* Kinematics::system_name() const {
+        return _system ? _system->name() : "";
+    }
+
     void Kinematics::group(Configuration::HandlerBase& handler) {
         ::Kinematics::KinematicsFactory::factory(handler, _system);
     }

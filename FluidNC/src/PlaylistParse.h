@@ -67,6 +67,17 @@ namespace PlaylistParse {
     // unrecognized name so callers can report a usage error.
     bool parse_clear_mode(const char* name, int& mode);
 
+    // Pattern-file extensions the table can play: ".thr" (translated by the
+    // ThetaRho kinematics) and plain G-code (".gcode"/".gc"/".nc", executed
+    // directly -- the pattern format for cartesian/CoreXY tables).  Space
+    // separated, the list form has_ext_in() takes.
+    constexpr const char* kPatternExts = ".thr .gcode .gc .nc";
+
+    // Case-insensitive "does name end with one of exts", where exts is a
+    // space-separated extension list (e.g. kPatternExts, or a single ".txt").
+    // A null/empty exts matches everything.
+    bool has_ext_in(const std::string& name, const char* exts);
+
     // Split a $Sand/Run value into the pattern path and optional clear mode.
     // Filenames may contain spaces ("/patterns/13b Battlesbury (C C).thr"),
     // so the path is NOT the first token: the optional "clear=<mode>" must be
