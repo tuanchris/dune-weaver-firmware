@@ -109,6 +109,10 @@ works). Config: `config_dlc32max_thetarho.yaml`.
 - **Native tests** (fast, every change): `pio test -e tests` (~10s, googletest +
   ASan/UBSan).
 - **Firmware build**: `pio run -e sandtable` (flash ~80% full).
+- **The espressif32 platform is pinned** (`#v6.12.0` in `platformio.ini`, GCC 8.4).
+  Upstream HEAD moved to GCC 14, where `int32_t` is `long` and FluidNC's
+  `int`/`int32_t` overloads stop compiling; an unpinned URL only bites on a fresh
+  install (a CI runner after its cache expires), never on a warm dev machine.
 - **Flash over USB**: `pio run -e sandtable -t upload --upload-port /dev/cu.usbserial-8320`
   (~2 min; board then needs ~25-30 s to rejoin WiFi). The port is often grabbed by a
   Chrome **Web Serial** tab — if "port busy", ask the user to close it.
