@@ -66,8 +66,9 @@
   is running), which is what paces the animation frames.
 
   The RMT translator API is used so memory cost is 3 bytes per pixel.
-  We claim RMT_CHANNEL_7 because the RMT step engine allocates channels
-  from 0 upward; on I2S-stepping boards (e.g. MKS-DLC32) RMT is unused.
+  We claim the top two TX memory blocks (channel 6 on the ESP32, 2 on the
+  S3) because the RMT step engine allocates channels from 0 upward; on
+  I2S-stepping boards (e.g. MKS-DLC32) RMT is unused.
 */
 
 #include "Config.h"
@@ -195,9 +196,9 @@ private:
     int  hookEffect();       // the state hook in force, or -1
     int  effectiveEffect();  // what the strip shows: quiet > live > hook > setting
     void renderEffect(int effect, uint8_t speed, bool nested = false);  // fills _fb (0..255 per channel)
-    void commit(uint8_t brightness);               // _fb -> _pixels, applies master brightness
+    bool commit(uint8_t brightness);               // _fb -> _pixels, applies master brightness; true if changed
     void parse_state_report();
-    void setPixel(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness);
+    bool setPixel(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness);
     void flushLive();  // persist any in-memory live overrides to NVS (called at idle)
 
     // Framebuffer helpers (operate on _fb, logical R,G,B order)
@@ -272,8 +273,10 @@ private:
     uint8_t* _heat   = nullptr;  // 1 byte per LED, fire effect heat
     LedWhite::Order _order;      // wire byte order incl. the W slot (from color_order)
     LedWhite::Mode  _white_mode = LedWhite::Accurate;  // $LED/White, resolved once per frame
-    uint16_t _phase      = 0;  // animation phase, 8.8 fixed point
+    uint32_t _phase      = 0;  // animation phase, 24.8 fixed point (wraps in days, not seconds)
     uint32_t _last_frame = 0;
+    uint32_t _last_send  = 0;  // last RMT transmission (see kRefreshMs)
+    static constexpr uint32_t kRefreshMs = 1000;  // resend period for an unchanged frame
 
     // Per-effect persistent state (reset when the effect changes)
     int      _last_effect = -1;

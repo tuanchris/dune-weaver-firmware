@@ -19,7 +19,7 @@ hostname: DWMAX
 stepping:
 # Timed is the board default on the FluidNC wiki. RTM (RMT) also works here;
 # it takes one RMT channel per step pin from 0 up, and the LED driver takes
-# the top TX-capable channel (3 on the S3), so 2 axes leave no conflict.
+# the top two TX channels (2-3 on the S3), so 2 axes leave no conflict.
   engine: Timed
   idle_ms: 0
   pulse_us: 4

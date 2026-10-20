@@ -10,6 +10,7 @@
 #include "Kinematics/ThetaRho.h"  // ballAngle() for the 'ball' effect
 
 #include <driver/rmt.h>
+#include <esp_intr_alloc.h>  // ESP_INTR_FLAG_IRAM
 #include <soc/soc_caps.h>  // SOC_RMT_TX_CANDIDATES_PER_GROUP
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -23,7 +24,14 @@ namespace {
     // all 8 channels; the ESP32-S3 also has 8 but only 0-3 are TX-capable
     // (4-7 are receive-only), and rmt_config() rejects an RX channel in
     // RMT_MODE_TX - a silent "leds: RMT init failed" with no other symptom.
-    constexpr rmt_channel_t LED_RMT_CHANNEL = (rmt_channel_t)(SOC_RMT_TX_CANDIDATES_PER_GROUP - 1);
+    //
+    // Two memory blocks, so the channel starts two below the top (it borrows
+    // the next channel's block).  The refill ISR must rewrite half the buffer
+    // before the hardware wraps back into it; with one block that is 32 bits
+    // (40 us; 24 bits / 30 us on the S3), and the I2S step ISR runs at a
+    // higher level on the same core at ~62 kHz.  Two blocks double the window.
+    constexpr int           LED_RMT_BLOCKS  = 2;
+    constexpr rmt_channel_t LED_RMT_CHANNEL = (rmt_channel_t)(SOC_RMT_TX_CANDIDATES_PER_GROUP - LED_RMT_BLOCKS);
 
     // WS2812/WS2815 bit timing, filled in by init() from the RMT channel's
     // actual counter clock instead of hardcoded tick counts. Both the ESP32
@@ -94,7 +102,10 @@ namespace {
         { "party", 4 },   { "cloud", 5 }, { "heat", 6 }, { "sunset", 7 },
     };
 
-    // RMT translator: expands pixel bytes into RMT items on demand
+    // RMT translator: expands pixel bytes into RMT items on demand.  It runs
+    // inside the RMT refill ISR, which is ESP_INTR_FLAG_IRAM (see init()), so
+    // it must stay IRAM/DRAM-only: no logging, no virtual calls, no const
+    // tables (they land in flash) -- WS2812_ZERO/ONE are non-const for this.
     void IRAM_ATTR ws2812_translate(
         const void* src, rmt_item32_t* dest, size_t src_size, size_t wanted_num, size_t* translated_size, size_t* item_num) {
         if (!src || !dest) {
@@ -163,13 +174,17 @@ void Leds::init() {
     cfg.channel                 = LED_RMT_CHANNEL;
     cfg.gpio_num                = static_cast<gpio_num_t>(gpio);
     cfg.clk_div                 = 2;  // 40 MHz -> 25 ns ticks
-    cfg.mem_block_num           = 1;
+    cfg.mem_block_num           = LED_RMT_BLOCKS;
     cfg.tx_config.loop_en       = false;
     cfg.tx_config.carrier_en    = false;
     cfg.tx_config.idle_output_en = true;
     cfg.tx_config.idle_level    = RMT_IDLE_LEVEL_LOW;
 
-    if (rmt_config(&cfg) != ESP_OK || rmt_driver_install(cfg.channel, 0, 0) != ESP_OK ||
+    // IRAM: the refill ISR must keep running while a flash op has the cache
+    // disabled.  The channel holds only 128 items (96 on the S3) of a 1000+ item
+    // frame, so a refill held off by an NVS/littlefs op replays stale items
+    // mid-frame and the strip shows wrong colors for a frame (flicker).
+    if (rmt_config(&cfg) != ESP_OK || rmt_driver_install(cfg.channel, 0, ESP_INTR_FLAG_IRAM) != ESP_OK ||
         rmt_translator_init(cfg.channel, ws2812_translate) != ESP_OK) {
         log_error("leds: RMT init failed");
         return;
@@ -500,8 +515,16 @@ void Leds::flushLive() {
     }
 }
 
-void Leds::setPixel(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness) {
-    LedWhite::pack(_order, _white_mode, &_pixels[index * _order.bpp], r, g, b, brightness);
+// Returns true if the pixel's wire bytes changed.
+bool Leds::setPixel(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness) {
+    uint8_t px[4];
+    LedWhite::pack(_order, _white_mode, px, r, g, b, brightness);
+    uint8_t* dst = &_pixels[index * _order.bpp];
+    if (memcmp(dst, px, _order.bpp) == 0) {
+        return false;
+    }
+    memcpy(dst, px, _order.bpp);
+    return true;
 }
 
 // Classic 256-position color wheel: red -> green -> blue -> red
@@ -644,7 +667,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
         case EFFECT_RUNNING: {  // one sine peak of the primary color, sliding
             primaryColor(r, g, b);
             for (int i = 0; i < _num_leds; i++) {
-                uint8_t s = sin8(static_cast<uint8_t>(i * (256 / _num_leds) - hi));
+                uint8_t s = sin8(static_cast<uint8_t>((i * 256) / _num_leds - hi));
                 setFb(i, (r * s) >> 8, (g * s) >> 8, (b * s) >> 8);
             }
             break;
@@ -653,7 +676,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
         case EFFECT_SINE: {  // two faster sine bands of the primary color
             primaryColor(r, g, b);
             for (int i = 0; i < _num_leds; i++) {
-                uint8_t s = sin8(static_cast<uint8_t>(i * (512 / _num_leds) + hi));
+                uint8_t s = sin8(static_cast<uint8_t>((i * 512) / _num_leds + hi));
                 setFb(i, (r * s) >> 8, (g * s) >> 8, (b * s) >> 8);
             }
             break;
@@ -986,7 +1009,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             primaryColor(r, g, b);
             secondaryColor(r2, g2, b2);
             for (int i = 0; i < _num_leds; i++) {
-                uint8_t  s     = sin8(static_cast<uint8_t>(i * (256 / _num_leds) - hi));
+                uint8_t  s     = sin8(static_cast<uint8_t>((i * 256) / _num_leds - hi));
                 uint16_t scale = 100 + ((s * 155) >> 8);
                 if (i & 1) {
                     setFb(i, (r * scale) >> 8, (g * scale) >> 8, (b * scale) >> 8);
@@ -1146,11 +1169,13 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
     }
 }
 
-void Leds::commit(uint8_t brightness) {
-    _white_mode = static_cast<LedWhite::Mode>(_white ? _white->get() : LedWhite::Accurate);
+bool Leds::commit(uint8_t brightness) {
+    _white_mode  = static_cast<LedWhite::Mode>(_white ? _white->get() : LedWhite::Accurate);
+    bool changed = false;
     for (int i = 0; i < _num_leds; i++) {
-        setPixel(i, _fb[i * 3 + 0], _fb[i * 3 + 1], _fb[i * 3 + 2], brightness);
+        changed |= setPixel(i, _fb[i * 3 + 0], _fb[i * 3 + 1], _fb[i * 3 + 2], brightness);
     }
+    return changed;
 }
 
 // The state hook in force, or -1 for none.  Suppressed while the user's own
@@ -1210,10 +1235,18 @@ void Leds::render() {
 
     uint8_t brightness = _live_bright.empty() ? static_cast<uint8_t>(_brightness->get()) : static_cast<uint8_t>(atoi(_live_bright.c_str()));
     uint8_t speed      = _live_speed.empty() ? static_cast<uint8_t>(_speed->get()) : static_cast<uint8_t>(atoi(_live_speed.c_str()));
+    _phase += speed * 8;  // the live override too, so the app's speed slider works mid-pattern
 
     renderEffect(effect, speed);
-    commit(brightness);
 
+    // An unchanged frame (static, off) is only resent every kRefreshMs: each
+    // send is another chance for a late refill to corrupt it, and the periodic
+    // resend still repairs a bad frame or a strip that powered up after us.
+    uint32_t now = now_ms();
+    if (!commit(brightness) && now - _last_send < kRefreshMs) {
+        return;
+    }
+    _last_send = now;
     rmt_write_sample(LED_RMT_CHANNEL, _pixels, _num_leds * _order.bpp, false);
     // The >= frame_ms gap to the next frame doubles as the WS2812 latch time.
 }
@@ -1270,7 +1303,6 @@ Error Leds::pollLine(char* line) {
         uint32_t now = now_ms();
         if (now - _last_frame >= static_cast<uint32_t>(_frame_ms)) {
             _last_frame = now;
-            _phase += _speed->get() * 8;
             render();
         }
     }

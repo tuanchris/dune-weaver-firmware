@@ -95,7 +95,7 @@ WS2812/NeoPixel over RMT:
   (Channel + ConfigurableModule registered with `allChannels` so the
   channel-poll task drives animation frames; that task keeps running
   during jobs — `Protocol.cpp:140`). Uses the IDF RMT *translator* API
-  (3 bytes/pixel buffer, no item buffer) on **RMT_CHANNEL_7** — step
+  (3 bytes/pixel buffer, no item buffer) on the top two RMT TX blocks (**channel 6** + 7's block; 2 + 3 on the S3) — step
   engines allocate RMT channels from 0 upward (`esp32/rmt_engine.c:29`),
   and the DLC32 steps via I2S shift register anyway, so no conflict.
 - Strip must be wired to a real GPIO (RMT cannot drive I2SO expander pins).

@@ -34,8 +34,9 @@ table exists: the **DWG "Desert Compass"**.)
   `$Sand/HomingMode` + `$Sand/ThetaOffset`, preferred over raw `$H` which always
   does sensor homing; `after_homing` re-centers to 0,0). Crash/sensorless homing
   is **not** implemented.
-- **LEDs**: 49 WS2812 on `gpio.18`, color order **RGB**, via RMT (channel 7). (`uart1`
-  was removed to free gpio.18.) RGBW strips (SK6812) are supported: a 4-letter
+- **LEDs**: 49 WS2812 on `gpio.18`, color order **RGB**, via RMT (channel 6 with 2
+  memory blocks — refill-ISR slack against LED flicker). (`uart1` was removed to
+  free gpio.18.) RGBW strips (SK6812) are supported: a 4-letter
   `color_order` (e.g. `GRBW`) switches the bus to 4 bytes/pixel and `$LED/White`
   (WLED's auto-white modes, std-only `LedWhite.h`) derives W from each pixel's RGB.
 
@@ -262,7 +263,9 @@ works). Config: `config_dlc32max_thetarho.yaml`.
   writes fired into the pause decel ramp (same-value writes skip NVS, which
   is why naive repros fail). **Anything new reachable from `pulse_func` must
   stay IRAM/DRAM-only: no virtual calls, no logging, no flash-resident
-  tables.** The writers are everywhere (`flushLive`, `TimePersist`,
+  tables.** The same rule covers `ws2812_translate` in `Leds.cpp`: the LED
+  RMT refill ISR is `ESP_INTR_FLAG_IRAM` too, because a refill held off by a
+  flash op replays stale bits mid-frame (LED flicker). The writers are everywhere (`flushLive`, `TimePersist`,
   `$THR/Feed` persist, WiFi creds, any `$Setting=` over HTTP) and all gate on
   an instantaneous idle check that races the protocol task's next job start —
   the ISR-side cleanliness is what makes them safe.
