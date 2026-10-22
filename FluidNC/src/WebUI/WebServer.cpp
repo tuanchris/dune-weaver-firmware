@@ -610,7 +610,7 @@ namespace WebUI {
             return;
         }
 
-        if (WiFi.getMode() == WIFI_AP && wifi_ap_is_fallback()) {
+        if (wifi_ap_is_fallback()) {  // AP, or the recovery AP_STA hotspot
             // Provisioning AP: funnel every unknown URL to the setup portal.
             // In standalone mode fall through to a plain 404 instead - the
             // wildcard DNS sends random hostnames here, and answering them
@@ -1149,9 +1149,13 @@ namespace WebUI {
         }
         Error err = wifi_save_sta_credentials(ssid, password);
         if (err == Error::IdleError) {
-            // NVS writes are idle-gated and the boot auto-home is likely
-            // still running when a user reaches this from the captive sheet;
-            // the page retries until the table goes Idle.
+            // NVS writes are idle-gated; the page retries until Idle.  The
+            // boot auto-home ends on its own, but an auto-play playlist
+            // (loop, 0 s pause by default) never would, and the page sat on
+            // "Saving..." forever.  This save reboots anyway, so end the
+            // playlist and pattern now.  Stop is a no-op during homing.
+            Playlist::stopActive();
+            protocol_send_event(&stopJobEvent);
             sendJSON(503, "{\"status\":\"busy\"}");
             return;
         }
@@ -1183,7 +1187,12 @@ namespace WebUI {
         bool needReboot = WiFi.getMode() == WIFI_STA;
 
         Error err = wifi_set_standalone();
-        if (err == Error::IdleError) {  // boot auto-home still running; page retries
+        if (err == Error::IdleError) {  // homing or drawing; page retries
+            // Same as handleWifiSave: a looping auto-play would block this
+            // forever.  From the hotspot there is no reboot, so the playlist
+            // stays stopped until the owner restarts it.
+            Playlist::stopActive();
+            protocol_send_event(&stopJobEvent);
             sendJSON(503, "{\"status\":\"busy\"}");
             return;
         }

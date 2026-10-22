@@ -211,7 +211,9 @@ Two ways to run the table, both driven by the same two NVS settings (`$WiFi/Mode
   the board falls back to its own AP (**fallback AP**) and serves a **captive setup portal**: joining
   the `DuneWeaver-<MAC4>` hotspot (password `12345678`) pops the phone's captive sheet with a chooser —
   connect to home WiFi (scan, pick, password) or switch to standalone. A failed join's reason
-  (wrong password / network not found / timeout) is shown on the portal.
+  (wrong password / network not found / timeout) is shown on the portal. With an SSID saved, this
+  boot-time hotspot keeps probing for the home network every 5 minutes (see below), so a table
+  powered up before its router joins on its own once the network appears.
 - **Standalone mode** (`$WiFi/Mode=AP`): the AP is deliberate — the phone joins the hotspot and the
   app drives the same HTTP API at `192.168.0.1`. In this mode the OS connectivity probes
   (`/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`, `/connecttest.txt`) are answered with the
@@ -224,7 +226,8 @@ Two ways to run the table, both driven by the same two NVS settings (`$WiFi/Mode
 AP restart), the table retries the join itself rather than sitting dark until a power cycle — the
 ESP32 WiFi stack refuses to auto-retry some disconnect reasons, notably the one many APs send as
 they shut down. Retries start ~20 s after the drop and repeat every 30 s (slowing to 2 min after
-five tries), but only at a moment that cannot disturb motion: the machine at **Idle**, or the
+five tries), but only at a moment that cannot disturb motion: the machine at **Idle** (or
+**Alarm** — e.g. a failed boot home), or the
 instant a **pattern or clear finishes**, so a continuously looping playlist still gets recovery
 windows. A table is therefore reachable again within a minute of the AP returning if it is idle, or
 by the end of the current pattern if it is drawing. Serial log lines: `WiFi Disconnected, reason
@@ -244,9 +247,12 @@ no user action. Log lines: `setup hotspot DuneWeaver-<MAC4> raised at 192.168.0.
 every 5 min)`, `probing home network (attempt <n>) while the hotspot stays up`, and
 `Setup hotspot lowered; back to station only`.
 
+The same hotspot-plus-probes is what a table gets at **boot** when its saved network is not found
+(first probe ~30 s after the hotspot rises). Choosing standalone from the hotspot stops the probing.
+
 Only `$WiFi/Mode=STA>AP` (the default) raises the hotspot; a table deliberately set to `STA` stays a
 station. While the hotspot is up, `GET /wifi_status` reports `mode:"fallback"` and `fail` explains
-how long the home network has been unreachable.
+why: the boot join's failure reason, or how long the home network has been unreachable.
 
 Portal routes (registered in **every** mode, so the app can also reconfigure a table over the LAN):
 
@@ -255,8 +261,8 @@ Portal routes (registered in **every** mode, so the app can also reconfigure a t
 | `GET /` or `GET /wifi` | the setup portal page (self-contained HTML; root serves it in every mode — the plain-text API map is at `GET /help`) |
 | `GET /wifi_status` | `{mode:"sta"\|"fallback"\|"standalone", sta_ssid, ap_ssid, fail}` — `fail` is this boot's STA join failure reason (`""` if none) |
 | `GET /wifi_scan` | `{status:"scanning"}` while the async scan runs (poll ~1.5 s), then `{status:"ok", aps:[{ssid, rssi, secure}]}` — deduped per SSID, strongest signal kept, hidden SSIDs omitted. `?rescan=1` forces a fresh scan |
-| `POST /wifi_save` | form fields `ssid` (1–32 chars) + `password` (8–64 chars; open networks unsupported — `Sta/MinSecurity` defaults to WPA2). Persists credentials, forces `$WiFi/Mode=STA>AP`, replies `{status:"ok",reboot:1}`, then **reboots** (~0.5 s later). Success = table appears on the LAN; failure = fallback AP returns with `fail` set |
-| `POST /wifi_standalone` | persists `$WiFi/Mode=AP`. From the AP: applies **live** (no reboot, phone stays joined), replies `{reboot:0}`. From STA: replies `{reboot:1}` and reboots into the hotspot |
+| `POST /wifi_save` | form fields `ssid` (1–32 chars) + `password` (8–64 chars; open networks unsupported — `Sta/MinSecurity` defaults to WPA2). Persists credentials, forces `$WiFi/Mode=STA>AP`, replies `{status:"ok",reboot:1}`, then **reboots** (~0.5 s later). Success = table appears on the LAN; failure = fallback AP returns with `fail` set. Not Idle → **503** `{status:"busy"}`, and if a pattern/playlist is running this call **stops it** (homing is never interrupted); retry every ~2 s until `ok` |
+| `POST /wifi_standalone` | persists `$WiFi/Mode=AP`. From the AP: applies **live** (no reboot, phone stays joined), replies `{reboot:0}`. From STA: replies `{reboot:1}` and reboots into the hotspot. Busy handling as `/wifi_save` — from the AP no reboot follows, so a playlist it stopped stays stopped |
 
 Serial onboarding (used by the USB installer; ASCII SSIDs only over serial):
 `[ESP410]` (scan → `{"AP_LIST":[{SSID,SIGNAL,IS_PROTECTED},…]}`) · `$Sta/SSID=` · `$Sta/Password=` ·

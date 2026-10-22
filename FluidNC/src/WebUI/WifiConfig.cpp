@@ -1109,12 +1109,28 @@ namespace WebUI {
                 case WiFiFallback:
                     if (StartSTA()) {
                         goto wifi_on;
-                    } else {  // STA failed, reset
-                        _ap_is_fallback = true;  // captive portal serves the setup page
-                        WiFi.mode(WIFI_OFF);
-                        esp_wifi_restore();
-                        delay_ms(100);
                     }
+                    if (strlen(_sta_ssid->get()) > 0) {
+                        // A saved network that is merely absent right now (the
+                        // table powered up before the router) must not cost the
+                        // home network until the next power cycle.  Raise the
+                        // same recovery hotspot a runtime drop gets -- station
+                        // parked, home network probed every few minutes -- not a
+                        // plain AP that never looks for it again.  No
+                        // esp_wifi_restore(): the probes reuse the station
+                        // config StartSTA() just loaded into the driver.
+                        _sta_down_since = millis();
+                        raiseRecoveryAp(_sta_down_since);
+                        if (_ap_raised) {
+                            goto wifi_on;
+                        }
+                    }
+                    // Fresh table (nothing to probe for), or the hotspot would
+                    // not come up beside the station: plain AP.
+                    _ap_is_fallback = true;  // captive portal serves the setup page
+                    WiFi.mode(WIFI_OFF);
+                    esp_wifi_restore();
+                    delay_ms(100);
                     // fall through to fallback to AP mode
                 case WiFiAP:
                     if (StartAP()) {
@@ -1205,7 +1221,9 @@ namespace WebUI {
                 _sta_pattern_done = false;
                 return true;
             }
-            return state_is(State::Idle);
+            // Alarm moves nothing either, and a table whose boot homing failed
+            // sits there until someone reaches it -- over WiFi.
+            return state_is(State::Idle) || state_is(State::Alarm);
         }
 
         // How long the station must stay down before the setup hotspot joins it.
@@ -1251,8 +1269,12 @@ namespace WebUI {
                 // Fallback semantics: the captive DNS resolves every name to the
                 // table so the phone pops the setup sheet, which is exactly the
                 // "I need to re-point this table at a network" case.
-                _ap_is_fallback  = true;
-                _sta_fail_reason = "home network unreachable for " + std::to_string((now - _sta_down_since) / 60000) + " min";
+                _ap_is_fallback = true;
+                // Keep a boot-time join failure's specific reason (wrong
+                // password, network not found) for the portal banner.
+                if (_sta_fail_reason.empty()) {
+                    _sta_fail_reason = "home network unreachable for " + std::to_string((now - _sta_down_since) / 60000) + " min";
+                }
                 // Let the AP settle before the first probe steals the channel.
                 _sta_next_try = now + AP_PROBE_SETTLE_MS;
                 log_info("WiFi down " << (now - _sta_down_since) / 1000 << "s; setup hotspot " << ssid << " raised at "
@@ -1297,6 +1319,17 @@ namespace WebUI {
                 return;
             }
             if (!_sta_ssid || strlen(_sta_ssid->get()) == 0) {
+                return;
+            }
+
+            // The owner picked standalone from this hotspot (/wifi_standalone
+            // flips WiFi/Mode live, no reboot): stop probing, or a probe that
+            // found the home network would drop the hotspot they are using.
+            if (_ap_raised && _mode->get() == WiFiAP) {
+                if (_ap_probing) {
+                    _ap_probing = false;
+                    esp_wifi_disconnect();
+                }
                 return;
             }
 

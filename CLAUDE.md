@@ -183,9 +183,9 @@ works). Config: `config_dlc32max_thetarho.yaml`.
   dark until a power cycle. Retries use `esp_wifi_connect()`, never `WiFi.begin()`
   (we don't call `WiFi.persistent(false)`, so storage stays `WIFI_STORAGE_FLASH` and
   `begin()`'s `esp_wifi_set_config()` can write NVS per attempt) and never a scan.
-  **The retry window is machine state-gated**: Idle, or the moment a job (pattern or
-  clear) finishes — `Idle` alone is not enough because an indefinitely looping
-  playlist may never be observed there. Never during `State::Homing`.
+  **The retry window is machine state-gated**: Idle or Alarm (nothing moves), or the
+  moment a job (pattern or clear) finishes — `Idle` alone is not enough because an
+  indefinitely looping playlist may never be observed there. Never during `State::Homing`.
 - **The recovery AP parks the station; it does not run it in parallel.** After
   `$WiFi/ApFallbackMin` (default 10) minutes down, `raiseRecoveryAp()` brings the
   `DuneWeaver-<MAC4>` portal up at runtime in `WIFI_AP_STA`. The softAP shares ONE radio with
@@ -197,7 +197,20 @@ works). Config: `config_dlc32max_thetarho.yaml`.
   bounded 25 s every 5 min, re-parking after each miss. `dropRecoveryAp()` restores
   `setAutoReconnect(true)`. Verify AP visibility from a SECOND radio (the other table's
   `/wifi_scan`) — macOS `networksetup`/`system_profiler` scanning is unreliable enough
-  to produce false negatives.
+  to produce false negatives. **A boot-time miss with an SSID saved takes this same
+  path** (plain `StartAP()` is only for a table with no SSID): a plain AP never
+  re-probes, so a table powered up before its router stayed off the LAN until a power
+  cycle. That path must **not** `esp_wifi_restore()` — the probes' `esp_wifi_connect()`
+  reuses the station config `StartSTA()` loaded. Picking standalone from the hotspot
+  (`$WiFi/Mode=AP`, applied live) stops the probes. **HIL trap:** `WiFi.begin()` arms a
+  one-shot core retry for *any* disconnect reason (`first_connect`), so a test that fakes
+  a boot failure right after `begin()` gets rejoined by the core, not our probe — join
+  first, then `esp_wifi_disconnect()` (reason 8, never retried) to model a real miss.
+- **The portal's `/wifi_save` and `/wifi_standalone` stop a running job when not Idle**
+  (`Playlist::stopActive()` + `stopJobEvent`, a no-op during homing) and answer busy; the
+  page retries every 2 s. Without that, an auto-play playlist (loop, 0 s pause by
+  default) kept the idle-gated NVS write blocked forever and the portal sat on
+  "Saving…" — customers read it as "hotspot setup only worked the first time".
 - **Captive-probe routes are registered in every mode** (`WebServer.cpp`), not just when
   the board *boots* into AP: routes cannot be added retroactively, and gating them on
   boot mode would force a web-server restart to give a runtime AP a working portal.

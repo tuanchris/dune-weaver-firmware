@@ -485,6 +485,7 @@ curl "$B/wifi_scan"          # {"status":"scanning"} -> poll ~1.5s -> {"status":
 # Set home-WiFi credentials (POST body, so any password chars are safe) and reboot:
 curl -X POST -d "ssid=MyNetwork" -d "password=hunter2秘密" "$B/wifi_save"
 #   -> {"status":"ok","reboot":1}; join fails -> hotspot returns, /wifi_status shows why
+#   -> 503 {"status":"busy"} while not Idle: stops a running pattern/playlist; retry ~2s
 # Switch to standalone hotspot mode (live from the AP; reboots if sent from the LAN):
 curl -X POST "$B/wifi_standalone"
 curl "$B/"                   # the portal page (root, every mode; also at /wifi)
@@ -498,7 +499,8 @@ curl "$B/command?plain=\$WiFi/Mode=STA>AP"        # or =AP for standalone
 table itself (at Idle or as a pattern finishes — never mid-draw). If the network is
 still gone after `$WiFi/ApFallbackMin` minutes, the `DuneWeaver-<MAC4>` setup hotspot comes
 up *without rebooting* while the station keeps probing every 5 min; when the home
-network returns the table rejoins and the hotspot disappears on its own.
+network returns the table rejoins and the hotspot disappears on its own. A table that
+boots while its saved network is missing gets the same hotspot-plus-probes right away.
 
 ```bash
 curl "$B/command?plain=\$WiFi/ApFallbackMin"      # minutes down before the hotspot rises

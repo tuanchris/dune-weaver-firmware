@@ -137,7 +137,7 @@ function postSave(s,p){
 }
 function standalone(){
  fetch('/wifi_standalone',{method:'POST'}).then(function(r){return r.json()}).then(function(j){
-  if(j.status=='busy'){$('stanote').textContent='Table is finishing homing…';setTimeout(standalone,2000);return}
+  if(j.status=='busy'){$('stanote').textContent='Waiting for the table to stop moving…';setTimeout(standalone,2000);return}
   if(j.status=='ok')show('standalone');else alert(j.message||'Failed')
  }).catch(function(){show('standalone')/* STA case reboots mid-reply */});
 }
