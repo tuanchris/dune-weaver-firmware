@@ -24,6 +24,9 @@
     $LED/Color2=RRGGBB     (secondary color, used by 'gradient')
     $LED/Brightness=0..255 (master brightness over every effect)
     $LED/Speed=1..255      (animation speed)
+    $LED/Intensity=0..255  (WLED's second slider: density / trail length /
+                           sparks / flicker depth per effect; 128 = the
+                           original look, effects without a mapping ignore it)
     $LED/White=none|brighter|accurate|max
                            (RGBW strips only: how the W byte is derived
                            from each pixel's RGB -- WLED's auto-white
@@ -101,7 +104,7 @@ public:
 
     // Live control, usable while a pattern is running (unlike the gated
     // $LED/* settings).  key in {effect,palette,color,color2,brightness,
-    // speed}.  When idle the value is persisted to NVS; while moving it is
+    // speed,intensity} plus the 'ball' keys.  When idle the value is persisted to NVS; while moving it is
     // applied in memory only (no flash write) and flushed to NVS on the
     // return to idle.  Reached from $Sand/Led and /sand_led.
     static Leds* instance() { return _instance; }
@@ -223,6 +226,11 @@ private:
     static void    sampleTable(const uint32_t* pal, uint8_t index, uint8_t& r, uint8_t& g, uint8_t& b);
     // Color from the active $LED/Palette (rainbow palette == wheel())
     void           palColor(uint8_t index, uint8_t& r, uint8_t& g, uint8_t& b);
+    // $LED/Intensity mappings.  Each returns `base` unchanged at the default
+    // 128, so a table that never touches the slider looks exactly as before.
+    uint8_t        ixMore(int base);    // grows with intensity (depth, size)
+    uint8_t        ixFade(int base);    // fadeBy() amount: more intensity = longer trail
+    int            ixSpawns(int base);  // sparks this frame; base/256 per frame on average at 128
 
     // Configuration
     Pin         _data_pin;
@@ -237,6 +245,7 @@ private:
     StringSetting* _color2      = nullptr;
     IntSetting*    _brightness  = nullptr;
     IntSetting*    _speed       = nullptr;
+    IntSetting*    _intensity   = nullptr;
     EnumSetting*   _white       = nullptr;  // RGBW strips: auto-white mode (LedWhite::Mode)
     EnumSetting*   _run_effect  = nullptr;
     EnumSetting*   _idle_effect = nullptr;
@@ -259,12 +268,13 @@ private:
     // Live overrides ($Sand/Led / /sand_led).  Empty string = unset, so the
     // persisted setting is used.  Set while moving, flushed to NVS at idle.
     static Leds* _instance;
-    std::string  _live_effect, _live_palette, _live_color, _live_color2, _live_bright, _live_speed;
+    std::string  _live_effect, _live_palette, _live_color, _live_color2, _live_bright, _live_speed, _live_intensity;
     bool         _quiet_off = false;  // Still Sands: force strip off (in-memory, highest priority)
     std::string  _live_direction, _live_align, _live_ballsize, _live_ballbg, _live_ballbright, _live_ballbgbright;
     float        _ball_track = -1.0f;  // smoothed ball position [0,1) for the 'ball' effect
     bool         _was_running = false;
     int          _cur_palette = 0;       // palette id resolved once per frame
+    uint8_t      _cur_ix      = 128;     // $LED/Intensity resolved once per frame
 
     // Driver state
     bool     _ready = false;

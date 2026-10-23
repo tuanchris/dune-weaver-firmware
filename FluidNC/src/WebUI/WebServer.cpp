@@ -576,7 +576,7 @@ namespace WebUI {
                          "Resume     GET /sand_resume\n"
                          "Speed      GET /sand_feed?mm=<0..100000> (ThetaRho only) | pct=<10..200> | d=up|down|reset\n"
                          "Time       GET /sand_time [?epoch=<unix>] [?tz=<POSIX>]   (read / app-sync clock)\n"
-                         "LEDs       GET /sand_led?effect=|palette=|color=|color2=|brightness=|speed=\n"
+                         "LEDs       GET /sand_led?effect=|palette=|color=|color2=|brightness=|speed=|intensity=\n"
                          "WiFi       GET / or /wifi  (setup portal; /wifi_status /wifi_scan, POST /wifi_save /wifi_standalone)\n"
                          "\n"
                          "Run/playlist, LED & everything else: GET /command?plain=$...\n"
@@ -1585,7 +1585,8 @@ namespace WebUI {
             return;
         }
         static const char* const keys[] = { "effect", "palette",  "color",  "color2",   "brightness", "speed",
-                                            "direction", "align",  "size",   "bg",       "fgbright",   "bgbright" };
+                                            "intensity", "direction", "align", "size",  "bg",
+                                            "fgbright",  "bgbright" };
         std::string              rejected;
         int                      applied = 0;
         for (const char* k : keys) {
@@ -1601,7 +1602,7 @@ namespace WebUI {
         if (!rejected.empty()) {
             _webserver->send(400, "text/plain", ("rejected: " + rejected).c_str());
         } else if (applied == 0) {
-            _webserver->send(400, "text/plain", "no LED args (effect|palette|color|color2|brightness|speed)");
+            _webserver->send(400, "text/plain", "no LED args (effect|palette|color|color2|brightness|speed|intensity)");
         } else {
             _webserver->send(200, "text/plain", "ok");
         }

@@ -185,6 +185,7 @@ curl "$B/command?plain=\$LED/Color=FF0000"       # primary color, RRGGBB hex
 curl "$B/command?plain=\$LED/Color2=0040FF"      # secondary color (used by 'gradient')
 curl "$B/command?plain=\$LED/Brightness=80"      # 0..255, master over every effect
 curl "$B/command?plain=\$LED/Speed=50"           # animation speed 1..255
+curl "$B/command?plain=\$LED/Intensity=128"      # 0..255, WLED's 2nd slider (see below); 128 = default look
 curl "$B/command?plain=\$LED/White=accurate"     # RGBW strips only: none|brighter|accurate|max
 ```
 
@@ -246,8 +247,17 @@ Effects (`$LED/Effect=<name>`):
 | `bpm`       | palette sweep pulsed by a beat                          | auto-hue |
 | `ball`      | smooth blob tracking the sand ball's angle over a background | Color + Color2 + Size/Direction/Align |
 
-`Speed` paces every effect (and gates spawn rates for `twinkle`/`bouncing`).
+`Speed` paces every effect (for `twinkle`, how fast the sparks fade).
 `Brightness` is a master scale applied over whatever the effect produces.
+`Intensity` is WLED's second slider: higher = *more* of the effect's character, and
+128 reproduces the original look. Effects not listed here ignore it.
+
+| Intensity controls | Effects |
+|--------------------|---------|
+| how many sparks / strikes / bursts | `twinkle` `sparkle` `glitter` `lightning` `fireworks` |
+| trail length | `scan` `sinelon` `meteor` `bouncing` `dualscan` `juggle` `multicomet` `ripple` `drip` |
+| sparking (flame height) | `fire` |
+| flicker depth (0 = steady) | `candle` |
 
 ### Live control while a pattern is running
 
@@ -263,8 +273,9 @@ is persisted to NVS automatically when the table next returns to idle.
 
 ```bash
 # Works any time, including mid-pattern.
-#   keys: effect palette color color2 brightness speed direction align size bg fgbright bgbright
+#   keys: effect palette color color2 brightness speed intensity direction align size bg fgbright bgbright
 curl "$B/sand_led?effect=fire&palette=ocean&brightness=120"
+curl "$B/sand_led?effect=twinkle&intensity=220"   # denser twinkles
 curl "$B/sand_led?color=FF0000&speed=80"
 # command form (same behavior), space-separated key=value:
 curl "$B/command?plain=\$Sand/Led=effect=plasma%20palette=lava"

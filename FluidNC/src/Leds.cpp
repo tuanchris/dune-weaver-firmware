@@ -226,6 +226,7 @@ void Leds::init() {
         _color2      = holdOk(new StringSetting("LED secondary color RRGGBB", EXTENDED, WG, NULL, "LED/Color2", "0040FF", 0, 7));
         _brightness  = holdOk(new IntSetting("LED brightness", EXTENDED, WG, NULL, "LED/Brightness", 40, 0, 255));
         _speed       = holdOk(new IntSetting("LED effect speed", EXTENDED, WG, NULL, "LED/Speed", 50, 1, 255));
+        _intensity   = holdOk(new IntSetting("LED effect intensity", EXTENDED, WG, NULL, "LED/Intensity", 128, 0, 255));
         _white       = holdOk(new EnumSetting("LED RGBW auto-white mode", EXTENDED, WG, NULL, "LED/White", LedWhite::Accurate, &ledWhiteModes));
         _run_effect  = holdOk(new EnumSetting("LED effect while running", EXTENDED, WG, NULL, "LED/RunEffect", EFFECT_NONE, &ledHookEffects));
         _idle_effect = holdOk(new EnumSetting("LED effect while idle", EXTENDED, WG, NULL, "LED/IdleEffect", EFFECT_NONE, &ledHookEffects));
@@ -407,6 +408,15 @@ Error Leds::setLive(const std::string& key, const std::string& value) {
             return _speed->setStringValue(value);
         }
         _live_speed = value;
+    } else if (key == "intensity") {
+        int v = atoi(value.c_str());
+        if (v < 0 || v > 255) {
+            return Error::NumberRange;
+        }
+        if (idle) {
+            return _intensity->setStringValue(value);
+        }
+        _live_intensity = value;
     } else if (key == "direction") {
         if (enumId(ledDirections, value, -1) < 0) {
             return Error::InvalidStatement;  // expects cw|ccw
@@ -488,6 +498,10 @@ void Leds::flushLive() {
     if (!_live_speed.empty()) {
         _speed->setStringValue(_live_speed);
         _live_speed.clear();
+    }
+    if (!_live_intensity.empty()) {
+        _intensity->setStringValue(_live_intensity);
+        _live_intensity.clear();
     }
     if (!_live_direction.empty()) {
         _direction->setStringValue(_live_direction);
@@ -585,10 +599,27 @@ void Leds::palColor(uint8_t index, uint8_t& r, uint8_t& g, uint8_t& b) {
     }
 }
 
+uint8_t Leds::ixMore(int base) {
+    int v = base * _cur_ix / 128;
+    return v > 255 ? 255 : v;
+}
+uint8_t Leds::ixFade(int base) {
+    int v = base * 128 / (_cur_ix ? _cur_ix : 1);
+    return v > 255 ? 255 : v;
+}
+int Leds::ixSpawns(int base) {
+    int n = 0;
+    for (int acc = base * _cur_ix / 128; acc > 0; acc -= 256) {
+        n += acc >= 256 || random8() < acc;
+    }
+    return n;
+}
+
 // ---- effect rendering ----------------------------------------------------
 
 // Fill _fb (logical R,G,B, full 0..255 range) for the given effect.
-// Master brightness is applied later in commit().  `speed` is 1..255.
+// Master brightness is applied later in commit().  `speed` is 1..255;
+// $LED/Intensity reaches the effects through the ix*() helpers (_cur_ix).
 // `nested` is true when rendering a background sub-effect for EFFECT_BALL; it
 // tracks its own "last effect" so it doesn't thrash the top-level reset.
 void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
@@ -658,7 +689,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
 
         case EFFECT_SCAN: {  // Larson / Cylon, with a short trail
             primaryColor(r, g, b);
-            fadeBy(90);
+            fadeBy(ixFade(90));
             int pos = scale8(sin8(hi), _num_leds - 1);
             setFb(pos, r, g, b);
             break;
@@ -695,7 +726,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
         }
 
         case EFFECT_SINELON: {  // moving dot, fading trail, shifting hue
-            fadeBy(40);
+            fadeBy(ixFade(40));
             int pos = scale8(sin8(hi), _num_leds - 1);
             palColor(static_cast<uint8_t>(_phase >> 7), r, g, b);
             addFb(pos, r, g, b);
@@ -703,8 +734,12 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
         }
 
         case EFFECT_TWINKLE: {  // random pixels light then fade
-            fadeBy(28);
-            if (random8() < speed) {
+            // Speed = how fast they fade, intensity = how many (the two used to
+            // be one knob: speed gated the spawn rate).  Both defaults (50/128)
+            // give the original look.
+            int fade = 28 * speed / 50;
+            fadeBy(fade < 1 ? 1 : fade > 255 ? 255 : fade);
+            for (int n = ixSpawns(50); n > 0; n--) {
                 palColor(random8(), r, g, b);
                 setFb(random8(_num_leds), r, g, b);
             }
@@ -716,20 +751,21 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             for (int i = 0; i < _num_leds; i++) {
                 setFb(i, (r * 40) >> 8, (g * 40) >> 8, (b * 40) >> 8);
             }
-            setFb(random8(_num_leds), 255, 255, 255);
+            for (int n = ixSpawns(256); n > 0; n--) {
+                setFb(random8(_num_leds), 255, 255, 255);
+            }
             break;
         }
 
-        case EFFECT_FIRE: {  // Fire2012 on a 1D strip
+        case EFFECT_FIRE: {  // Fire2012 on a 1D strip; intensity = sparking
             const int cooling  = 55;
-            const int sparking = 120;
             for (int i = 0; i < _num_leds; i++) {
                 _heat[i] = qsub8(_heat[i], random8((cooling * 10) / _num_leds + 2));
             }
             for (int k = _num_leds - 1; k >= 2; k--) {
                 _heat[k] = (_heat[k - 1] + _heat[k - 2] + _heat[k - 2]) / 3;
             }
-            if (random8() < sparking) {
+            for (int n = ixSpawns(120); n > 0; n--) {
                 int y    = random8(7);
                 _heat[y] = qadd8(_heat[y], random8(95) + 160);
             }
@@ -740,9 +776,10 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_CANDLE: {  // warm global flicker on the primary color
+        case EFFECT_CANDLE: {  // warm global flicker on the primary color; intensity = depth
             primaryColor(r, g, b);
-            uint8_t target = 100 + random8(155);
+            uint8_t depth  = ixMore(155);
+            uint8_t target = 255 - depth + random8(depth);
             _candle        = (_candle * 7 + target) >> 3;  // smooth toward target
             for (int i = 0; i < _num_leds; i++) {
                 setFb(i, (r * _candle) >> 8, (g * _candle) >> 8, (b * _candle) >> 8);
@@ -752,7 +789,8 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
 
         case EFFECT_METEOR: {  // head sweeping the ring, random-decay trail
             primaryColor(r, g, b);
-            fadeBy(40 + random8(40));
+            uint8_t decay = ixFade(40);
+            fadeBy(qadd8(decay, random8(decay)));
             int pos = (_phase >> 8) % _num_leds;
             setFb(pos, r, g, b);
             break;
@@ -760,8 +798,8 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
 
         case EFFECT_BOUNCING: {  // a few balls under gravity
             primaryColor(r, g, b);
-            fadeBy(120);
-            float dt    = (_frame_ms / 1000.0f) * (speed / 50.0f);
+            fadeBy(ixFade(120));
+            float dt   = (_frame_ms / 1000.0f) * (speed / 50.0f);
             float gravy = 9.8f;
             for (int k = 0; k < kBalls; k++) {
                 _ball_vel[k] -= gravy * dt;
@@ -806,7 +844,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             uint8_t r2, g2, b2;
             primaryColor(r, g, b);
             secondaryColor(r2, g2, b2);
-            fadeBy(80);
+            fadeBy(ixFade(80));
             int pos = scale8(sin8(hi), _num_leds - 1);
             addFb(pos, r, g, b);
             addFb(_num_leds - 1 - pos, r2, g2, b2);
@@ -814,7 +852,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
         }
 
         case EFFECT_JUGGLE: {  // N sine dots of different colors, fading trails
-            fadeBy(40);
+            fadeBy(ixFade(40));
             for (int k = 0; k < 3; k++) {
                 int pos = scale8(sin8(static_cast<uint8_t>((_phase >> 8) * (k + 2))), _num_leds - 1);
                 palColor(static_cast<uint8_t>(k * 85 + hi), r, g, b);
@@ -824,7 +862,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
         }
 
         case EFFECT_MULTICOMET: {  // several comets chasing at different speeds
-            fadeBy(48);
+            fadeBy(ixFade(48));
             for (int k = 0; k < 3; k++) {
                 int pos = ((_phase >> 8) * (k + 1) / 2 + k * (_num_leds / 3)) % _num_leds;
                 palColor(static_cast<uint8_t>(k * 85), r, g, b);
@@ -838,7 +876,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
                 palColor(static_cast<uint8_t>(hi + (i * 256) / _num_leds), r, g, b);
                 setFb(i, (r * 180) >> 8, (g * 180) >> 8, (b * 180) >> 8);
             }
-            if (random8() < 60) {
+            for (int n = ixSpawns(60); n > 0; n--) {
                 setFb(random8(_num_leds), 255, 255, 255);
             }
             break;
@@ -870,7 +908,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
         }
 
         case EFFECT_RIPPLE: {  // expanding rings from random centers
-            fadeBy(40);
+            fadeBy(ixFade(40));
             float step = 0.5f * (speed / 50.0f);
             for (int k = 0; k < kBalls; k++) {
                 if (_ball_vel[k] <= 0.0f || _ball_vel[k] > _num_leds / 2.0f) {
@@ -890,7 +928,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
 
         case EFFECT_DRIP: {  // droplets fall and splash
             primaryColor(r, g, b);
-            fadeBy(60);
+            fadeBy(ixFade(60));
             float accel = 0.02f * (speed / 50.0f);
             for (int k = 0; k < kBalls; k++) {
                 _ball_vel[k] += accel;
@@ -908,7 +946,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
 
         case EFFECT_LIGHTNING: {  // random bright strikes over darkness
             fadeBy(120);
-            if (random8() < 12) {
+            for (int n = ixSpawns(12); n > 0; n--) {
                 int start = random8(_num_leds);
                 int len   = 2 + random8(_num_leds / 3);
                 for (int j = 0; j < len; j++) {
@@ -920,7 +958,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
 
         case EFFECT_FIREWORKS: {  // random colored bursts that fade
             fadeBy(48);
-            if (random8() < 50) {
+            for (int n = ixSpawns(50); n > 0; n--) {
                 int center = random8(_num_leds);
                 palColor(random8(), r, g, b);
                 addFb(center, r, g, b);
@@ -1235,6 +1273,7 @@ void Leds::render() {
 
     uint8_t brightness = _live_bright.empty() ? static_cast<uint8_t>(_brightness->get()) : static_cast<uint8_t>(atoi(_live_bright.c_str()));
     uint8_t speed      = _live_speed.empty() ? static_cast<uint8_t>(_speed->get()) : static_cast<uint8_t>(atoi(_live_speed.c_str()));
+    _cur_ix            = _live_intensity.empty() ? static_cast<uint8_t>(_intensity->get()) : static_cast<uint8_t>(atoi(_live_intensity.c_str()));
     _phase += speed * 8;  // the live override too, so the app's speed slider works mid-pattern
 
     renderEffect(effect, speed);
