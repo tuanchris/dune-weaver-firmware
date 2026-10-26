@@ -36,9 +36,19 @@ table exists: the **DWG "Desert Compass"**.)
   is **not** implemented.
 - **LEDs**: 49 WS2812 on `gpio.18`, color order **RGB**, via RMT (channel 6 with 2
   memory blocks — refill-ISR slack against LED flicker). (`uart1` was removed to
-  free gpio.18.) RGBW strips (SK6812) are supported: a 4-letter
-  `color_order` (e.g. `GRBW`) switches the bus to 4 bytes/pixel and `$LED/White`
+  free gpio.18.) `num_leds` in config.yaml is only the **default** of the NVS
+  `$LED/Count` (the app sets the count there; it resizes on the next frame), so
+  editing the file does nothing on a table whose count was set — same shape as
+  `hostname`/`$Hostname`. `color_order` is likewise only the default of the NVS
+  `$LED/Order` (the app's Settings › LED strip picker; swapped on the next frame,
+  reallocating the wire buffer for 3 <-> 4 bytes/pixel), and both `num_leds` and
+  `color_order` are hidden from runtime `$/leds/...` writes, which skipped the
+  resize. RGBW strips (SK6812) are supported: a 4-letter order
+  (e.g. `GRBW`) switches the bus to 4 bytes/pixel and `$LED/White`
   (WLED's auto-white modes, std-only `LedWhite.h`) derives W from each pixel's RGB.
+  The mobile app animates its LED previews with a line-for-line TypeScript port of
+  `Leds::renderEffect` (`dune-weaver-mobile/src/lib/ledSim.ts`) and mirrors the palette
+  tables (`src/lib/ledPreview.ts`): changing an effect or palette here means changing it there.
 
 ### Second board target: MKS DLC32 MAX (ESP32-S3)
 

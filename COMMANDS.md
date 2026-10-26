@@ -186,11 +186,28 @@ curl "$B/command?plain=\$LED/Color2=0040FF"      # secondary color (used by 'gra
 curl "$B/command?plain=\$LED/Brightness=80"      # 0..255, master over every effect
 curl "$B/command?plain=\$LED/Speed=50"           # animation speed 1..255
 curl "$B/command?plain=\$LED/Intensity=128"      # 0..255, WLED's 2nd slider (see below); 128 = default look
+curl "$B/command?plain=\$LED/Count=60"           # strip length 1..300, applies on the next frame (idle/paused)
+curl "$B/command?plain=\$LED/Order=GRB"          # wire color order (GRB, RGB, ..., GRBW), next frame (idle/paused)
 curl "$B/command?plain=\$LED/White=accurate"     # RGBW strips only: none|brighter|accurate|max
 ```
 
-**RGBW strips (SK6812 RGBW etc.):** set a 4-letter `color_order` in config.yaml
-(`leds: color_order: GRBW` — the W can sit anywhere) and the driver sends 4 bytes
+**LED count:** `num_leds` in config.yaml is only the factory default; `$LED/Count`
+(NVS) overrides it and survives reboots, so set the count with the setting, not
+the file. Setting it back to the config value clears the override. A shorter count
+blanks the tail it drops. `$/leds/num_leds=` is no longer accepted at runtime (it
+changed the count without resizing the buffers).
+
+**LED color order:** same shape — `color_order` in config.yaml is the factory
+default and `$LED/Order` (NVS) overrides it: any of the 30 valid orders (a
+permutation of `RGB`, or of `RGBW` with the W anywhere), case-insensitive, applied
+on the next frame. Switching between a 3- and a 4-letter order reallocates the
+wire buffer (3 <-> 4 bytes/pixel); with no memory for it the old order keeps
+running and the next frame retries. If red shows as green, the order is wrong.
+`$/leds/color_order=` is no longer accepted at runtime (it could switch 3 <-> 4
+bytes/pixel without resizing the buffer).
+
+**RGBW strips (SK6812 RGBW etc.):** set a 4-letter order — `$LED/Order=GRBW`, or
+`leds: color_order: GRBW` in config.yaml; the W can sit anywhere — and the driver sends 4 bytes
 per pixel. The effects stay 24-bit RGB; `$LED/White` picks how the W byte is derived
 per pixel, mirroring WLED's auto-white modes: `none` (W always 0, white die unused —
 WLED's "manual only"), `brighter` (W=min(R,G,B), RGB untouched), `accurate`
@@ -212,24 +229,24 @@ Effects (`$LED/Effect=<name>`):
 | `rainbow`   | full color wheel spread around the ring, rotating       | auto-hue |
 | `breathe`   | solid color pulsing in brightness on a sine             | Color |
 | `colorloop` | whole ring one hue, slowly cycling through the wheel    | auto-hue |
-| `theater`   | every 3rd pixel lit, marching (theater chase)           | Color |
-| `scan`      | dot sweeps back and forth with a short trail (Cylon)    | Color |
-| `running`   | one sine peak of the color sliding around the ring      | Color |
-| `sine`      | two faster sine bands of the color drifting             | Color |
+| `theater`   | lit pixels with a dark gap, marching (theater chase)    | Color |
+| `scan`      | short bar sweeps back and forth with a trail (Cylon)    | Color |
+| `running`   | sine peaks of the color sliding around the ring         | Color |
+| `sine`      | sine bands of the color drifting                        | Color |
 | `gradient`  | scrolling blend between the two colors                  | Color + Color2 |
 | `sinelon`   | moving dot with a fading trail and shifting hue         | auto-hue |
 | `twinkle`   | random pixels light then fade out                       | auto-hue |
-| `sparkle`   | dim base color with random white flashes                | Color |
+| `sparkle`   | dim base color with one white spark that jumps          | Color |
 | `fire`      | Fire2012 1D flame (heat diffusion + sparks)             | heat palette |
 | `candle`    | warm global flicker                                     | Color |
 | `meteor`    | bright head sweeping the ring, random-decay trail       | Color |
 | `bouncing`  | a few balls bouncing under gravity                      | Color |
 | `wipe`      | color-wipe from one end, alternating the two colors     | Color + Color2 |
-| `dualscan`  | two dots sweeping the ring (one per color)              | Color + Color2 |
+| `dualscan`  | two short bars sweeping the ring (one per color)        | Color + Color2 |
 | `juggle`    | several sine dots of different colors, fading trails    | auto-hue |
 | `multicomet`| several comets chasing at different speeds              | auto-hue |
 | `glitter`   | rainbow base with random white sparks                   | auto-hue |
-| `dissolve`  | pixels randomly flip color↔color2, then reverse         | Color + Color2 |
+| `dissolve`  | pixels randomly flip color↔color2, hold, then reverse   | Color + Color2 |
 | `ripple`    | expanding rings from random centers, decaying           | auto-hue |
 | `drip`      | droplets fall and splash                                | Color |
 | `lightning` | random bright strikes over darkness                     | white |
@@ -239,7 +256,7 @@ Effects (`$LED/Effect=<name>`):
 | `strobe`    | brief full-strip flashes                                | Color |
 | `police`    | alternating red / blue halves                           | red/blue |
 | `chase`     | bright dot(s) running over a dim background             | Color + Color2 |
-| `railway`   | alternating two colors with a moving shimmer            | Color + Color2 |
+| `railway`   | alternate pixels swap the two colors, with a shimmer    | Color + Color2 |
 | `pacifica`  | layered scrolling ocean with whitecaps                  | built-in ocean |
 | `aurora`    | drifting green/purple curtains                          | built-in aurora |
 | `pride`     | flowing rainbow with brightness waves                   | rainbow |
@@ -247,17 +264,49 @@ Effects (`$LED/Effect=<name>`):
 | `bpm`       | palette sweep pulsed by a beat                          | auto-hue |
 | `ball`      | smooth blob tracking the sand ball's angle over a background | Color + Color2 + Size/Direction/Align |
 
-`Speed` paces every effect (for `twinkle`, how fast the sparks fade).
 `Brightness` is a master scale applied over whatever the effect produces.
-`Intensity` is WLED's second slider: higher = *more* of the effect's character, and
-128 reproduces the original look. Effects not listed here ignore it.
+`Speed` and `Intensity` mirror **WLED's two effect sliders** (checked against WLED
+v16.0.1 `FX.cpp`): an effect responds to `Intensity` exactly when WLED shows its
+intensity slider, with WLED's meaning and direction, and the labels below are WLED's
+(the app shows them). Counts are scaled to fit a ~50-LED ring. 128 keeps each effect's
+previous look except where WLED's behaviour differs: scan/dualscan draw a short bar,
+sparkle holds its spark, lightning waits seconds between strikes, dissolve holds
+before reversing, railway swaps its colors and plasma dims its troughs. Effects not listed ignore
+`Intensity` (`off` `static` `breathe` `sparkle` `strobe` `police` `pride` `bpm`, and
+`ball`'s blob — an animated `ball` background uses it as in its own row), and `Speed`
+is plain animation speed unless the table says otherwise.
 
-| Intensity controls | Effects |
-|--------------------|---------|
-| how many sparks / strikes / bursts | `twinkle` `sparkle` `glitter` `lightning` `fireworks` |
-| trail length | `scan` `sinelon` `meteor` `bouncing` `dualscan` `juggle` `multicomet` `ripple` `drip` |
-| sparking (flame height) | `fire` |
-| flicker depth (0 = steady) | `candle` |
+| Effect | Speed | Intensity (higher =) |
+|--------|-------|----------------------|
+| `rainbow` | | Size: more, smaller rainbows round the ring (1 at 128) |
+| `colorloop` | | Saturation: below 128 washes toward white |
+| `theater` | | Gap size: wider dark gap between lit LEDs (1–5) |
+| `scan` `dualscan` | | # of dots: a wider bar |
+| `running` | | Wave width: more, narrower waves |
+| `sine` | | Scale: more, narrower bands |
+| `gradient` | | Spread: a wider blend from Color to Color2 |
+| `sinelon` | | Trail: a *shorter* trail (WLED fades faster; 255 = bare dot) |
+| `multicomet` | | Fade: shorter tails |
+| `meteor` `juggle` | | Trail: longer trail |
+| `twinkle` | how fast sparks fade | more sparks |
+| `glitter` | | more sparks |
+| `sparkle` | how often the spark jumps (10–520 ms) | — |
+| `fire` | Cooling: shorter flames | Spark rate: taller flames |
+| `candle` | flicker rate | deeper flicker (0 = steady) |
+| `bouncing` | Gravity | # of balls (1–5) |
+| `drip` | Gravity | # of drips (1–4) |
+| `ripple` | | Wave #: more rings at once (1–5) |
+| `dissolve` | Repeat speed: reverses sooner | Dissolve speed |
+| `wipe` | | softer wipe front |
+| `lightning` | shorter gaps between strikes (~10 s average at the default 50) | more flashes per strike |
+| `fireworks` | — (ignored; WLED hides it) | Frequency |
+| `plasma` | plain speed (not WLED's Phase) | brighter: shallower dark troughs |
+| `heartbeat` | | shorter, sharper beats |
+| `chase` | | Width of the running block |
+| `railway` | | Smoothness: the colour swap cross-fades longer |
+| `pacifica` | | Angle: tighter, choppier waves |
+| `aurora` | | more curtains |
+| `colorwaves` | | Hue: more of the palette across the ring |
 
 ### Live control while a pattern is running
 

@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <new>  // std::nothrow (resize)
 
 namespace {
     // Step engines allocate RMT channels from 0 upward (esp32/rmt_engine.c),
@@ -65,6 +66,14 @@ namespace {
     enum_opt_t ledWhiteModes = {
         { "none", LedWhite::None }, { "brighter", LedWhite::Brighter }, { "accurate", LedWhite::Accurate }, { "max", LedWhite::Max },
     };
+    // $LED/Order: every valid wire color order (ids = LedWhite::kOrders index)
+    enum_opt_t ledOrders = [] {
+        enum_opt_t m;
+        for (int i = 0; i < LedWhite::kNumOrders; i++) {
+            m[LedWhite::kOrders[i]] = i;
+        }
+        return m;
+    }();
     // Same list plus "none" (no override) for the state hooks. Derived from
     // ledEffects so the two can never drift as effects are added.
     enum_opt_t ledHookEffects = [] {
@@ -152,6 +161,13 @@ namespace {
 Leds* Leds::_instance = nullptr;
 
 void Leds::afterParse() {
+    // Boot only.  Once running, the wire order belongs to $LED/Order, which
+    // render() swaps safely (resizing the buffer); a runtime `$/...` write to
+    // ANY config item re-runs every afterParse and would otherwise reset it --
+    // to a different bytes-per-pixel than the live buffer, for an RGBW override.
+    if (_ready) {
+        return;
+    }
     // Reduce the color order string to wire byte offsets (+ the W slot and
     // 3-vs-4 bytes per pixel for RGBW strips)
     if (!LedWhite::parseOrder(_color_order.c_str(), _order)) {
@@ -209,12 +225,6 @@ void Leds::init() {
     WS2812_ONE.level1     = 0;
     log_debug("leds: RMT " << clk_hz << " Hz, 0/1 high ticks " << ticks(400) << "/" << ticks(800));
 
-    _pixels = new uint8_t[_num_leds * _order.bpp];
-    _fb     = new uint8_t[_num_leds * 3];
-    _heat   = new uint8_t[_num_leds];
-    memset(_pixels, 0, _num_leds * _order.bpp);
-    memset(_fb, 0, _num_leds * 3);
-    memset(_heat, 0, _num_leds);
     _rng ^= now_ms() * 2654435761U;  // seed the effect RNG
 
     if (!_effect) {
@@ -236,6 +246,20 @@ void Leds::init() {
         _ballbg      = holdOk(new EnumSetting("LED ball background effect", EXTENDED, WG, NULL, "LED/BallBg", EFFECT_STATIC, &ledEffects));
         _ballbright  = holdOk(new IntSetting("LED ball blob brightness", EXTENDED, WG, NULL, "LED/BallBright", 255, 0, 255));
         _ballbgbright = holdOk(new IntSetting("LED ball background brightness", EXTENDED, WG, NULL, "LED/BallBgBright", 255, 0, 255));
+        // config.yaml's num_leds is the factory default; the app sets the real
+        // length here.  render() applies a change on the next frame.
+        _count       = holdOk(new IntSetting("LED count", EXTENDED, WG, NULL, "LED/Count", _num_leds, 1, 300));
+        // Same for the wire color order: config.yaml's color_order is the
+        // default (afterParse already fell back to GRB if it was bad).
+        _order_set   = holdOk(new EnumSetting("LED color order", EXTENDED, WG, NULL, "LED/Order",
+                                            enumId(ledOrders, _color_order, enumId(ledOrders, "GRB", 0)), &ledOrders));
+    }
+    // Before resize(), which sizes the wire buffer by the order's bytes per pixel.
+    applyOrder(_order_set->get());
+    if (!resize(_count->get())) {
+        log_error("leds: no memory for " << _count->get() << " LEDs");
+        rmt_driver_uninstall(LED_RMT_CHANNEL);
+        return;
     }
     // Seed render()'s change detector, or the first frame reads the loaded
     // $LED/Effect as a fresh manual choice and suspends the hook for the boot
@@ -243,7 +267,7 @@ void Leds::init() {
     _last_setting_effect = _effect->get();
 
     log_info("leds: " << _num_leds << (_order.rgbw() ? " RGBW" : " RGB") << " on pin " << _data_pin.name() << " order "
-                      << _color_order);
+                      << enumName(ledOrders, _applied_order));
 
     _ready    = true;
     _instance = this;
@@ -529,6 +553,57 @@ void Leds::flushLive() {
     }
 }
 
+// Allocate before freeing, so an OOM keeps the old strip running (render()
+// retries next frame).  Caller guarantees no RMT transmission is in flight.
+bool Leds::resize(int n) {
+    auto* px   = new (std::nothrow) uint8_t[n * _order.bpp]();
+    auto* fb   = new (std::nothrow) uint8_t[n * 3]();
+    auto* heat = new (std::nothrow) uint8_t[n]();
+    if (!px || !fb || !heat) {
+        delete[] px;
+        delete[] fb;
+        delete[] heat;
+        return false;
+    }
+    if (_pixels && n < _num_leds) {  // shorter strip: blank the old length, or the tail stays lit
+        memset(_pixels, 0, _num_leds * _order.bpp);
+        rmt_write_sample(LED_RMT_CHANNEL, _pixels, _num_leds * _order.bpp, true);
+    }
+    delete[] _pixels;
+    delete[] _fb;
+    delete[] _heat;
+    _pixels      = px;
+    _fb          = fb;
+    _heat        = heat;
+    _num_leds    = n;
+    _last_effect = _last_bg_effect = -1;  // effects restart on the new length
+    return true;
+}
+
+// Switch the wire color order to $LED/Order id `id`.  3 <-> 4 bytes per pixel
+// (RGB <-> RGBW) reallocates the wire buffer -- before freeing the old one, like
+// resize(); false = no memory, old order kept (render() retries next frame).
+// Caller guarantees no RMT transmission is in flight.
+bool Leds::applyOrder(int id) {
+    LedWhite::Order o;
+    if (!LedWhite::parseOrder(enumName(ledOrders, id), o)) {
+        log_warn("leds: unknown $LED/Order id " << id << ", keeping the current order");
+        _applied_order = id;  // don't retry every frame
+        return true;
+    }
+    if (_pixels && o.bpp != _order.bpp) {
+        auto* px = new (std::nothrow) uint8_t[_num_leds * o.bpp]();
+        if (!px) {
+            return false;
+        }
+        delete[] _pixels;
+        _pixels = px;
+    }
+    _order         = o;
+    _applied_order = id;
+    return true;  // every pixel's wire bytes now differ, so the next commit() resends
+}
+
 // Returns true if the pixel's wire bytes changed.
 bool Leds::setPixel(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness) {
     uint8_t px[4];
@@ -631,6 +706,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
         memset(_heat, 0, _num_leds);
         _candle = 200;
         _aux    = 0;
+        _step   = 0;
         for (int k = 0; k < kBalls; k++) {
             _ball_pos[k] = 0.0f;
             _ball_vel[k] = 4.4f - 0.5f * k;  // staggered launch
@@ -651,12 +727,14 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             }
             break;
 
-        case EFFECT_RAINBOW:
+        case EFFECT_RAINBOW: {  // Size (WLED): 16 << (ix/29) hue steps across the ring = 1/16..16 rainbows, 1 at 128
+            int span = 16 << (_cur_ix / 29);
             for (int i = 0; i < _num_leds; i++) {
-                palColor(static_cast<uint8_t>(hi + (i * 256) / _num_leds), r, g, b);
+                palColor(static_cast<uint8_t>(hi + (i * span) / _num_leds), r, g, b);
                 setFb(i, r, g, b);
             }
             break;
+        }
 
         case EFFECT_BREATHE: {
             primaryColor(r, g, b);
@@ -667,18 +745,30 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_COLORLOOP:
+        case EFFECT_COLORLOOP:  // Saturation (WLED): below 128 washes toward white, ~50% at 0
             palColor(hi, r, g, b);
+            if (_cur_ix < 128) {
+                uint8_t w = 128 - _cur_ix;
+                r = lerp8(r, 255, w);
+                g = lerp8(g, 255, w);
+                b = lerp8(b, 255, w);
+            }
             for (int i = 0; i < _num_leds; i++) {
                 setFb(i, r, g, b);
             }
             break;
 
-        case EFFECT_THEATER: {
+        case EFFECT_THEATER: {  // Gap size (WLED): 1..5 dark LEDs between lit ones, the classic 1-in-3 at 128
             primaryColor(r, g, b);
-            int off = (_phase >> 9) % 3;
+            int      w    = 2 + ((_cur_ix * _cur_ix + 4096) >> 14);  // 2..6 (3 across 111..168)
+            uint16_t tick = _phase >> 9;
+            if (tick != _step) {  // ONE LED per tick, like WLED: jumping several per frame aliases (freezes / runs backward)
+                _step = tick;
+                _aux  = (_aux + 1) % w;
+            }
+            int off = _aux % w;
             for (int i = 0; i < _num_leds; i++) {
-                if (i % 3 == off) {
+                if (i % w == off) {
                     setFb(i, r, g, b);
                 } else {
                     setFb(i, 0, 0, 0);
@@ -687,47 +777,63 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_SCAN: {  // Larson / Cylon, with a short trail
+        case EFFECT_SCAN: {  // Larson / Cylon bar, short trail; intensity = # of dots (WLED)
             primaryColor(r, g, b);
-            fadeBy(ixFade(90));
-            int pos = scale8(sin8(hi), _num_leds - 1);
-            setFb(pos, r, g, b);
+            fadeBy(90);
+            // Bar width grows with intensity: quadratic, so 0..~73 keeps the single
+            // Larson dot and 255 reaches ~N/4 (WLED is linear up to ~N/2).
+            int size  = 1 + ((_cur_ix * _cur_ix * _num_leds) >> 18);
+            int start = sin8(hi) * (_num_leds - size) / 255;
+            for (int j = 0; j < size; j++) {
+                setFb(start + j, r, g, b);
+            }
             break;
         }
 
-        case EFFECT_RUNNING: {  // one sine peak of the primary color, sliding
+        case EFFECT_RUNNING: {  // sine peaks of the primary color, sliding; Wave width (WLED): more, narrower waves as ix rises
             primaryColor(r, g, b);
+            int k = (_cur_ix * _cur_ix + 8192) >> 14;  // whole waves per ring (seamless): 1..4, 1 at 128
+            if (k < 1) {
+                k = 1;  // always a moving wave (0 would just breathe)
+            }
             for (int i = 0; i < _num_leds; i++) {
-                uint8_t s = sin8(static_cast<uint8_t>((i * 256) / _num_leds - hi));
+                uint8_t s = sin8(static_cast<uint8_t>((i * 256 * k) / _num_leds - hi));
                 setFb(i, (r * s) >> 8, (g * s) >> 8, (b * s) >> 8);
             }
             break;
         }
 
-        case EFFECT_SINE: {  // two faster sine bands of the primary color
+        case EFFECT_SINE: {  // sine bands of the primary color; Scale (WLED): more, narrower bands as ix rises
             primaryColor(r, g, b);
+            int k = (_cur_ix * _cur_ix + 4096) >> 13;  // whole waves per ring (seamless): 1..8, 2 at 128
+            if (k < 1) {
+                k = 1;  // always a moving band (0 would just breathe)
+            }
             for (int i = 0; i < _num_leds; i++) {
-                uint8_t s = sin8(static_cast<uint8_t>((i * 512) / _num_leds + hi));
+                uint8_t s = sin8(static_cast<uint8_t>((i * 256 * k) / _num_leds + hi));
                 setFb(i, (r * s) >> 8, (g * s) >> 8, (b * s) >> 8);
             }
             break;
         }
 
-        case EFFECT_GRADIENT: {  // scrolling blend between color and color2
+        case EFFECT_GRADIENT: {  // scrolling blend between color and color2; Spread (WLED): wider blend as ix rises
             uint8_t r1, g1, b1, r2, g2, b2;
             primaryColor(r1, g1, b1);
             secondaryColor(r2, g2, b2);
             for (int i = 0; i < _num_leds; i++) {
                 uint8_t t   = static_cast<uint8_t>((i * 256) / _num_leds + hi);
-                uint8_t tri = t < 128 ? t * 2 : (255 - t) * 2;  // triangle so the ring loops
+                uint8_t tri = ixFade(t < 128 ? t * 2 : (255 - t) * 2);  // triangle so the ring loops; x128/ix (clamped) = Spread
                 setFb(i, lerp8(r1, r2, tri), lerp8(g1, g2, tri), lerp8(b1, b2, tri));
             }
             break;
         }
 
         case EFFECT_SINELON: {  // moving dot, fading trail, shifting hue
-            fadeBy(ixFade(40));
-            int pos = scale8(sin8(hi), _num_leds - 1);
+            // WLED fade_out(intensity): HIGHER = faster fade = shorter trail, 255 = the
+            // bare dot.  Hyperbolic like WLED's; 40 at 128 keeps the original look.
+            int f = 5120 / (256 - _cur_ix);
+            fadeBy(f > 255 ? 255 : f);
+            int pos = sin8(hi) * (_num_leds - 1) / 255;
             palColor(static_cast<uint8_t>(_phase >> 7), r, g, b);
             addFb(pos, r, g, b);
             break;
@@ -746,27 +852,35 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_SPARKLE: {  // dim base color + white flashes
+        case EFFECT_SPARKLE: {  // dim base color + one white spark; WLED: no intensity, speed = how often it jumps
             primaryColor(r, g, b);
             for (int i = 0; i < _num_leds; i++) {
                 setFb(i, (r * 40) >> 8, (g * 40) >> 8, (b * 40) >> 8);
             }
-            for (int n = ixSpawns(256); n > 0; n--) {
-                setFb(random8(_num_leds), 255, 255, 255);
+            if (_aux == 0) {  // _aux = frames until the spark jumps, _step = its LED
+                _step = (random8() * _num_leds) >> 8;
+                int f = (10 + (255 - speed) * 2) / _frame_ms;  // WLED's cycle time, 10..520 ms
+                _aux  = f > 255 ? 255 : f;
+            } else {
+                _aux--;
             }
+            setFb(_step, 255, 255, 255);
             break;
         }
 
-        case EFFECT_FIRE: {  // Fire2012 on a 1D strip; intensity = sparking
-            const int cooling  = 55;
+        case EFFECT_FIRE: {  // Fire2012 on a 1D strip; WLED: speed = cooling, intensity = spark rate
+            int cool = ((20 + speed / 3) * 16) / _num_leds + 2;  // WLED's cooling; ~ the old fixed 55 at speed 50
+            if (cool > 255) {
+                cool = 255;
+            }
             for (int i = 0; i < _num_leds; i++) {
-                _heat[i] = qsub8(_heat[i], random8((cooling * 10) / _num_leds + 2));
+                _heat[i] = qsub8(_heat[i], random8(cool));
             }
             for (int k = _num_leds - 1; k >= 2; k--) {
                 _heat[k] = (_heat[k - 1] + _heat[k - 2] + _heat[k - 2]) / 3;
             }
             for (int n = ixSpawns(120); n > 0; n--) {
-                int y    = random8(7);
+                int y    = random8(_num_leds < 7 ? _num_leds : 7);  // _heat is only _num_leds long
                 _heat[y] = qadd8(_heat[y], random8(95) + 160);
             }
             for (int i = 0; i < _num_leds; i++) {
@@ -776,11 +890,12 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_CANDLE: {  // warm global flicker on the primary color; intensity = depth
+        case EFFECT_CANDLE: {  // warm global flicker on the primary color; WLED: intensity = depth, speed = flicker rate
             primaryColor(r, g, b);
             uint8_t depth  = ixMore(155);
             uint8_t target = 255 - depth + random8(depth);
-            _candle        = (_candle * 7 + target) >> 3;  // smooth toward target
+            int     sh     = speed > 252 ? 1 : speed > 99 ? 2 : speed > 49 ? 3 : 4;  // WLED's speed steps; 3 at the default 50
+            _candle        = (_candle * ((1 << sh) - 1) + target) >> sh;              // smooth toward target
             for (int i = 0; i < _num_leds; i++) {
                 setFb(i, (r * _candle) >> 8, (g * _candle) >> 8, (b * _candle) >> 8);
             }
@@ -796,12 +911,13 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_BOUNCING: {  // a few balls under gravity
+        case EFFECT_BOUNCING: {  // balls under gravity; intensity = # of balls (WLED)
             primaryColor(r, g, b);
-            fadeBy(ixFade(120));
-            float dt   = (_frame_ms / 1000.0f) * (speed / 50.0f);
+            fadeBy(120);
+            float dt    = (_frame_ms / 1000.0f) * (speed / 50.0f);
             float gravy = 9.8f;
-            for (int k = 0; k < kBalls; k++) {
+            int   balls = 1 + _cur_ix * kBalls / 256;  // 1..kBalls, 3 at the default 128
+            for (int k = 0; k < balls; k++) {
                 _ball_vel[k] -= gravy * dt;
                 _ball_pos[k] += _ball_vel[k] * dt;
                 if (_ball_pos[k] < 0.0f) {
@@ -817,37 +933,38 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_WIPE: {  // color-wipe from one end, alternating Color/Color2
-            uint8_t r2, g2, b2;
-            primaryColor(r, g, b);
-            secondaryColor(r2, g2, b2);
-            int span = (_phase >> 7) % (2 * _num_leds);
+        case EFFECT_WIPE: {  // color-wipe from one end, alternating Color/Color2; intensity = edge softness (WLED)
+            uint8_t c[2][3];
+            primaryColor(c[0][0], c[0][1], c[0][2]);
+            secondaryColor(c[1][0], c[1][1], c[1][2]);
+            // WLED fades the front LED in over (ix+1)/256 of its step; our wipe moves
+            // several LEDs a frame, so the soft front is (ix+1)/64 LEDs: hard at 0, ~2 at 128.
+            int w    = (_cur_ix + 1) * 2;     // soft-front width, 1/128 LED (>= 2, never 0)
+            int len  = 128 * _num_leds + w;   // one pass; the front runs off the end so the last LED finishes
+            int p    = _phase % (2u * len);
+            int pass = p >= len;              // 0: Color over Color2, 1: Color2 back over Color
+            p -= pass * len;
+            const uint8_t* nw = c[pass];
+            const uint8_t* od = c[pass ^ 1];
             for (int i = 0; i < _num_leds; i++) {
-                if (span < _num_leds) {
-                    if (i <= span) {
-                        setFb(i, r, g, b);
-                    } else {
-                        setFb(i, r2, g2, b2);
-                    }
-                } else {
-                    if (i <= span - _num_leds) {
-                        setFb(i, r2, g2, b2);
-                    } else {
-                        setFb(i, r, g, b);
-                    }
-                }
+                int d = p - i * 128;  // how far the front is past LED i
+                int t = d <= 0 ? 0 : d >= w ? 256 : d * 256 / w;
+                setFb(i, od[0] + ((nw[0] - od[0]) * t >> 8), od[1] + ((nw[1] - od[1]) * t >> 8), od[2] + ((nw[2] - od[2]) * t >> 8));
             }
             break;
         }
 
-        case EFFECT_DUALSCAN: {  // two dots sweeping toward/past each other
+        case EFFECT_DUALSCAN: {  // two bars sweeping toward/past each other; intensity = # of dots (WLED)
             uint8_t r2, g2, b2;
             primaryColor(r, g, b);
             secondaryColor(r2, g2, b2);
-            fadeBy(ixFade(80));
-            int pos = scale8(sin8(hi), _num_leds - 1);
-            addFb(pos, r, g, b);
-            addFb(_num_leds - 1 - pos, r2, g2, b2);
+            fadeBy(80);
+            int size  = 1 + ((_cur_ix * _cur_ix * _num_leds) >> 18);  // same curve as scan
+            int start = sin8(hi) * (_num_leds - size) / 255;
+            for (int j = start; j < start + size; j++) {
+                addFb(j, r, g, b);
+                addFb(_num_leds - 1 - j, r2, g2, b2);
+            }
             break;
         }
 
@@ -862,7 +979,9 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
         }
 
         case EFFECT_MULTICOMET: {  // several comets chasing at different speeds
-            fadeBy(ixFade(48));
+            // WLED "Fade": HIGHER = faster fade = shorter tails, 255 = bare heads.
+            int f = 6144 / (256 - _cur_ix);  // 48 at 128 = the original look
+            fadeBy(f > 255 ? 255 : f);
             for (int k = 0; k < 3; k++) {
                 int pos = ((_phase >> 8) * (k + 1) / 2 + k * (_num_leds / 3)) % _num_leds;
                 palColor(static_cast<uint8_t>(k * 85), r, g, b);
@@ -882,35 +1001,34 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_DISSOLVE: {  // pixels randomly flip Color<->Color2, then reverse
+        case EFFECT_DISSOLVE: {  // pixels randomly flip Color<->Color2; WLED: intensity = dissolve speed, speed = repeat speed
             uint8_t r2, g2, b2;
             primaryColor(r, g, b);
             secondaryColor(r2, g2, b2);
-            int converts = _num_leds / 12 + 1;
+            int converts = ixSpawns(256 * (_num_leds / 12 + 1));  // _num_leds/12+1 per frame at 128, ~2x at 255, 0 = paused
             for (int n = 0; n < converts; n++) {
-                _heat[random8(_num_leds)] = _aux;  // _aux is the current target (0/1)
+                _heat[random8(_num_leds)] = _aux ^ 1;  // target colour: Color2 first, then back
             }
-            int remaining = 0;
             for (int i = 0; i < _num_leds; i++) {
-                if (_heat[i] != _aux) {
-                    remaining++;
-                }
                 if (_heat[i]) {
                     setFb(i, r2, g2, b2);
                 } else {
                     setFb(i, r, g, b);
                 }
             }
-            if (remaining == 0) {
-                _aux ^= 1;  // fully converted: dissolve back the other way
+            // WLED reverses every (255 - speed) + 15 of its ~24 ms frames, finished or not.
+            if (++_step * _frame_ms > ((255 - speed) + 15) * 24) {
+                _aux ^= 1;
+                _step = 0;
             }
             break;
         }
 
-        case EFFECT_RIPPLE: {  // expanding rings from random centers
-            fadeBy(ixFade(40));
-            float step = 0.5f * (speed / 50.0f);
-            for (int k = 0; k < kBalls; k++) {
+        case EFFECT_RIPPLE: {  // expanding rings from random centers; intensity = # of waves (WLED "Wave #")
+            fadeBy(40);
+            float step  = 0.5f * (speed / 50.0f);
+            int   waves = 1 + _cur_ix * kBalls / 256;  // 1..kBalls, 3 at the default 128
+            for (int k = 0; k < waves; k++) {
                 if (_ball_vel[k] <= 0.0f || _ball_vel[k] > _num_leds / 2.0f) {
                     _ball_pos[k] = random8(_num_leds);
                     _ball_vel[k] = 0.01f;
@@ -926,11 +1044,12 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_DRIP: {  // droplets fall and splash
+        case EFFECT_DRIP: {  // droplets fall and splash; intensity = # of drips (WLED: 1 + ix/64)
             primaryColor(r, g, b);
-            fadeBy(ixFade(60));
+            fadeBy(60);
             float accel = 0.02f * (speed / 50.0f);
-            for (int k = 0; k < kBalls; k++) {
+            int   drips = 1 + (_cur_ix >> 6);  // 1..4 (needs kBalls >= 4), 3 at the default 128
+            for (int k = 0; k < drips; k++) {
                 _ball_vel[k] += accel;
                 _ball_pos[k] -= _ball_vel[k];
                 if (_ball_pos[k] <= 0.0f) {
@@ -944,13 +1063,26 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_LIGHTNING: {  // random bright strikes over darkness
+        case EFFECT_LIGHTNING: {  // random bright strikes over darkness; WLED: intensity = flashes per strike, speed = shorter gaps
             fadeBy(120);
-            for (int n = ixSpawns(12); n > 0; n--) {
+            if (_aux == 0) {  // between strikes: _step = frames until the next one
+                if (_step > 0) {
+                    _step--;
+                } else {
+                    _aux    = 1 + random8(_cur_ix / 20 + 1);  // flashes: 1 at 0, 1-7 at 128, 1-13 at 255
+                    _candle = 0;                              // first flash now
+                }
+            }
+            if (_aux && _candle-- == 0) {  // _candle = frames to the next flash
+                _aux--;
+                _candle   = 1 + random8(3);  // 2-4 frame gaps (~WLED's 50-150 ms)
                 int start = random8(_num_leds);
                 int len   = 2 + random8(_num_leds / 3);
                 for (int j = 0; j < len; j++) {
                     setFb((start + j) % _num_leds, 255, 255, 255);
+                }
+                if (_aux == 0) {  // strike over: WLED waits random(255 - speed) x 100 ms
+                    _step = random8(255 - speed) * 100 / _frame_ms;
                 }
             }
             break;
@@ -968,32 +1100,33 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_PLASMA: {  // interfering sines mapped through the color wheel
+        case EFFECT_PLASMA: {  // interfering sines mapped through the color wheel; intensity = brightness
+            // WLED Plasma: dark troughs breathe in on a slow beat, deeper at low intensity
+            uint8_t dip = scale8(sin8(static_cast<uint8_t>(_phase >> 10)), 255 - _cur_ix);
             for (int i = 0; i < _num_leds; i++) {
-                uint8_t x  = (i * 256) / _num_leds;
-                uint8_t v1 = sin8(static_cast<uint8_t>(x * 2 + hi));
-                uint8_t v2 = sin8(static_cast<uint8_t>(x * 3 - hi * 2));
-                palColor(static_cast<uint8_t>((v1 + v2) >> 1), r, g, b);
-                setFb(i, r, g, b);
+                uint8_t x   = (i * 256) / _num_leds;
+                uint8_t v1  = sin8(static_cast<uint8_t>(x * 2 + hi));
+                uint8_t v2  = sin8(static_cast<uint8_t>(x * 3 - hi * 2));
+                uint8_t v   = (v1 + v2) >> 1;
+                uint8_t bri = 255 - scale8(dip, 255 - v);  // low palette indexes dim first, as in WLED
+                palColor(v, r, g, b);
+                setFb(i, scale8(r, bri), scale8(g, bri), scale8(b, bri));
             }
             break;
         }
 
-        case EFFECT_HEARTBEAT: {  // double-pulse brightness (lub-dub)
+        case EFFECT_HEARTBEAT: {  // double-pulse brightness (lub-dub); intensity = shorter, sharper beats
             primaryColor(r, g, b);
-            uint8_t  t = hi;
-            uint16_t lvl;
-            if (t < 32) {
-                lvl = sin8(t * 4);  // lub
-            } else if (t < 96) {
-                lvl = 24;
-            } else if (t < 128) {
-                lvl = sin8((t - 96) * 4);  // dub
-            } else {
-                lvl = 24;
+            uint8_t t = hi;
+            uint8_t w = ixFade(32);  // beat length (WLED: faster fade): 32 at 128, 16 at 255
+            if (w > 96) {
+                w = 96;  // low intensity glows on, but lub must end before dub
             }
-            if (lvl < 24) {
-                lvl = 24;
+            uint16_t lvl = 24;
+            if (t < w) {
+                lvl = sin8(t * 128 / w);  // lub
+            } else if (t >= 96 && t < 96 + w) {
+                lvl = sin8((t - 96) * 128 / w);  // dub
             }
             for (int i = 0; i < _num_leds; i++) {
                 setFb(i, (r * lvl) >> 8, (g * lvl) >> 8, (b * lvl) >> 8);
@@ -1028,45 +1161,52 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_CHASE: {  // bright dot(s) running over a dim background
+        case EFFECT_CHASE: {  // bright block running over a dim background; intensity = width
             uint8_t r2, g2, b2;
             primaryColor(r, g, b);
             secondaryColor(r2, g2, b2);
             for (int i = 0; i < _num_leds; i++) {
                 setFb(i, (r2 * 40) >> 8, (g2 * 40) >> 8, (b2 * 40) >> 8);
             }
+            // WLED Chase "Width": 1..3 LEDs up to 128, then up to ~half the ring at 255
+            int w   = _cur_ix <= 128 ? 1 + _cur_ix / 64 : 3 + (_cur_ix - 128) * _num_leds / 256;
             int pos = (_phase >> 8) % _num_leds;
-            for (int j = 0; j < 3; j++) {
+            for (int j = 0; j < w; j++) {
                 setFb((pos + j) % _num_leds, r, g, b);
             }
             break;
         }
 
-        case EFFECT_RAILWAY: {  // alternating two colors with a moving shimmer
+        case EFFECT_RAILWAY: {  // alternate pixels swap two colors, with a moving shimmer
             uint8_t r2, g2, b2;
             primaryColor(r, g, b);
             secondaryColor(r2, g2, b2);
+            // WLED Railway "Smoothness": each swap cross-fades over ix/256 of its half-cycle; 0 = hard flip
+            int     ramp = _cur_ix >> 1;
+            int     u    = hi & 127;
+            uint8_t pos  = u >= ramp ? 255 : u * 255 / ramp;  // u < ramp implies ramp > 0
+            if (hi & 128) {
+                pos = 255 - pos;
+            }
             for (int i = 0; i < _num_leds; i++) {
                 uint8_t  s     = sin8(static_cast<uint8_t>((i * 256) / _num_leds - hi));
                 uint16_t scale = 100 + ((s * 155) >> 8);
-                if (i & 1) {
-                    setFb(i, (r * scale) >> 8, (g * scale) >> 8, (b * scale) >> 8);
-                } else {
-                    setFb(i, (r2 * scale) >> 8, (g2 * scale) >> 8, (b2 * scale) >> 8);
-                }
+                uint8_t  t     = (i & 1) ? pos : 255 - pos;
+                setFb(i, (lerp8(r2, r, t) * scale) >> 8, (lerp8(g2, g, t) * scale) >> 8, (lerp8(b2, b, t) * scale) >> 8);
             }
             break;
         }
 
-        case EFFECT_PACIFICA: {  // layered ocean with whitecaps
+        case EFFECT_PACIFICA: {  // layered ocean with whitecaps; intensity = wave angle
             for (int i = 0; i < _num_leds; i++) {
-                uint8_t a   = sin8(static_cast<uint8_t>(i * 4 + (_phase >> 8)));
-                uint8_t c   = sin8(static_cast<uint8_t>(i * 5 - (_phase >> 7)));
-                uint8_t d   = sin8(static_cast<uint8_t>(i * 3 + (_phase >> 9)));
+                int     x   = i * (120 + _cur_ix);  // WLED Pacifica "Angle": per-LED wave step, 248 at 128
+                uint8_t a   = sin8(static_cast<uint8_t>(x / 62 + (_phase >> 8)));
+                uint8_t c   = sin8(static_cast<uint8_t>(x * 5 / 248 - (_phase >> 7)));
+                uint8_t d   = sin8(static_cast<uint8_t>(x * 3 / 248 + (_phase >> 9)));
                 uint8_t idx = (a + c + d) / 3;
                 sampleTable(palOcean, idx, r, g, b);
                 setFb(i, r, g, b);
-                uint8_t cap = sin8(static_cast<uint8_t>(i * 9 - (_phase >> 5)));
+                uint8_t cap = sin8(static_cast<uint8_t>(x * 9 / 248 - (_phase >> 5)));
                 if (cap > 236) {
                     uint8_t w = (cap - 236) * 8;
                     addFb(i, w, w, w);
@@ -1075,12 +1215,13 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_AURORA: {  // drifting green/purple curtains
+        case EFFECT_AURORA: {  // drifting green/purple curtains; intensity = how many curtains
             for (int i = 0; i < _num_leds; i++) {
-                uint8_t a    = sin8(static_cast<uint8_t>(i * 3 + (_phase >> 8)));
-                uint8_t c    = sin8(static_cast<uint8_t>(i * 2 - (_phase >> 9)));
+                int     x    = i * (_cur_ix + 32);  // WLED Aurora wave count: 0.2x..1.8x, 160 per LED at 128
+                uint8_t a    = sin8(static_cast<uint8_t>(x * 3 / 160 + (_phase >> 8)));
+                uint8_t c    = sin8(static_cast<uint8_t>(x / 80 - (_phase >> 9)));
                 sampleTable(palAurora, (a + c) / 2, r, g, b);
-                uint8_t  w   = sin8(static_cast<uint8_t>(i * 5 + (_phase >> 7)));
+                uint8_t  w   = sin8(static_cast<uint8_t>(x / 32 + (_phase >> 7)));
                 uint16_t bri = 40 + ((w * 215) >> 8);
                 setFb(i, (r * bri) >> 8, (g * bri) >> 8, (b * bri) >> 8);
             }
@@ -1097,9 +1238,10 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        case EFFECT_COLORWAVES: {  // pride, but colored from the active palette
+        case EFFECT_COLORWAVES: {  // pride, but colored from the active palette; intensity = hue spread
             for (int i = 0; i < _num_leds; i++) {
-                palColor(static_cast<uint8_t>((_phase >> 8) + i * 3), r, g, b);
+                // WLED Colorwaves "Hue": palette step per LED, 0 = one color on the whole ring
+                palColor(static_cast<uint8_t>((_phase >> 8) + ((i * 3 * _cur_ix) >> 7)), r, g, b);
                 uint8_t  bw  = sin8(static_cast<uint8_t>(i * 7 + (_phase >> 6)));
                 uint16_t bri = 60 + ((bw * 195) >> 8);
                 setFb(i, (r * bri) >> 8, (g * bri) >> 8, (b * bri) >> 8);
@@ -1257,6 +1399,12 @@ void Leds::render() {
     // the pixel buffer must not change while the translator reads it.
     if (rmt_wait_tx_done(LED_RMT_CHANNEL, pdMS_TO_TICKS(2)) != ESP_OK) {
         return;
+    }
+    if (_count->get() != _num_leds && !resize(_count->get())) {
+        return;  // no memory for the new length yet; keep the old frame
+    }
+    if (_order_set->get() != _applied_order && !applyOrder(_order_set->get())) {
+        return;  // no memory for the wider (RGBW) buffer yet; keep the old frame
     }
 
     // A change to $LED/Effect from any source -- including a bare

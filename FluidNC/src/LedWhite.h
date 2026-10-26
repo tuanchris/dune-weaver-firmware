@@ -75,6 +75,17 @@ public:
         return true;
     }
 
+    // Every valid color order: the 6 RGB permutations, then the 24 RGBW ones (W in
+    // any slot).  $LED/Order persists the INDEX, so only ever append.
+    static constexpr int         kNumOrders           = 30;
+    static constexpr const char* kOrders[kNumOrders] = {
+        "RGB",  "RBG",  "GRB",  "GBR",  "BRG",  "BGR",   //
+        "RGBW", "RBGW", "GRBW", "GBRW", "BRGW", "BGRW",  //
+        "WRGB", "WRBG", "WGRB", "WGBR", "WBRG", "WBGR",  //
+        "RWGB", "RWBG", "GWRB", "GWBR", "BWRG", "BWGR",  //
+        "RGWB", "RBWG", "GRWB", "GBWR", "BRWG", "BGWR",
+    };
+
     // WLED Bus::autoWhiteCalc for a 24-bit color with no manual W.
     static void autoWhite(Mode mode, uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& w) {
         switch (mode) {

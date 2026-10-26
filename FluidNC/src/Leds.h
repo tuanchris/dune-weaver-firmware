@@ -10,9 +10,10 @@
   Config:
     leds:
       data_pin: gpio.32
-      num_leds: 60
+      num_leds: 60         # factory default; $LED/Count overrides it
       color_order: GRB     # any permutation of R, G, B; add W for an RGBW
-                           # strip (e.g. GRBW for SK6812 RGBW = 4 bytes/pixel)
+                           # strip (e.g. GRBW for SK6812 RGBW = 4 bytes/pixel);
+                           # factory default, $LED/Order overrides it
       frame_ms: 33         # animation tick, ~30 fps
 
   Runtime control is via NVS-persisted settings, so the strip remembers
@@ -24,9 +25,14 @@
     $LED/Color2=RRGGBB     (secondary color, used by 'gradient')
     $LED/Brightness=0..255 (master brightness over every effect)
     $LED/Speed=1..255      (animation speed)
-    $LED/Intensity=0..255  (WLED's second slider: density / trail length /
-                           sparks / flicker depth per effect; 128 = the
-                           original look, effects without a mapping ignore it)
+    $LED/Intensity=0..255  (WLED's second slider, with WLED's meaning per
+                           effect -- gap size, # of balls, spark rate, ...;
+                           effects WLED shows no slider for ignore it.
+                           Table in COMMANDS.md)
+    $LED/Count=1..300      (strip length; applies on the next frame)
+    $LED/Order=GRB|RGB|..|GRBW|..
+                           (wire color order, any of the 30 valid ones; applies
+                           on the next frame, resizing for 3 <-> 4 bytes/pixel)
     $LED/White=none|brighter|accurate|max
                            (RGBW strips only: how the W byte is derived
                            from each pixel's RGB -- WLED's auto-white
@@ -140,8 +146,15 @@ public:
     void afterParse() override;
     void group(Configuration::HandlerBase& handler) override {
         handler.item("data_pin", _data_pin);
-        handler.item("num_leds", _num_leds, 1, 300);
-        handler.item("color_order", _color_order);
+        // num_leds and color_order are FILE-ONLY: they seed $LED/Count's and
+        // $LED/Order's defaults, which is how they change at runtime.  Hidden
+        // from the runtime handler because `$/leds/num_leds=` changed the count
+        // without resizing the buffers (a bigger value overran them), and
+        // `$/leds/color_order=` could switch 3 <-> 4 bytes/pixel the same way.
+        if (handler.handlerType() != Configuration::HandlerType::Runtime) {
+            handler.item("num_leds", _num_leds, 1, 300);
+            handler.item("color_order", _color_order);
+        }
         handler.item("frame_ms", _frame_ms, 10, 1000);
     }
 
@@ -193,7 +206,7 @@ private:
     static constexpr int DIR_CW  = 0;  // $LED/Direction values
     static constexpr int DIR_CCW = 1;
 
-    static constexpr int kBalls = 3;
+    static constexpr int kBalls = 5;  // max # of balls / drips / ripples ($LED/Intensity picks how many)
 
     void render();
     int  hookEffect();       // the state hook in force, or -1
@@ -203,6 +216,8 @@ private:
     void parse_state_report();
     bool setPixel(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness);
     void flushLive();  // persist any in-memory live overrides to NVS (called at idle)
+    bool resize(int n);  // (re)allocate the strip buffers for n LEDs; false = OOM, old kept
+    bool applyOrder(int id);  // switch to $LED/Order id (resizing for RGB <-> RGBW); false = OOM, old kept
 
     // Framebuffer helpers (operate on _fb, logical R,G,B order)
     void setFb(int i, uint8_t r, uint8_t g, uint8_t b);
@@ -246,6 +261,8 @@ private:
     IntSetting*    _brightness  = nullptr;
     IntSetting*    _speed       = nullptr;
     IntSetting*    _intensity   = nullptr;
+    IntSetting*    _count       = nullptr;  // strip length; default = config num_leds
+    EnumSetting*   _order_set   = nullptr;  // wire color order; default = config color_order
     EnumSetting*   _white       = nullptr;  // RGBW strips: auto-white mode (LedWhite::Mode)
     EnumSetting*   _run_effect  = nullptr;
     EnumSetting*   _idle_effect = nullptr;
@@ -278,6 +295,7 @@ private:
 
     // Driver state
     bool     _ready = false;
+    int      _applied_order = -1;  // $LED/Order id _order/_pixels are set up for
     uint8_t* _pixels = nullptr;  // _order.bpp (3 or 4) bytes per LED, in wire order
     uint8_t* _fb     = nullptr;  // 3 bytes per LED, logical R,G,B working buffer
     uint8_t* _heat   = nullptr;  // 1 byte per LED, fire effect heat
@@ -293,7 +311,8 @@ private:
     int      _last_bg_effect = -1;  // 'ball' effect's background sub-effect reset tracker
     uint32_t _rng         = 0x1234abcdU;  // xorshift state
     uint8_t  _candle      = 200;          // candle flicker level
-    uint8_t  _aux         = 0;            // scratch toggle (e.g. dissolve direction)
-    float    _ball_pos[kBalls] = { 0, 0, 0 };  // also reused by ripple (center) / drip (height)
-    float    _ball_vel[kBalls] = { 0, 0, 0 };  // also reused by ripple (radius) / drip (speed)
+    uint8_t  _aux         = 0;            // scratch (dissolve direction, lightning flashes left, sparkle countdown)
+    uint16_t _step        = 0;            // scratch counter (dissolve hold, lightning gap, sparkle LED)
+    float    _ball_pos[kBalls] = {};      // also reused by ripple (center) / drip (height)
+    float    _ball_vel[kBalls] = {};      // also reused by ripple (radius) / drip (speed)
 };

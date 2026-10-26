@@ -575,7 +575,7 @@ std::string SandApi::settingsJson() {
     static const char* const keys[] = {
         "THR/Feed",         "Sand/HomingMode",  "Sand/ThetaOffset",
         "LED/Effect",      "LED/Palette",      "LED/Color",             "LED/Color2",
-        "LED/Brightness",  "LED/Speed",        "LED/Intensity",         "LED/White",             "LED/RunEffect",         "LED/IdleEffect",
+        "LED/Brightness",  "LED/Speed",        "LED/Intensity",         "LED/Count",             "LED/Order",             "LED/White",             "LED/RunEffect",         "LED/IdleEffect",
         "LED/Direction",   "LED/Align",      "LED/BallSize",
         "LED/BallBg",      "LED/BallBright", "LED/BallBgBright",
         "Playlist/Mode",   "Playlist/Shuffle", "Playlist/PauseTime",    "Playlist/PauseFromStart",

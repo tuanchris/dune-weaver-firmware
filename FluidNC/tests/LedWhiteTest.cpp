@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <cstring>
+#include <set>
+#include <string>
+
 #include "src/LedWhite.h"
 
 TEST(LedWhite, ParsesRgbOrders) {
@@ -31,6 +35,20 @@ TEST(LedWhite, ParsesRgbwOrders) {
     ASSERT_TRUE(LedWhite::parseOrder("WRGB", o));  // W first is legal too
     EXPECT_EQ(o.wi, 0);
     EXPECT_EQ(o.ri, 1);
+}
+
+// $LED/Order's choices: every entry must parse, be unique, and size the wire
+// buffer right (3 bytes/pixel for RGB, 4 with a W).
+TEST(LedWhite, OrderListIsComplete) {
+    std::set<std::string> seen;
+    for (int i = 0; i < LedWhite::kNumOrders; i++) {
+        const char*     name = LedWhite::kOrders[i];
+        LedWhite::Order o;
+        ASSERT_TRUE(LedWhite::parseOrder(name, o)) << name;
+        EXPECT_EQ(o.bpp, static_cast<int>(strlen(name))) << name;
+        EXPECT_TRUE(seen.insert(name).second) << "duplicate " << name;
+    }
+    EXPECT_EQ(seen.size(), 30u);  // 3! RGB + 4! RGBW: all of them
 }
 
 TEST(LedWhite, RejectsBadOrders) {
