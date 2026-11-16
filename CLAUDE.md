@@ -276,6 +276,60 @@ works). Config: `config_dlc32max_thetarho.yaml`.
 
 ## Gotchas (these bit us; don't repeat)
 
+- **A `UserCommand` (or `Setting`) defined in a NEW .cpp can silently not exist.**
+  ESP-IDF runs `.init_array` in REVERSE, and the lists are `init_priority(101/102)`
+  vectors: if the new file's initializer lands after theirs in the array, it runs
+  first, registers, and the list's own constructor then wipes it (`$CMD` doesn't
+  show it, `$X/Y=` answers "Invalid $ statement"). Define commands in an existing
+  translation unit (or check `$CMD` after adding one). Found 2026-11-15.
+- **Uploads: the time is the SD directory, not the bytes.** On a card whose
+  `/patterns` holds hundreds of files, every lookup there is a scan at the 8 MHz
+  SD clock: `fopen("w")` ~0.7 s, a stat ~0.3 s, a new file's FAT short name
+  ~0.2 s more per earlier name with the same first 6 characters, an SD mount ~80 ms.
+  So an upload does ONE lookup (no stat when opening to write — `FileStream` —
+  and none after the close: the bytes written are the size check) and holds the
+  card mounted from its first file to its reply (`s_uploadHold` in WebServer.cpp):
+  FluidPath unmounts when the last reference goes, and each remount needs a large
+  free block. (Keeping the card mounted for good was tried, 2026-11-15: the mount
+  holds ~28 KB, and a 20 MB request then ran out of memory. No.)
+- **One upload request can carry a whole sync** (the app's background batch): the
+  parser reuses one `HTTPUpload` buffer per request (the stock reset(new) per part
+  allocated 8.3 KB while holding the last and aborted the board on bad_alloc),
+  `uploadWrite` feeds the 120 s task watchdog, the bytes a block read takes past
+  a part's boundary stay IN the upload buffer for the next part's headers (copying
+  them to a heap `std::string` — up to ~8 KB of the next file — threw bad_alloc at
+  the heap's low point, uncaught in the library: an abort on a warmed-up board,
+  found with an RTC_NOINIT stage record + `heap_caps_register_failed_alloc_callback`,
+  a 10459-byte malloc failing), an exception in the upload callback aborts the
+  upload, not the board (`fileUpload`'s try/catch), and **every non-file field is kept
+  for the whole request** — a request refuses its 33rd (`WEBSERVER_MAX_POST_ARGS`),
+  and per-file `<name>S` size fields in a 20-file request made the heap sag until
+  throughput fell 4x (6 → 34 s a file). Batches send no size fields.
+  The multipart parser (vendored `libraries/WebServer/src/Parsing.cpp`) reads a
+  file part in blocks (`MultipartScan::copyPart`, unit-tested); the stock one did
+  a `client.read()` per byte. Bytes it reads past a part's boundary wait in
+  `_formRest` for the header reads; its full-buffer flushes are 8192 bytes
+  (`HTTP_UPLOAD_BUFLEN` 8320, aligned to the FileStream's 4 KB stdio buffer:
+  8176-byte flushes became two SD writes and cost ~1 s per MB). Measured on DWG
+  2026-11-15: small overwrite 1.5 s → ~0.55 s; 1 MB ~9 s → ~7.5–8 s (lwIP's
+  5760-byte TCP window, compile-time in the prebuilt framework, and the Wi-Fi);
+  a NEW file 1–3 s, the FAT short-name scans for names sharing 6 characters
+  (FatFs, inside the framework). A 20 MHz `sdcard: frequency_hz` cut the
+  lookups by ~35% on DWG's card but isn't in the shipped configs (untested on
+  other boards and cards).
+- **An aborted upload used to fail the next one**: `uploadStop` left
+  `_upload_status` FAILED, the aborted request never reached its reply (where it
+  is reset), so the next upload skipped creating its file and answered 500
+  "upload cancelled". It resets now, and the partial file is deleted
+  (`dropFailedUpload`) instead of staying truncated under its real name, where
+  playlists would draw half a pattern. Write-to-temp-and-rename (keeps the old
+  version) was tried: FAT's delete + rename in a big `/patterns` made every
+  overwrite ~1.4 s slower, so no.
+- **Uploads keep `/patterns/index.json` in step** (`PatternManifest.h`, tested):
+  a complete pattern upload appends its key in place (the final `]` becomes
+  `,"<key>"]`) after a streamed search for it, never a parse/rewrite of the
+  ~20 KB file (heap). ~0.1 s per upload. Only when the manifest exists.
+
 - **An internal-flash write (NVS, littlefs) concurrent with stepping used to
   panic the board** — `Guru Meditation … Cache disabled but cached memory
   region accessed`, PC `0xbad00bad`, backtrace CORRUPTED (don't chase it; the

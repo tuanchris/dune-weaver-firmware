@@ -98,7 +98,7 @@ the WebSocket for a *single* "active controller" that wants smooth high-rate liv
 | Endpoint | Returns |
 |----------|---------|
 | `GET /sand_status` | status object (schema below) |
-| `GET /sand_patterns` | JSON array of pattern paths (`.thr`, and plain G-code `.gcode`/`.gc`/`.nc`). **If `/patterns/index.json` (a prebuilt manifest) exists, it is served verbatim** — a fast single-file read of the full recursive catalog (paths relative to `/patterns`, e.g. `custom_patterns/x.thr`; run via `$Sand/Run=/patterns/<path>`). Generate it on the host and upload to the card whenever patterns change (see COMMANDS.md). **Without a manifest** it falls back to a non-recursive top-level listing (subfolders omitted — enumerating the ~1000-file nested library on the slow SD froze the single-threaded server). Chunked/streamed. **Conditional GET**: when a manifest is present the response carries an `ETag` (a content hash) and `Cache-Control: no-cache`; send it back as `If-None-Match: <etag>` and an unchanged catalog answers **`304 Not Modified`** with no body instead of re-streaming the whole manifest. Clients that re-read the catalog on every launch/table-switch should cache the ETag and revalidate — the repeated full downloads, colliding with an app's launch connection burst, are what pushed the heap-tight board into low-memory shedding. The ETag changes whenever the manifest is re-uploaded; the live-listing fallback has no ETag (always `200`). **Ranged GET**: when the manifest is served the response carries `Accept-Ranges: bytes` and honors a single `Range:` header (`a-b`, `a-`, `-n`) with **`206`** + `Content-Range`, so a client can pull a large catalog in bounded windows instead of one multi-second transfer that leaves the single-threaded server deaf while pollers stack behind it (the live-listing fallback is not seekable — no Range). **Load-shedding**: a *revalidation* (a conditional GET carrying `If-None-Match`) is exempt from the low-heap `503` guard so the library stays usable on a stressed board; a *cold* full GET is sheddable (`503 busy: low memory`) — retry with backoff or ranged pulls |
+| `GET /sand_patterns` | JSON array of pattern paths (`.thr`, and plain G-code `.gcode`/`.gc`/`.nc`). **If `/patterns/index.json` (a prebuilt manifest) exists, it is served verbatim** — a fast single-file read of the full recursive catalog (paths relative to `/patterns`, e.g. `custom_patterns/x.thr`; run via `$Sand/Run=/patterns/<path>`). Generate it on the host and upload to the card whenever patterns change (see COMMANDS.md); since v0.2.3 an uploaded pattern adds itself to it (see Upload). **Without a manifest** it falls back to a non-recursive top-level listing (subfolders omitted — enumerating the ~1000-file nested library on the slow SD froze the single-threaded server). Chunked/streamed. **Conditional GET**: when a manifest is present the response carries an `ETag` (a content hash) and `Cache-Control: no-cache`; send it back as `If-None-Match: <etag>` and an unchanged catalog answers **`304 Not Modified`** with no body instead of re-streaming the whole manifest. Clients that re-read the catalog on every launch/table-switch should cache the ETag and revalidate — the repeated full downloads, colliding with an app's launch connection burst, are what pushed the heap-tight board into low-memory shedding. The ETag changes whenever the manifest is re-uploaded; the live-listing fallback has no ETag (always `200`). **Ranged GET**: when the manifest is served the response carries `Accept-Ranges: bytes` and honors a single `Range:` header (`a-b`, `a-`, `-n`) with **`206`** + `Content-Range`, so a client can pull a large catalog in bounded windows instead of one multi-second transfer that leaves the single-threaded server deaf while pollers stack behind it (the live-listing fallback is not seekable — no Range). **Load-shedding**: a *revalidation* (a conditional GET carrying `If-None-Match`) is exempt from the low-heap `503` guard so the library stays usable on a stressed board; a *cold* full GET is sheddable (`503 busy: low memory`) — retry with backoff or ranged pulls |
 | `GET /sand_playlists` | JSON array of `.txt` files in the top level of `/playlists` (non-recursive) |
 | `GET /sand_settings` | JSON object of app settings (speed, homing mode, LED, playlist, quiet hours), values as strings |
 | `GET /sand_time` | wall clock `{epoch, synced, local, tz}`. `?epoch=<unix>` sets the clock (app auto-sync / AP mode); `?tz=<POSIX>` sets + persists the timezone. Safe mid-run: the zone applies immediately and the (idle-gated) NVS write is deferred to the return to idle. Also surfaced in `/sand_status` under `time` |
@@ -411,10 +411,28 @@ allocation or an SD remount:
 `POST /upload` (SD) multipart: the multipart **filename carries the full destination path**
 (`filename=/patterns/x.thr`; a `path` arg is ignored — a bare filename lands at `/`); field
 `<filename>S` = size in bytes, field `<filename>` = file bytes (both named with that full path).
-Returns JSON `{status, files:[{name,size,…}], path, total, used, occupation}`.
+Returns JSON `{status, files:[{name,size,…}], path, total, used, occupation}`; send
+`?dontlist=yes` to leave the `files` listing out (an SD directory walk nobody needs after an upload;
+the app always does).
 Pre-checks free space. Missing parent folders are created automatically (a card prepared on a
 computer often lacks `/playlists` / `/patterns`). (Serial alternative: `$Xmodem/Receive=<path>` /
 `$Xmodem/Send=<path>`.)
+The size check compares `<filename>S` with the bytes that reached the file (every write and the
+close succeeded), not a stat of the file afterwards. An SD upload that doesn't complete (cut off,
+wrong size, failed close) is **deleted**, not left truncated under its real name (since v0.2.3).
+A complete upload of a pattern (`.thr`, `.gcode`/`.gc`/`.nc`) under `/patterns` (not `previews/`)
+is **appended to `/patterns/index.json`** in place when the card has one and it doesn't list the
+file yet (since v0.2.3), so a client no longer has to rewrite the manifest after an upload (one
+that does finds the entry there and has nothing to do); deletes still need the client's update. Parts may come in any order and a request may
+carry many files, minutes of them (since v0.2.3: the app sends a whole background sync as one
+request); a request takes at most **32 non-file fields**, so a big batch leaves the optional
+`<filename>S` size fields out (each is held for the whole request). Timing on a DW Gold (8 MHz SD bus, a big `/patterns`, 2026-11-15): a small
+pattern ~0.55 s (it was ~1.5 s: the per-upload directory lookups and SD remounts); a NEW file
+1–3 s, more the more files in its folder share its first 6 characters (FAT short-name generation
+scans the directory several times); 1 MB ~7.5–8 s (was ~9 s; ~130 KB/s, the TCP window and the
+Wi-Fi, not the SD, are the limit). A file part's data may pause up to 30 s; longer, and the upload
+is dropped (`upload cancelled`); the next upload then works (before 2026-11-15 it failed once with
+500 `upload cancelled`).
 
 ### File ops (`GET /upload?path=<dir>&action=delete|deletedir|createdir|rename&filename=<name>[&newname=]`)
 Same JSON shape as upload. **An `action=` request carries no `files` listing** unless it

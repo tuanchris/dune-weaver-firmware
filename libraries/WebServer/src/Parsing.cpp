@@ -25,6 +25,8 @@
 #include "WiFiClient.h"
 #include "WebServer.h"
 #include "detail/mimetable.h"
+#include "../../../FluidNC/src/MultipartScan.h"
+#include <new>  // std::nothrow (the upload buffer)
 
 #ifndef WEBSERVER_MAX_POST_ARGS
 #define WEBSERVER_MAX_POST_ARGS 32
@@ -343,6 +345,21 @@ void WebServer::_uploadWriteByte(uint8_t b){
   _currentUpload->buf[_currentUpload->currentSize++] = b;
 }
 
+// Longest pause in a file part's data before the upload is given up.
+static const uint32_t UPLOAD_STALL_MS = 30000;
+
+String WebServer::_formReadUntil(WiFiClient& client, char terminator) {
+  String out;
+  while (_formRest && _formRestPos < _formRestLen) {
+    char c = (char)_formRest[_formRestPos++];
+    if (c == terminator) return out;
+    out += c;
+  }
+  _formRest    = nullptr;
+  _formRestLen = _formRestPos = 0;
+  return out + client.readStringUntil(terminator);
+}
+
 int WebServer::_uploadReadByte(WiFiClient& client) {
   int res = client.read();
 
@@ -358,15 +375,17 @@ int WebServer::_uploadReadByte(WiFiClient& client) {
 
 bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
   (void) len;
+  _formRest    = nullptr;
+  _formRestLen = _formRestPos = 0;
   log_v("Parse Form: Boundary: %s Length: %d", boundary.c_str(), len);
   String line;
   int retry = 0;
   do {
-    line = client.readStringUntil('\r');
+    line = _formReadUntil(client, '\r');
     ++retry;
   } while (line.length() == 0 && retry < 3);
 
-  client.readStringUntil('\n');
+  _formReadUntil(client, '\n');
   //start reading the form
   if (line == ("--"+boundary)){
    if(_postArgs) delete[] _postArgs;
@@ -379,8 +398,8 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
       String argFilename;
       bool argIsFile = false;
 
-      line = client.readStringUntil('\r');
-      client.readStringUntil('\n');
+      line = _formReadUntil(client, '\r');
+      _formReadUntil(client, '\n');
       if (line.length() > 19 && line.substring(0, 19).equalsIgnoreCase(F("Content-Disposition"))){
         int nameStart = line.indexOf('=');
         if (nameStart != -1){
@@ -400,19 +419,19 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
           log_v("PostArg Name: %s", argName.c_str());
           using namespace mime;
           argType = FPSTR(mimeTable[txt].mimeType);
-          line = client.readStringUntil('\r');
-          client.readStringUntil('\n');
+          line = _formReadUntil(client, '\r');
+          _formReadUntil(client, '\n');
           if (line.length() > 12 && line.substring(0, 12).equalsIgnoreCase(FPSTR(Content_Type))){
             argType = line.substring(line.indexOf(':')+2);
             //skip next line
-            client.readStringUntil('\r');
-            client.readStringUntil('\n');
+            _formReadUntil(client, '\r');
+            _formReadUntil(client, '\n');
           }
           log_v("PostArg Type: %s", argType.c_str());
           if (!argIsFile){
             while(1){
-              line = client.readStringUntil('\r');
-              client.readStringUntil('\n');
+              line = _formReadUntil(client, '\r');
+              _formReadUntil(client, '\n');
               if (line.startsWith("--"+boundary)) break;
               if (argValue.length() > 0) argValue += "\n";
               argValue += line;
@@ -431,7 +450,20 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
               return false;
             }
           } else {
-            _currentUpload.reset(new HTTPUpload());
+            // ONE upload buffer per request, reused by each file part. The stock
+            // reset(new HTTPUpload()) per part allocated the next 8.3 KB while the
+            // last was still held (it was never freed between requests either),
+            // and a request carrying several big files (the app's background sync)
+            // threw bad_alloc on the board's low heap after a file, which aborted
+            // the board (DWG, 20 x 1 MB in one request, 2026-11-15). Freed when
+            // the request ends (_endForm); out of memory drops just this upload.
+            if (!_currentUpload) {
+              _currentUpload.reset(new (std::nothrow) HTTPUpload());
+              if (!_currentUpload) {
+                log_e("upload: no memory for the upload buffer");
+                return false;
+              }
+            }
             _currentUpload->status = UPLOAD_FILE_START;
             _currentUpload->name = argName;
             _currentUpload->filename = argFilename;
@@ -443,43 +475,53 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
               _currentHandler->upload(*this, _currentUri, *_currentUpload);
             _currentUpload->status = UPLOAD_FILE_WRITE;
 
-            int fastBoundaryLen = 4 /* \r\n-- */ + boundary.length() + 1 /* \0 */;
-            char fastBoundary[ fastBoundaryLen ];
-            snprintf(fastBoundary, fastBoundaryLen, "\r\n--%s", boundary.c_str());
-            int boundaryPtr = 0;
-            while ( true ) {
-                int ret = _uploadReadByte(client);
-                if (ret < 0) {
-                    // Unexpected, we should have had data available per above
-                    return _parseFormUploadAborted();
-                }
-                char in = (char) ret;
-                if (in == fastBoundary[ boundaryPtr ]) {
-                    // The input matched the current expected character, advance and possibly exit this file
-                    boundaryPtr++;
-                    if (boundaryPtr == fastBoundaryLen - 1) {
-                        // We read the whole boundary line, we're done here!
-                        break;
-                    }
-                } else {
-                    // The char doesn't match what we want, so dump whatever matches we had, the read in char, and reset ptr to start
-                    for (int i = 0; i < boundaryPtr; i++) {
-                        _uploadWriteByte( fastBoundary[ i ] );
-                    }
-                    if (in == fastBoundary[ 0 ]) {
-                       // This could be the start of the real end, mark it so and don't emit/skip it
-                       boundaryPtr = 1;
-                    } else {
-                      // Not the 1st char of our pattern, so emit and ignore
-                      _uploadWriteByte( in );
-                      boundaryPtr = 0;
-                    }
-                }
+            // The part's data ends at "\r\n--<boundary>". Read it in blocks straight
+            // into the upload buffer (MultipartScan::copyPart; the stock loop did one
+            // client.read() per byte), bytes left from reading the headers first.
+            String         pat    = "\r\n--" + boundary;
+            unsigned char* buf    = _currentUpload->buf;
+            size_t         have   = 0;
+            if (_formRest == buf && _formRestPos < _formRestLen) {
+              // The last part's read ran into this one: its unread bytes are
+              // already in the buffer; slide them to the front.
+              have = _formRestLen - _formRestPos;
+              memmove(buf, buf + _formRestPos, have);
             }
-            // Found the boundary string, finish processing this file upload
-            if (_currentHandler && _currentHandler->canUpload(_currentUri))
+            _formRest    = nullptr;
+            _formRestLen = _formRestPos = 0;
+            auto read = [&](unsigned char* dst, size_t max) -> long {
+              uint32_t waited = millis();
+              while (true) {
+                int avail = client.available();
+                if (avail > 0) {
+                  int got = client.read(dst, (size_t)avail < max ? (size_t)avail : max);
+                  if (got > 0) return got;
+                }
+                // The stock loop waited for as long as the socket said connected, so a
+                // phone that vanished mid-upload wedged the single-threaded server; a
+                // Wi-Fi hiccup of a few seconds still goes through.
+                if (!client.connected() || millis() - waited > UPLOAD_STALL_MS) return -1;
+                delay(1);
+              }
+            };
+            auto flush = [&](size_t n) {
+              _currentUpload->currentSize = n;
+              if (_currentHandler && _currentHandler->canUpload(_currentUri))
                 _currentHandler->upload(*this, _currentUri, *_currentUpload);
-            _currentUpload->totalSize += _currentUpload->currentSize;
+              _currentUpload->totalSize += n;
+              _currentUpload->currentSize = 0;
+            };
+            // 4096: the FileStream's stdio buffer; HTTP_UPLOAD_BUFLEN is 8192 + 128 so a
+            // full buffer still flushes 8192 bytes (platformio.ini).
+            long rest = MultipartScan::copyPart(buf, HTTP_UPLOAD_BUFLEN, have, pat.c_str(), pat.length(), read, flush, 4096);
+            if (rest < 0) {
+              return _parseFormUploadAborted();
+            }
+            // Whatever followed the boundary (the rest of its line, later parts)
+            // goes back in front of the unread headers.
+            _formRest    = buf;  // copyPart moved them to buf[0, rest)
+            _formRestLen = (size_t)rest;
+            _formRestPos = 0;
             _currentUpload->status = UPLOAD_FILE_END;
             if (_currentHandler && _currentHandler->canUpload(_currentUri))
                 _currentHandler->upload(*this, _currentUri, *_currentUpload);
@@ -487,9 +529,9 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
                 _currentUpload->filename.c_str(),
                 _currentUpload->type.c_str(),
                 (int)_currentUpload->totalSize);
-            if (!client.connected()) return _parseFormUploadAborted();
-            line = client.readStringUntil('\r');
-            client.readStringUntil('\n');
+            if (!client.connected() && _formRestLen == 0) return _parseFormUploadAborted();
+            line = _formReadUntil(client, '\r');
+            _formReadUntil(client, '\n');
             if (line == "--") {     // extra two dashes mean we reached the end of all form fields
                 log_v("Done Parsing POST");
                 break;
@@ -520,9 +562,15 @@ bool WebServer::_parseForm(WiFiClient& client, String boundary, uint32_t len){
       _postArgs=nullptr;
       _postArgsLen = 0;
     }
+    _currentUpload.reset();  // every file part is done: give the buffer back
+    _formRest    = nullptr;
+    _formRestLen = _formRestPos = 0;
     return true;
   }
   log_e("Error: line: %s", line.c_str());
+  _currentUpload.reset();
+  _formRest    = nullptr;
+  _formRestLen = _formRestPos = 0;
   return false;
 }
 
@@ -561,5 +609,8 @@ bool WebServer::_parseFormUploadAborted(){
   _currentUpload->status = UPLOAD_FILE_ABORTED;
   if(_currentHandler && _currentHandler->canUpload(_currentUri))
     _currentHandler->upload(*this, _currentUri, *_currentUpload);
+  _currentUpload.reset();  // the request is over: give the buffer back
+  _formRest    = nullptr;
+  _formRestLen = _formRestPos = 0;
   return false;
 }

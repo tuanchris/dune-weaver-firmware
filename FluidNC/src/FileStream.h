@@ -44,6 +44,8 @@ public:
     int         read() override;
     int         peek() override;
     void        flush() override;
+    // Close now; false when the final write-back failed (fclose flushes the stdio buffer).
+    bool close();
 
     size_t readBytes(char* buffer, size_t length) { return read((uint8_t*)buffer, length); }
 

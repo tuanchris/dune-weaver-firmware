@@ -67,6 +67,12 @@ void FileStream::setup(const char* mode) {
     // following stat fails; the throwing overload then raises a
     // filesystem_error that several callers only catch as Error -> uncaught
     // exception -> panic.  A 0 size on error is harmless (size() is advisory).
+    // Opened to write, the file is empty: skip the stat, a second directory
+    // lookup (~0.3 s per upload in a big /patterns on an 8 MHz SD bus).
+    if (strchr(mode, 'w')) {
+        _size = 0;
+        return;
+    }
     std::error_code ec;
     _size = stdfs::file_size(_fpath, ec);
     if (ec) {
@@ -100,6 +106,15 @@ void FileStream::restore() {
     } else {
         // XXX need to unwind the job stack somehow
     }
+}
+
+bool FileStream::close() {
+    if (!_fd) {
+        return true;
+    }
+    bool ok = fclose(_fd) == 0;
+    _fd     = nullptr;
+    return ok;
 }
 
 FileStream::~FileStream() {

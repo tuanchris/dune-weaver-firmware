@@ -154,6 +154,7 @@ namespace WebUI {
         static void handleFileOps(const char* mountpoint);
         static void handle_direct_SDFileList();
         static void fileUpload(const char* fs);
+        static void fileUploadStep(const char* fs);
         static void SDFileUpload();
         static void uploadStart(const char* filename, size_t filesize, const char* fs);
         static void uploadWrite(uint8_t* buffer, size_t length);

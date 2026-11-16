@@ -26,6 +26,7 @@
 
 #include <functional>
 #include <memory>
+#include <string>
 #include <WiFi.h>
 #include "HTTP_Method.h"
 #include "Uri.h"
@@ -235,6 +236,15 @@ protected:
   bool _parseFormUploadAborted();
   void _uploadWriteByte(uint8_t b);
   int _uploadReadByte(WiFiClient& client);
+  // A file part is read in blocks (MultipartScan::copyPart), which can run past
+  // its boundary: those bytes stay where they are, at the front of the upload
+  // buffer (_formRest, never a copy: in a multi-file request they are the next
+  // file's headers and up to ~8 KB of its data, and copying them to the heap at
+  // its low point was a bad_alloc abort), and _formReadUntil() reads them first.
+  String _formReadUntil(WiFiClient& client, char terminator);
+  const uint8_t* _formRest    = nullptr;
+  size_t         _formRestLen = 0;
+  size_t         _formRestPos = 0;
   void _prepareHeader(String& response, int code, const char* content_type, size_t contentLength);
   bool _collectHeader(const char* headerName, const char* headerValue);
 

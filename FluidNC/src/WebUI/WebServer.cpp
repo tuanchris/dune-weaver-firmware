@@ -6,6 +6,8 @@
 #include "src/Settings.h"  // settings_execute_line()
 
 #include "WebServer.h"
+#include "src/PatternManifest.h"
+#include <memory>          // std::unique_ptr (the upload's SD mount hold)
 
 #include "Mdns.h"
 
@@ -109,7 +111,9 @@ namespace WebUI {
         deinit();
     }
 
+
     void Web_Server::init() {
+
         http_port   = new IntSetting("HTTP Port", WEBSET, WA, "ESP121", "HTTP/Port", DEFAULT_HTTP_PORT, MIN_HTTP_PORT, MAX_HTTP_PORT);
         http_enable = new EnumSetting("HTTP Enable", WEBSET, WA, "ESP120", "HTTP/Enable", DEFAULT_HTTP_STATE, &onoffOptions);
         http_block_during_motion = new EnumSetting("Block serving HTTP content during motion",
@@ -1650,6 +1654,19 @@ namespace WebUI {
 
     //LocalFS files uploader handle
     void Web_Server::fileUpload(const char* fs) {
+        try {
+            fileUploadStep(fs);
+        } catch (const std::exception& e) {
+            // An exception unwinding into the web server library is an abort (the
+            // board reboots mid-sync); out of memory here costs this upload instead.
+            log_error("Upload aborted by an exception: " << e.what());
+            uploadStop();
+        } catch (...) {
+            log_error("Upload aborted by an exception");
+            uploadStop();
+        }
+    }
+    void Web_Server::fileUploadStep(const char* fs) {
         HTTPUpload& upload = _webserver->upload();
         //this is only for admin and user
         if (is_authenticated() == AuthenticationLevel::LEVEL_GUEST || !sandKeyOk()) {
@@ -2087,17 +2104,90 @@ namespace WebUI {
         sendJSON(http, s);
     }
 
+    // An upload holds the SD card mounted from its start until its reply is sent
+    // (handle_direct_SDFileList): FluidPath unmounts whenever the last reference
+    // goes, so the close, the re-check and the reply each mounted it again
+    // (~80 ms each), and every remount needs a large free block the heap may no
+    // longer have (mount_to_vfs 0x101). s_uploadBytes = bytes written, instead
+    // of a size stat (another directory lookup) after the close.
+    static std::unique_ptr<FluidPath> s_uploadHold;
+    static size_t                     s_uploadBytes = 0;
+
+
+    // An SD upload that doesn't complete (cut off, wrong size, failed close) is
+    // deleted rather than left truncated under its real name, where every
+    // playlist naming it would draw half a pattern; the app sends it again.
+    // (Writing to a temp file and renaming it over the target kept the old
+    // version instead, but FAT's delete + rename in a big /patterns cost ~1.4 s
+    // per overwrite on DWG, 2026-11-15.) littlefs (config.yaml) is left as is.
+    static bool s_uploadOnSd = false;
+
+    // A complete SD upload of a pattern joins /patterns/index.json (when the card
+    // has one: without it /sand_patterns lists the folder live and finds the file
+    // anyway), so one sent while the app is closed still shows in every list.
+    // In place: PatternManifest.h.
+    static void addToManifest(const std::string& pathname) {
+        std::string key = PatternManifest::keyFor(pathname);
+        if (key.empty()) {
+            return;
+        }
+        std::error_code ec;
+        FluidPath       manifest { "/patterns/index.json", sdName, ec };
+        if (ec) {
+            return;
+        }
+        FILE* f = fopen(manifest.c_str(), "r+");
+        if (!f) {
+            return;
+        }
+        std::string q = PatternManifest::quoted(key);
+        char        buf[512];
+        bool        listed = PatternManifest::contains([&](char* dst, size_t max) { return fread(dst, 1, max, f); }, q, buf, sizeof(buf));
+        bool        ok     = true;
+        if (!listed) {
+            fseek(f, 0, SEEK_END);
+            long        size   = ftell(f);
+            long        tailAt = size > 64 ? size - 64 : 0;
+            std::string tail(size_t(size - tailAt), '\0');
+            size_t      at;
+            std::string text;
+            fseek(f, tailAt, SEEK_SET);
+            ok = fread(&tail[0], 1, tail.size(), f) == tail.size() && PatternManifest::append(tail, size_t(tailAt), q, at, text) &&
+                 fseek(f, long(at), SEEK_SET) == 0 && fwrite(text.data(), 1, text.size(), f) == text.size();
+        }
+        ok = (fclose(f) == 0) && ok;
+        if (!listed) {
+            if (ok) {
+                log_info("index.json: added " << key);
+            } else {
+                log_warn("index.json: could not add " << key << " (not a catalog array, or a write failed)");
+            }
+        }
+    }
+
+    static void dropFailedUpload(const std::string& pathname) {
+        if (!s_uploadOnSd) {
+            return;
+        }
+        std::error_code rm_ec;
+        stdfs::remove(pathname, rm_ec);
+        log_info("Upload incomplete - removed " << pathname);
+    }
+
     void Web_Server::handle_direct_SDFileList() {
         handleFileOps(sdName);
+        s_uploadHold.reset();  // the reply is out: the upload's SD mount can go
     }
     void Web_Server::handleFileList() {
         handleFileOps(localfsName);
+        s_uploadHold.reset();
     }
 
     // File upload
     void Web_Server::uploadStart(const char* filename, size_t filesize, const char* fs) {
         std::error_code ec;
 
+        s_uploadBytes = 0;
         FluidPath fpath { filename, fs, ec };
         if (ec) {
             _upload_status = UploadStatus::FAILED;
@@ -2105,6 +2195,9 @@ namespace WebUI {
             recordUploadError(ESP_ERROR_FILE_CREATION, std::string("filesystem inaccessible: ") + ec.message());
             pushError(ESP_ERROR_FILE_CREATION, "Upload rejected, filesystem inaccessible");
             return;
+        }
+        if (!s_uploadHold) {  // a request's later files keep the first one's
+            s_uploadHold.reset(new FluidPath(fpath));
         }
 
         // FatFS fopen("w") does not create parent folders, so a card prepared
@@ -2142,6 +2235,7 @@ namespace WebUI {
         if (_upload_status != UploadStatus::FAILED) {
             //Create file for writing
             try {
+                s_uploadOnSd   = strcmp(fs, sdName) == 0;
                 _uploadFile    = new FileStream(fpath, "w");
                 _upload_status = UploadStatus::ONGOING;
             } catch (...) {
@@ -2155,10 +2249,17 @@ namespace WebUI {
     }
 
     void Web_Server::uploadWrite(uint8_t* buffer, size_t length) {
+        // One request may carry a whole sync (many files, minutes: the app's
+        // background upload), all inside one handleClient() on this WDT-watched
+        // task (120 s, panic). A chunk landing is progress, so feed it; a stalled
+        // client is cut off by the parser after 30 s instead.
+        esp_task_wdt_reset();
         delay_ms(1);
         if (_uploadFile && _upload_status == UploadStatus::ONGOING) {
             //no error write post data
-            if (length != _uploadFile->write(buffer, length)) {
+            if (length == _uploadFile->write(buffer, length)) {
+                s_uploadBytes += length;
+            } else {
                 _upload_status = UploadStatus::FAILED;
                 log_info("Upload failed - file write failed");
                 recordUploadError(ESP_ERROR_FILE_WRITE, "file write failed (filesystem full or failing?)");
@@ -2179,13 +2280,20 @@ namespace WebUI {
             // _uploadFile = nullptr;
 
             std::string pathname = _uploadFile->fpath();
+            bool        closed   = _uploadFile->close();
             delete _uploadFile;
             _uploadFile = nullptr;
+            if (!closed) {
+                _upload_status = UploadStatus::FAILED;
+                log_info("Upload failed - file close failed");
+                recordUploadError(ESP_ERROR_FILE_CLOSE, "file close failed (filesystem full or failing?)");
+                pushError(ESP_ERROR_FILE_CLOSE, "File close failed");
+            }
             log_debug("pathname " << pathname);
 
-            // The delete above dropped the SD refcount, so this FluidPath
-            // re-mounts the card and can throw filesystem_error on a flaky
-            // card; bare, it would abort the board on every marginal upload.
+            // The card stays mounted (FluidPath), so this costs nothing; if the
+            // mount had failed it would retry it, and can throw filesystem_error
+            // on a flaky card: the error_code form, since bare it would abort the board.
             std::error_code fp_ec;
             FluidPath       filepath { pathname, "", fp_ec };
             if (fp_ec) {
@@ -2196,24 +2304,10 @@ namespace WebUI {
                 return;
             }
 
-            HashFS::rehash_file(filepath);
-
-            // A write under /patterns changes the catalog (the host re-uploads
-            // /patterns/index.json when patterns change), so drop the cached
-            // /sand_patterns ETag; the next request recomputes it.
-            if (pathname.find("/patterns/") != std::string::npos) {
-                SandApi::invalidatePatternsEtag();
-            }
-
-            // Check size
-            if (filesize) {
-                uint32_t        actual_size;
-                std::error_code sz_ec;
-                actual_size = stdfs::file_size(filepath, sz_ec);
-                if (sz_ec) {
-                    actual_size = 0;
-                }
-
+            // Check size: the bytes that reached the file (every write and the
+            // close succeeded) against the size the client announced.
+            if (filesize && _upload_status == UploadStatus::ONGOING) {
+                size_t actual_size = s_uploadBytes;
                 if (filesize != actual_size) {
                     _upload_status = UploadStatus::FAILED;
                     recordUploadError(ESP_ERROR_UPLOAD,
@@ -2221,6 +2315,28 @@ namespace WebUI {
                     pushError(ESP_ERROR_UPLOAD, "File upload mismatch");
                     log_info("Upload failed - size mismatch - exp " << filesize << " got " << actual_size);
                 }
+            }
+            if (_upload_status != UploadStatus::ONGOING) {
+                dropFailedUpload(pathname);
+            } else if (s_uploadOnSd) {
+                // Runs at the heap's low point (the next file's data is already
+                // arriving): an allocation failing here must cost the catalog entry,
+                // never the board (an exception unwinding through the web server
+                // library is an abort).
+                try {
+                    addToManifest(pathname);
+                } catch (...) {
+                    log_warn("index.json: out of memory adding " << pathname);
+                }
+            }
+
+            HashFS::rehash_file(filepath);
+
+            // A write under /patterns changes the catalog (the host re-uploads
+            // /patterns/index.json when patterns change), so drop the cached
+            // /sand_patterns ETag; the next request recomputes it.
+            if (pathname.find("/patterns/") != std::string::npos) {
+                SandApi::invalidatePatternsEtag();
             }
         } else {
             _upload_status = UploadStatus::FAILED;
@@ -2243,8 +2359,17 @@ namespace WebUI {
             std::filesystem::path filepath = _uploadFile->fpath();
             delete _uploadFile;
             _uploadFile = nullptr;
+            dropFailedUpload(filepath.c_str());
             HashFS::rehash_file(filepath);
         }
+        s_uploadHold.reset();  // after the delete: it needs the card mounted
+        // An aborted request never reaches its reply, where handleFileOps resets
+        // the status, so a FAILED left here made the NEXT upload skip creating its
+        // file and answer 500 "upload cancelled" (2026-11-15: the app's retry after
+        // the phone left mid-upload failed once more). Nobody reads this reply.
+        _upload_status     = UploadStatus::NONE;
+        _upload_error_code = 0;
+        _upload_error_msg.clear();
     }
     void Web_Server::uploadCheck() {
         std::error_code error_code;
