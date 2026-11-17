@@ -52,6 +52,11 @@ void FileStream::setup(const char* mode) {
     _fd = fopen(_fpath.c_str(), mode);
 
     if (!_fd) {
+        // DW fork: a disk error (not "no such file") means the pinned SD
+        // mount may be stale -- drop it so the next use re-probes the card.
+        if (_fpath.isSD() && (errno == EIO || errno == ENODEV)) {
+            FluidPath::unpinSd();
+        }
         bool opening = strcmp(mode, "w");
         log_verbose("Cannot " << (opening ? "open" : "create") << " file " << _fpath.c_str());
         throw opening ? Error::FsFailedOpenFile : Error::FsFailedCreateFile;

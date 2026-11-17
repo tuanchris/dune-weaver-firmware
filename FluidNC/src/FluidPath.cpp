@@ -9,7 +9,18 @@
 #include "FluidError.hpp"
 #include "HashFS.h"
 
-int FluidPath::_refcnt = 0;
+int  FluidPath::_refcnt = 0;
+bool FluidPath::_pinned = false;
+
+void FluidPath::unpinSd() {
+    if (_pinned) {
+        _pinned = false;
+        log_warn("SD: I/O error; the card is remounted on next use");
+        if (_refcnt && --_refcnt == 0) {
+            sd_unmount();
+        }
+    }
+}
 
 FluidPath::FluidPath(const char* name, const char* fs, std::error_code* ecptr) : std::filesystem::path(canonicalPath(name, fs)) {
     // canonicalPath() can return an empty or root-only path -- e.g. it refuses
@@ -52,6 +63,16 @@ FluidPath::FluidPath(const char* name, const char* fs, std::error_code* ecptr) :
                 }
                 throw stdfs::filesystem_error { "SD card is inaccessible", name, ec };
             }
+            // DW fork: keep the card mounted from here on.  A mount allocates
+            // ~27 KB in ONE block (5 FILs x 4 KB sector buffers + the FATFS
+            // window), and unmounting after every job meant remounting on a
+            // fragmented heap: once the largest free block fell under that, no
+            // pattern could start until a reboot, with 70 KB free.  The first
+            // mount happens at boot (the SD check), on a clean heap.
+            // FileStream::setup() calls unpinSd() on an I/O error, so a
+            // glitched or swapped card is still re-probed on the next use.
+            _pinned = true;
+            ++_refcnt;
         }
         ++_refcnt;
     }

@@ -79,7 +79,8 @@ works). Config: `config_dlc32max_thetarho.yaml`.
   reboots both times). The FAIL was one pattern that never started, and the serial log
   gives the chain: the gate's mDNS burst (60/s, ~6x the ~10/s ceiling) drains the heap →
   `mount_to_vfs failed code 0x101` (`ESP_ERR_NO_MEM`) → `did not start: Failed to mount
-  device`. **The SD remount is what runs out of memory, not the pattern reader.**
+  device`. **The SD remount is what runs out of memory, not the pattern reader**
+  (the SD is now kept mounted — see the Gotchas — so this chain should be gone).
   The trap: the **CLEAN run reached a *lower* floor than the failing one** — 7724 bytes
   free / largest **1620**, vs 10460 / 9972 on the FAIL — with the same three mDNS sheds
   (60→120→240s backoff) in both. The gate passed only because no SD remount happened to
@@ -441,6 +442,16 @@ works). Config: `config_dlc32max_thetarho.yaml`.
   first `WiFi.mode()`) cuts that to ~24 KB with no measurable upload slowdown, and
   concurrent uploads + polling stay error-free. A low-memory dip with `http idle` and no
   mDNS/telnet in play means inbound packets, not a firmware leak.
+- **The SD stays mounted after its first mount — don't go back to unmount-per-job.**
+  A mount (`sd_mount(5)`) allocates ~27 KB in ONE block (5 FILs × 4 KB sector buffers
+  + the FATFS window), and upstream's `FluidPath` unmounted whenever the last path
+  dropped, so every job start remounted on whatever the heap had become. Once the
+  largest free block fell under ~27 KB (a packet burst or the torture gate does it),
+  every start failed `mount_to_vfs failed code 0x101` → `Failed to mount device`
+  until a reboot, at Idle with 70 KB free and `sd_ok:true`. The first mount (the
+  boot SD check) is now pinned; `FileStream::setup()` drops the pin on an
+  `EIO`/`ENODEV` open failure, so a glitched or swapped card is re-probed on the next
+  use. Read `heap_largest` against that block size, not just the 12k alert floor.
 
 ## Key files
 

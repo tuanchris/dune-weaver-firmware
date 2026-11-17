@@ -27,9 +27,16 @@ public:
     // /localfs/foo -> true,  /localfs -> false
     bool hasTail() { return ++(++begin()) != end(); }
 
+    bool isSD() const { return _isSD; }
+
+    // DW fork: drop the reference that keeps the SD mounted, so the next use
+    // remounts and re-probes the card.  Called on an SD I/O error.
+    static void unpinSd();
+
 private:
     FluidPath(const char* name, const char* fs, std::error_code*);
 
-    static int _refcnt;
-    bool       _isSD = false;
+    static int  _refcnt;
+    static bool _pinned;
+    bool        _isSD = false;
 };
