@@ -4,6 +4,7 @@
 #include "gtest/gtest.h"
 #include "src/MultipartScan.h"
 
+#include <algorithm>
 #include <random>
 #include <string>
 #include <vector>

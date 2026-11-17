@@ -4,6 +4,7 @@
 #include "gtest/gtest.h"
 #include "src/PatternManifest.h"
 
+#include <algorithm>
 #include <string>
 
 using namespace PatternManifest;
