@@ -29,7 +29,7 @@
                            effect -- gap size, # of balls, spark rate, ...;
                            effects WLED shows no slider for ignore it.
                            Table in COMMANDS.md)
-    $LED/Count=1..300      (strip length; applies on the next frame)
+    $LED/Count=1..400      (strip length; applies on the next frame)
     $LED/Order=GRB|RGB|..|GRBW|..
                            (wire color order, any of the 30 valid ones; applies
                            on the next frame, resizing for 3 <-> 4 bytes/pixel)
@@ -152,7 +152,7 @@ public:
         // without resizing the buffers (a bigger value overran them), and
         // `$/leds/color_order=` could switch 3 <-> 4 bytes/pixel the same way.
         if (handler.handlerType() != Configuration::HandlerType::Runtime) {
-            handler.item("num_leds", _num_leds, 1, 300);
+            handler.item("num_leds", _num_leds, 1, 400);
             handler.item("color_order", _color_order);
         }
         handler.item("frame_ms", _frame_ms, 10, 1000);

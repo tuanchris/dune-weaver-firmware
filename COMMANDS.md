@@ -186,7 +186,7 @@ curl "$B/command?plain=\$LED/Color2=0040FF"      # secondary color (used by 'gra
 curl "$B/command?plain=\$LED/Brightness=80"      # 0..255, master over every effect
 curl "$B/command?plain=\$LED/Speed=50"           # animation speed 1..255
 curl "$B/command?plain=\$LED/Intensity=128"      # 0..255, WLED's 2nd slider (see below); 128 = default look
-curl "$B/command?plain=\$LED/Count=60"           # strip length 1..300, applies on the next frame (idle/paused)
+curl "$B/command?plain=\$LED/Count=60"           # strip length 1..400, applies on the next frame (idle/paused)
 curl "$B/command?plain=\$LED/Order=GRB"          # wire color order (GRB, RGB, ..., GRBW), next frame (idle/paused)
 curl "$B/command?plain=\$LED/White=accurate"     # RGBW strips only: none|brighter|accurate|max
 ```

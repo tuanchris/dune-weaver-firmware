@@ -248,7 +248,7 @@ void Leds::init() {
         _ballbgbright = holdOk(new IntSetting("LED ball background brightness", EXTENDED, WG, NULL, "LED/BallBgBright", 255, 0, 255));
         // config.yaml's num_leds is the factory default; the app sets the real
         // length here.  render() applies a change on the next frame.
-        _count       = holdOk(new IntSetting("LED count", EXTENDED, WG, NULL, "LED/Count", _num_leds, 1, 300));
+        _count       = holdOk(new IntSetting("LED count", EXTENDED, WG, NULL, "LED/Count", _num_leds, 1, 400));
         // Same for the wire color order: config.yaml's color_order is the
         // default (afterParse already fell back to GRB if it was bad).
         _order_set   = holdOk(new EnumSetting("LED color order", EXTENDED, WG, NULL, "LED/Order",
