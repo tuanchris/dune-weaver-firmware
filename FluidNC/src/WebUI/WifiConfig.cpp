@@ -1042,6 +1042,13 @@ namespace WebUI {
         WiFiConfig(const char* name) : Module(name) {}
 
         void init() {
+            // DW fork: cap dynamic RX buffers at 8 (lib default 32), all else at
+            // the lib defaults.  Each costs ~2 KB of heap while queued, so a LAN
+            // packet burst (1000-2000 pps at the table) pinned ~65 KB and took an
+            // ESP32 to 6 KB free; at 8 the same burst costs ~24 KB, with no
+            // measurable upload slowdown.  Must run before the first WiFi.mode(),
+            // which is when the driver reads it.
+            WiFi.setBuffers(4, 8, 16, 0, 32, 6, 1);
             _sta_ssid = new StringSetting("Station SSID", WEBSET, WA, "ESP100", "Sta/SSID", "", MIN_SSID_LENGTH, MAX_SSID_LENGTH);
             // config.yaml `hostname:` is the table's FACTORY name -- the default
             // this setting falls back to, not an override of it.  A $Hostname

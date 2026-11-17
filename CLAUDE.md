@@ -433,6 +433,14 @@ works). Config: `config_dlc32max_thetarho.yaml`.
   means **"the heap was already empty"**, not "mDNS is broken" — whatever allocated first
   is just the messenger. The next boot then shows `Skipping configuration file due to
   panic` → Test Drive → `SDCard not configured`.
+- **WiFi dynamic RX buffers are capped at 8 — don't raise them.** Each queued frame costs
+  ~2 KB of heap, and the WiFi lib's default of 32 let any LAN device bursting
+  1000–2000 packets/s at the table pin ~65 KB: a field Mini Pro logged `http idle,
+  pend=0` craters to 948 bytes every 5 minutes with mDNS off (reproduced on DWG with
+  unicast UDP). `WiFi.setBuffers(4, 8, …)` in `WiFiConfig::init()` (must run before the
+  first `WiFi.mode()`) cuts that to ~24 KB with no measurable upload slowdown, and
+  concurrent uploads + polling stay error-free. A low-memory dip with `http idle` and no
+  mDNS/telnet in play means inbound packets, not a firmware leak.
 
 ## Key files
 
