@@ -230,6 +230,7 @@ private:
     // Small fixed-point / math helpers (FastLED-style, self-contained)
     uint8_t        random8();
     uint8_t        random8(uint8_t lim);
+    int            random16(int lim);  // 0..lim-1 up to 65535: strip indices (random8's lim wraps past 255)
     static uint8_t sin8(uint8_t theta);
     static uint8_t scale8(uint8_t v, uint8_t s);
     static uint8_t qadd8(uint8_t a, uint8_t b);

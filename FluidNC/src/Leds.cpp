@@ -303,6 +303,13 @@ uint8_t Leds::random8() {
 uint8_t Leds::random8(uint8_t lim) {
     return (static_cast<uint16_t>(random8()) * lim) >> 8;
 }
+// For anything sized by the strip: random8(_num_leds) wrapped the length to 8
+// bits, so 300 LEDs sparkled only on the first 44 (and 256 on LED 0 alone).
+// 16 bits, not 8 scaled up, so every LED of a long strip can be picked.
+int Leds::random16(int lim) {
+    random8();
+    return static_cast<int>(((_rng >> 16) * static_cast<uint32_t>(lim)) >> 16);
+}
 uint8_t Leds::sin8(uint8_t theta) {
     float s = sinf(theta * (2.0f * 3.14159265f / 256.0f));
     return static_cast<uint8_t>(s * 127.5f + 127.5f);
@@ -847,7 +854,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             fadeBy(fade < 1 ? 1 : fade > 255 ? 255 : fade);
             for (int n = ixSpawns(50); n > 0; n--) {
                 palColor(random8(), r, g, b);
-                setFb(random8(_num_leds), r, g, b);
+                setFb(random16(_num_leds), r, g, b);
             }
             break;
         }
@@ -971,7 +978,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
         case EFFECT_JUGGLE: {  // N sine dots of different colors, fading trails
             fadeBy(ixFade(40));
             for (int k = 0; k < 3; k++) {
-                int pos = scale8(sin8(static_cast<uint8_t>((_phase >> 8) * (k + 2))), _num_leds - 1);
+                int pos = (sin8(static_cast<uint8_t>((_phase >> 8) * (k + 2))) * _num_leds) >> 8;  // = scale8(v, n - 1), whose 8-bit n wrapped past 256 LEDs
                 palColor(static_cast<uint8_t>(k * 85 + hi), r, g, b);
                 addFb(pos, r, g, b);
             }
@@ -996,7 +1003,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
                 setFb(i, (r * 180) >> 8, (g * 180) >> 8, (b * 180) >> 8);
             }
             for (int n = ixSpawns(60); n > 0; n--) {
-                setFb(random8(_num_leds), 255, 255, 255);
+                setFb(random16(_num_leds), 255, 255, 255);
             }
             break;
         }
@@ -1007,7 +1014,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             secondaryColor(r2, g2, b2);
             int converts = ixSpawns(256 * (_num_leds / 12 + 1));  // _num_leds/12+1 per frame at 128, ~2x at 255, 0 = paused
             for (int n = 0; n < converts; n++) {
-                _heat[random8(_num_leds)] = _aux ^ 1;  // target colour: Color2 first, then back
+                _heat[random16(_num_leds)] = _aux ^ 1;  // target colour: Color2 first, then back
             }
             for (int i = 0; i < _num_leds; i++) {
                 if (_heat[i]) {
@@ -1030,7 +1037,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             int   waves = 1 + _cur_ix * kBalls / 256;  // 1..kBalls, 3 at the default 128
             for (int k = 0; k < waves; k++) {
                 if (_ball_vel[k] <= 0.0f || _ball_vel[k] > _num_leds / 2.0f) {
-                    _ball_pos[k] = random8(_num_leds);
+                    _ball_pos[k] = random16(_num_leds);
                     _ball_vel[k] = 0.01f;
                 }
                 int   center = static_cast<int>(_ball_pos[k]);
@@ -1055,7 +1062,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
                 if (_ball_pos[k] <= 0.0f) {
                     setFb(0, 255, 255, 255);  // splash
                     setFb(1, (r * 128) >> 8, (g * 128) >> 8, (b * 128) >> 8);
-                    _ball_pos[k] = _num_leds - 1 - random8(_num_leds / 2);  // respawn, staggered
+                    _ball_pos[k] = _num_leds - 1 - random16(_num_leds / 2);  // respawn, staggered
                     _ball_vel[k] = 0.0f;
                 }
                 addFb(static_cast<int>(_ball_pos[k]), r, g, b);
@@ -1076,8 +1083,8 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             if (_aux && _candle-- == 0) {  // _candle = frames to the next flash
                 _aux--;
                 _candle   = 1 + random8(3);  // 2-4 frame gaps (~WLED's 50-150 ms)
-                int start = random8(_num_leds);
-                int len   = 2 + random8(_num_leds / 3);
+                int start = random16(_num_leds);
+                int len   = 2 + random16(_num_leds / 3);
                 for (int j = 0; j < len; j++) {
                     setFb((start + j) % _num_leds, 255, 255, 255);
                 }
@@ -1091,7 +1098,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
         case EFFECT_FIREWORKS: {  // random colored bursts that fade
             fadeBy(48);
             for (int n = ixSpawns(50); n > 0; n--) {
-                int center = random8(_num_leds);
+                int center = random16(_num_leds);
                 palColor(random8(), r, g, b);
                 addFb(center, r, g, b);
                 addFb((center + 1) % _num_leds, r >> 1, g >> 1, b >> 1);
