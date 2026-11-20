@@ -47,8 +47,32 @@ table exists: the **DWG "Desert Compass"**.)
   (e.g. `GRBW`) switches the bus to 4 bytes/pixel and `$LED/White`
   (WLED's auto-white modes, std-only `LedWhite.h`) derives W from each pixel's RGB.
   The mobile app animates its LED previews with a line-for-line TypeScript port of
-  `Leds::renderEffect` (`dune-weaver-mobile/src/lib/ledSim.ts`) and mirrors the palette
-  tables (`src/lib/ledPreview.ts`): changing an effect or palette here means changing it there.
+  `Leds::renderEffect` (`dune-weaver-mobile/src/lib/ledSim.ts`): changing an effect here
+  means changing it there. **Palettes follow WLED's model** (68: ours + WLED v0.15's):
+  `default` (old name `rainbow`, still accepted) keeps each effect's own colors, any
+  other palette recolors every effect but static/pride/police/ball (`Leds::fxColor`
+  replaces Color on the color effects). The tables are generated for both sides by
+  `tools/gen_led_palettes.py` (`FluidNC/src/LedPalettes.h` + the app's
+  `src/lib/ledPalettes.ts`) — edit the script, never the outputs. Ids are NVS-persisted:
+  append only.
+- **Most effects are ported from WLED v0.15.3** (`FluidNC/src/WledFx/`), on top of our own 39
+  (`kOwnNames` in `Leds.cpp`, ids 0..38). `WledFx.{h,cpp}` is a std-only compatibility layer
+  (WLED's Segment API + FastLED lib8tion/noise/color helpers, with WLED's macros) so each
+  effect in `fx_*.cpp` is near-verbatim WLED; `WledFxRunner` owns its buffer/state and maps a
+  2D effect's 16x16 matrix onto the strip's outline (ring = inscribed circle, rectangle =
+  border, both from 12 o'clock clockwise). The app runs the **same effects line for line**
+  (`dune-weaver-mobile/src/lib/wledfx/shim.ts`, `runner.ts`, `fx_*.ts`), and
+  **`python3 tools/fx_parity.py --fx <WLED FX.cpp>` must report every effect matching
+  byte-for-byte** (it also runs the C++ under ASan/UBSan on the host) — run it after touching
+  the layer or any effect, and again with `--leds 400` ($LED/Count's max: past 255 it catches
+  8-bit index math). Our own effects index the strip with `random16(lim)`, never
+  `random8(_num_leds)` (its `uint8_t` lim wrapped: 300 LEDs sparkled only on the first 44). `tools/gen_wled_fx.py` regenerates the registry for both sides
+  (`WledFxList.cpp`, the app's `catalog.ts`) from the ported files + WLED's metadata. C++
+  leaves argument/operand evaluation order unspecified, so every expression with two RNG
+  calls is sequenced into locals (a deliberate deviation from verbatim). Effect settings
+  (`$LED/Effect`, the hooks, `$LED/BallBg`, `$LED/Palette`) are `ListSetting`s: names in
+  flash, stored by NAME under `LED/<x>2` keys, so effect ids are free to move but names are
+  forever once shipped. WLED's extra sliders/checkboxes run at each effect's WLED default.
 
 ### Second board target: MKS DLC32 MAX (ESP32-S3)
 
@@ -277,6 +301,12 @@ works). Config: `config_dlc32max_thetarho.yaml`.
 
 ## Gotchas (these bit us; don't repeat)
 
+- **Firmware that indexes a table with a stored NVS id never range-checks it**, so
+  growing an id range breaks a *downgrade*, not the upgrade: v0.2.6 and older read
+  `$LED/Palette` straight into a 7-entry array, and a WLED palette id (8+) there would
+  read past it and crash the downgraded table. That is why the palette moved to NVS key
+  `LED/Palette2` (`PaletteSetting` in `Leds.cpp`; the old value moves over once, then
+  the old key is erased). Do the same for any other enum whose id becomes an index.
 - **A `UserCommand` (or `Setting`) defined in a NEW .cpp can silently not exist.**
   ESP-IDF runs `.init_array` in REVERSE, and the lists are `init_priority(101/102)`
   vectors: if the new file's initializer lands after theirs in the array, it runs

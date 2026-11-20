@@ -180,7 +180,7 @@ rate = `feed * feed_override / 100`.
 
 ```bash
 curl "$B/command?plain=\$LED/Effect=fire"        # see effect list below
-curl "$B/command?plain=\$LED/Palette=ocean"      # recolors the hue-cycling effects
+curl "$B/command?plain=\$LED/Palette=ocean"      # default, or one of 67 palettes (list below)
 curl "$B/command?plain=\$LED/Color=FF0000"       # primary color, RRGGBB hex
 curl "$B/command?plain=\$LED/Color2=0040FF"      # secondary color (used by 'gradient')
 curl "$B/command?plain=\$LED/Brightness=80"      # 0..255, master over every effect
@@ -215,54 +215,82 @@ WLED's "manual only"), `brighter` (W=min(R,G,B), RGB untouched), `accurate`
 onto the white die), `max` (W=max(R,G,B)). Ignored on 3-byte strips;
 `/sand_status` `led.rgbw` tells a client whether it applies.
 
-Palettes (`$LED/Palette=<name>`): `rainbow ocean lava forest party cloud heat sunset`.
-`rainbow` is the classic wheel (default). The rest recolor every effect whose "Uses"
-column below says **auto-hue** — e.g. `Palette=ocean` gives an ocean `colorloop`,
-`sinelon`, `juggle`, `colorwaves`, etc.
+Palettes (`$LED/Palette=<name>`), WLED's model: `default` (WLED's "Default") keeps
+each effect's own colors — the color wheel for the **auto-hue** effects, Color/Color2
+for the color effects, the built-in colors of `fire`, `pacifica` and `aurora`. Any
+other palette recolors every effect except `static`, `pride`, `police` and `ball`: the
+auto-hue ones draw from it, the color effects take it **in place of Color** (Color2
+stays), e.g. `Palette=ocean` gives an ocean `colorloop`, `breathe`, `theater`, `fire`.
+`rainbow` is the old name of `default` and is still accepted (older apps send it);
+WLED's "Rainbow" palette is `spectrum`.
 
-Effects (`$LED/Effect=<name>`):
+Ours: `ocean lava forest party cloud heat sunset`. WLED's (v0.15 data, its order;
+WLED's "Sunset" is `sunset_real`, "Red & Blue" is `red_blue`): `spectrum`, `rainbow_bands`, `sunset_real`, `rivendell`, `breeze`, `red_blue`, `yellowout`, `analogous`, `splash`, `pastel`, `sunset_2`, `beech`, `vintage`, `departure`, `landscape`, `beach`, `sherbet`, `hult`, `hult_64`, `drywet`, `jul`, `grintage`, `rewhi`, `tertiary`, `fire`, `icefire`, `cyane`, `light_pink`, `autumn`, `magenta`, `magred`, `yelmag`, `yelblu`, `orange_teal`, `tiamat`, `april_night`, `orangery`, `c9`, `sakura`, `aurora`, `atlantica`, `c9_2`, `c9_new`, `temperature`, `aurora_2`, `retro_clown`, `candy`, `toxy_reaf`, `fairy_reaf`, `semi_blue`, `pink_candy`, `red_reaf`, `aqua_flash`, `yelblu_hot`, `lite_light`, `red_flash`, `blink_red`, `red_shift`, `red_tide`, `candy2`.
+
+`/sand_settings` reports `"LED/Palettes"` (read-only, the palette count) on firmware
+that has these; older firmware has only the first eight (`rainbow` = id 0) and
+applies them to the auto-hue effects only. Tables: `FluidNC/src/LedPalettes.h`,
+generated with the app's copy by `tools/gen_led_palettes.py`. The palette now lives
+under NVS key `LED/Palette2` (moved once from `LED/Palette` at boot): firmware up to
+v0.2.2 indexes its 7-entry table with the raw stored id, so a WLED palette left in
+the old key would crash a table downgraded to it.
+
+Effects (`$LED/Effect=<name>`). **· palette** = a picked palette replaces that color:
 
 | Name | What it does | Uses |
 |------|--------------|------|
 | `off`       | all pixels dark                                         | — |
 | `static`    | solid fill                                              | Color |
 | `rainbow`   | full color wheel spread around the ring, rotating       | auto-hue |
-| `breathe`   | solid color pulsing in brightness on a sine             | Color |
+| `breathe`   | solid color pulsing in brightness on a sine             | Color · palette |
 | `colorloop` | whole ring one hue, slowly cycling through the wheel    | auto-hue |
-| `theater`   | lit pixels with a dark gap, marching (theater chase)    | Color |
-| `scan`      | short bar sweeps back and forth with a trail (Cylon)    | Color |
-| `running`   | sine peaks of the color sliding around the ring         | Color |
-| `sine`      | sine bands of the color drifting                        | Color |
-| `gradient`  | scrolling blend between the two colors                  | Color + Color2 |
+| `theater`   | lit pixels with a dark gap, marching (theater chase)    | Color · palette |
+| `scan`      | short bar sweeps back and forth with a trail (Cylon)    | Color · palette |
+| `running`   | sine peaks of the color sliding around the ring         | Color · palette |
+| `sine`      | sine bands of the color drifting                        | Color · palette |
+| `gradient`  | scrolling blend between the two colors                  | Color + Color2 · palette |
 | `sinelon`   | moving dot with a fading trail and shifting hue         | auto-hue |
 | `twinkle`   | random pixels light then fade out                       | auto-hue |
-| `sparkle`   | dim base color with one white spark that jumps          | Color |
-| `fire`      | Fire2012 1D flame (heat diffusion + sparks)             | heat palette |
-| `candle`    | warm global flicker                                     | Color |
-| `meteor`    | bright head sweeping the ring, random-decay trail       | Color |
-| `bouncing`  | a few balls bouncing under gravity                      | Color |
-| `wipe`      | color-wipe from one end, alternating the two colors     | Color + Color2 |
-| `dualscan`  | two short bars sweeping the ring (one per color)        | Color + Color2 |
+| `sparkle`   | dim base color with one white spark that jumps          | Color · palette |
+| `fire`      | Fire2012 1D flame (heat diffusion + sparks)             | heat palette · palette |
+| `candle`    | warm global flicker                                     | Color · palette |
+| `meteor`    | bright head sweeping the ring, random-decay trail       | Color · palette |
+| `bouncing`  | a few balls bouncing under gravity                      | Color · palette |
+| `wipe`      | color-wipe from one end, alternating the two colors     | Color + Color2 · palette |
+| `dualscan`  | two short bars sweeping the ring (one per color)        | Color + Color2 · palette |
 | `juggle`    | several sine dots of different colors, fading trails    | auto-hue |
 | `multicomet`| several comets chasing at different speeds              | auto-hue |
 | `glitter`   | rainbow base with random white sparks                   | auto-hue |
-| `dissolve`  | pixels randomly flip color↔color2, hold, then reverse   | Color + Color2 |
+| `dissolve`  | pixels randomly flip color↔color2, hold, then reverse   | Color + Color2 · palette |
 | `ripple`    | expanding rings from random centers, decaying           | auto-hue |
-| `drip`      | droplets fall and splash                                | Color |
-| `lightning` | random bright strikes over darkness                     | white |
+| `drip`      | droplets fall and splash                                | Color · palette |
+| `lightning` | random bright strikes over darkness                     | white · palette |
 | `fireworks` | random colored bursts that fade                         | auto-hue |
 | `plasma`    | interfering sine waves through the color wheel          | auto-hue |
-| `heartbeat` | double-pulse "lub-dub" brightness                       | Color |
-| `strobe`    | brief full-strip flashes                                | Color |
+| `heartbeat` | double-pulse "lub-dub" brightness                       | Color · palette |
+| `strobe`    | brief full-strip flashes                                | Color · palette |
 | `police`    | alternating red / blue halves                           | red/blue |
-| `chase`     | bright dot(s) running over a dim background             | Color + Color2 |
-| `railway`   | alternate pixels swap the two colors, with a shimmer    | Color + Color2 |
-| `pacifica`  | layered scrolling ocean with whitecaps                  | built-in ocean |
-| `aurora`    | drifting green/purple curtains                          | built-in aurora |
+| `chase`     | bright dot(s) running over a dim background             | Color + Color2 · palette |
+| `railway`   | alternate pixels swap the two colors, with a shimmer    | Color + Color2 · palette |
+| `pacifica`  | layered scrolling ocean with whitecaps                  | built-in ocean · palette |
+| `aurora`    | drifting green/purple curtains                          | built-in aurora · palette |
 | `pride`     | flowing rainbow with brightness waves                   | rainbow |
 | `colorwaves`| pride, but colored from the active palette              | auto-hue |
 | `bpm`       | palette sweep pulsed by a beat                          | auto-hue |
 | `ball`      | smooth blob tracking the sand ball's angle over a background | Color + Color2 + Size/Direction/Align |
+
+**WLED effects** (`$LED/Effect=<name>`, firmware with `"LED/Palettes"` in `/sand_settings`):
+114 more, ported from WLED v0.15.3 (`FluidNC/src/WledFx/`; names are WLED's,
+lowercased with `_`). Speed and Intensity mean what WLED's two sliders mean for each; WLED's
+extra sliders/checkboxes run at the effect's WLED default; Color = WLED's color 1, Color2 =
+its color 2 (WLED's default is black: set Color2 `000000` for WLED's look), and
+`$LED/Palette=default` is WLED's Default palette. Not ported: the audio-reactive effects (no
+microphone), Scrolling Text (fonts), and WLED 0.16's particle-system effects (heap).
+
+1D (83): `blink` `wipe_random` `random_colors` `sweep` `dynamic` `fade` `theater_rainbow` `saw` `dissolve_rnd` `sparkle_dark` `sparkle_plus` `strobe_rainbow` `strobe_mega` `blink_rainbow` `android` `chase_random` `chase_rainbow` `chase_flash` `chase_flash_rnd` `rainbow_runner` `colorful` `traffic_light` `sweep_random` `chase_2` `stream` `scanner` `lighthouse` `rain` `tetrix` `fire_flicker` `loading` `rolling_balls` `fairy` `two_dots` `fairytwinkle` `running_dual` `chase_3` `tri_wipe` `tri_fade` `icu` `scanner_dual` `stream_2` `oscillate` `palette` `fill_noise` `noise_1` `noise_2` `noise_3` `noise_4` `colortwinkles` `lake` `meteor_smooth` `twinklefox` `twinklecat` `halloween_eyes` `solid_pattern` `solid_pattern_tri` `spots` `spots_fade` `fireworks_starburst` `fireworks_1d` `sinelon_dual` `sinelon_rainbow` `popcorn` `percent` `ripple_rainbow` `candle_multi` `solid_glitter` `sunrise` `phased` `twinkleup` `noise_pal` `phased_noise` `flow` `chunchun` `dancing_shadows` `washing_machine` `blends` `tv_simulator` `dynamic_smooth` `perlin_move` `flow_stripe` `wavesins`
+
+2D (31, drawn on a 16x16 matrix; the strip shows its outline -- a ring its inscribed
+circle, a rectangle its border): `rotozoomer` `spaceships` `crazy_bees` `ghost_rider` `blobs` `drift_rose` `distortion_waves` `noise2d` `firenoise` `squared_swirl` `dna` `matrix` `metaballs` `pulser` `drift` `sun_radiation` `colored_bursts` `julia` `game_of_life` `tartan` `polar_lights` `lissajous` `frizzles` `plasma_ball` `hiphotic` `sindots` `dna_spiral` `black_hole` `soap` `octopus` `waving_cell`
 
 `Brightness` is a master scale applied over whatever the effect produces.
 `Speed` and `Intensity` mirror **WLED's two effect sliders** (checked against WLED

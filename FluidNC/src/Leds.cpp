@@ -2,12 +2,14 @@
 // Use of this source code is governed by a GPLv3 license that can be found in the LICENSE file.
 
 #include "Leds.h"
+#include "LedPalettes.h"
 
 #include "Machine/MachineConfig.h"
 #include "Settings.h"
 #include "Serial.h"  // allChannels
 #include "Types.h"   // state_is, State
 #include "Kinematics/ThetaRho.h"  // ballAngle() for the 'ball' effect
+#include "string_util.h"
 
 #include <driver/rmt.h>
 #include <esp_intr_alloc.h>  // ESP_INTR_FLAG_IRAM
@@ -45,20 +47,41 @@ namespace {
     rmt_item32_t WS2812_ZERO;  // 0.4 us high, 0.85 us low
     rmt_item32_t WS2812_ONE;   // 0.8 us high, 0.45 us low
 
-    // Effect name <-> id maps (ids must match the EFFECT_* constants and
-    // stay stable: they are persisted in NVS).
-    enum_opt_t ledEffects = {
-        { "off", 0 },        { "static", 1 },      { "rainbow", 2 },      { "breathe", 3 },
-        { "colorloop", 4 },  { "theater", 5 },     { "scan", 6 },         { "running", 7 },
-        { "sine", 8 },       { "gradient", 9 },    { "sinelon", 10 },     { "twinkle", 11 },
-        { "sparkle", 12 },   { "fire", 13 },       { "candle", 14 },      { "meteor", 15 },
-        { "bouncing", 16 },  { "wipe", 17 },       { "dualscan", 18 },    { "juggle", 19 },
-        { "multicomet", 20 },{ "glitter", 21 },    { "dissolve", 22 },    { "ripple", 23 },
-        { "drip", 24 },      { "lightning", 25 },  { "fireworks", 26 },   { "plasma", 27 },
-        { "heartbeat", 28 }, { "strobe", 29 },     { "police", 30 },      { "chase", 31 },
-        { "railway", 32 },   { "pacifica", 33 },   { "aurora", 34 },      { "pride", 35 },
-        { "colorwaves", 36 },{ "bpm", 37 },        { "ball", 38 },
+    // Our own effects, by id (ids = the EFFECT_* constants).  The ported WLED
+    // effects follow them: id kOwnEffects + i = wled::kFx[i].  The names live in
+    // flash -- an enum_opt_t (std::map) of ~150 of them would sit on the heap --
+    // and NVS stores the name, so ids are free to move.
+    const char* const kOwnNames[] = {
+        "off",      "static",    "rainbow",    "breathe",  "colorloop", "theater",   "scan",    "running",
+        "sine",     "gradient",  "sinelon",    "twinkle",  "sparkle",   "fire",      "candle",  "meteor",
+        "bouncing", "wipe",      "dualscan",   "juggle",   "multicomet", "glitter",  "dissolve", "ripple",
+        "drip",     "lightning", "fireworks",  "plasma",   "heartbeat", "strobe",    "police",  "chase",
+        "railway",  "pacifica",  "aurora",     "pride",    "colorwaves", "bpm",      "ball",
     };
+    constexpr int kOwnEffects = sizeof(kOwnNames) / sizeof(kOwnNames[0]);
+    static_assert(kOwnEffects == 39, "kOwnNames must list every EFFECT_* id (EFFECT_BALL = 38)");
+
+    // $LED/Effect name <-> id (nullptr / -1 = no such effect)
+    const char* effectName(int id) {
+        if (id >= 0 && id < kOwnEffects) {
+            return kOwnNames[id];
+        }
+        if (id >= kOwnEffects && id < kOwnEffects + wled::kFxCount) {
+            return wled::kFx[id - kOwnEffects].name;
+        }
+        return nullptr;
+    }
+    int effectId(std::string_view name) {
+        for (int i = 0; i < kOwnEffects + wled::kFxCount; i++) {
+            if (name == effectName(i)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+    const char* paletteName(int id) { return id >= 0 && id < LedPalettes::kCount ? LedPalettes::kNames[id] : nullptr; }
+    int         paletteFind(std::string_view name) { return LedPalettes::find(name); }
+
     enum_opt_t ledDirections = {
         { "cw", 0 }, { "ccw", 1 },
     };
@@ -74,42 +97,12 @@ namespace {
         }
         return m;
     }();
-    // Same list plus "none" (no override) for the state hooks. Derived from
-    // ledEffects so the two can never drift as effects are added.
-    enum_opt_t ledHookEffects = [] {
-        enum_opt_t m = ledEffects;
-        m["none"] = 255;  // Leds::EFFECT_NONE (no override)
-        return m;
-    }();
+    // Pacifica's water when no palette is picked: the ocean palette (id 1).
+    const uint32_t* const palOcean = LedPalettes::kTables[0];
 
-    // 16-entry packed-RGB gradient palettes (mostly the classic FastLED
-    // tables).  Index 0 ("rainbow") is special-cased to the wheel(), so it
-    // needs no table; these back palette ids 1..7.
-    const uint32_t palOcean[16]  = { 0x191970, 0x00008B, 0x191970, 0x000080, 0x00008B, 0x0000CD, 0x2E8B57, 0x008080,
-                                     0x5F9EA0, 0x0000FF, 0x008B8B, 0x6495ED, 0x7FFFD4, 0x2E8B57, 0x00FFFF, 0x87CEFA };
-    const uint32_t palLava[16]   = { 0x000000, 0x800000, 0x000000, 0x800000, 0x8B0000, 0x800000, 0x8B0000, 0x8B0000,
-                                     0x8B0000, 0x8B0000, 0xFF0000, 0xFFA500, 0xFFFFFF, 0xFFA500, 0xFF0000, 0x8B0000 };
-    const uint32_t palForest[16] = { 0x006400, 0x006400, 0x556B2F, 0x006400, 0x008000, 0x228B22, 0x6B8E23, 0x008000,
-                                     0x2E8B57, 0x66CDAA, 0x32CD32, 0x9ACD32, 0x90EE90, 0x7CFC00, 0x66CDAA, 0x228B22 };
-    const uint32_t palParty[16]  = { 0x5500AB, 0x84007C, 0xB5004B, 0xE5001B, 0xE81700, 0xB84700, 0xAB7700, 0xABAB00,
-                                     0xAB5500, 0xDD2200, 0xF2000E, 0xC2003E, 0x8F0071, 0x5F00A1, 0x2F00D0, 0x0700E9 };
-    const uint32_t palCloud[16]  = { 0x0000FF, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
-                                     0x0000FF, 0x00008B, 0x87CEEB, 0x87CEEB, 0xADD8E6, 0xFFFFFF, 0xADD8E6, 0x87CEEB };
-    const uint32_t palHeat[16]   = { 0x000000, 0x330000, 0x660000, 0x990000, 0xCC0000, 0xFF0000, 0xFF3300, 0xFF6600,
-                                     0xFF9900, 0xFFCC00, 0xFFFF00, 0xFFFF33, 0xFFFF66, 0xFFFF99, 0xFFFFCC, 0xFFFFFF };
-    const uint32_t palSunset[16] = { 0x00008B, 0x4B0082, 0x800080, 0xC71585, 0xFF1493, 0xFF4500, 0xFF8C00, 0xFFD700,
-                                     0xFFA500, 0xFF4500, 0xC71585, 0x800080, 0x4B0082, 0x191970, 0x00008B, 0x000033 };
-    // Backs palette ids 1..7 (id 0 = rainbow = wheel()).
-    const uint32_t* const kPalettes[] = { palOcean, palLava, palForest, palParty, palCloud, palHeat, palSunset };
-
-    // Self-contained gradients used by the pacifica / aurora effects.
+    // Aurora's own curtains when no palette is picked.
     const uint32_t palAurora[16] = { 0x001A0A, 0x003311, 0x004D1A, 0x006622, 0x00994D, 0x00CC66, 0x00FF7F, 0x2E8B57,
                                      0x008080, 0x4B0082, 0x800080, 0x9400D3, 0x4B0082, 0x008080, 0x00994D, 0x003311 };
-
-    enum_opt_t ledPalettes = {
-        { "rainbow", 0 }, { "ocean", 1 }, { "lava", 2 }, { "forest", 3 },
-        { "party", 4 },   { "cloud", 5 }, { "heat", 6 }, { "sunset", 7 },
-    };
 
     // RMT translator: expands pixel bytes into RMT items on demand.  It runs
     // inside the RMT refill ISR, which is ESP_INTR_FLAG_IRAM (see init()), so
@@ -157,6 +150,102 @@ namespace {
         return "off";
     }
 }
+
+// $LED/Effect, $LED/Palette, the hooks and the ball background: settings whose
+// value is one name from a list in flash.  Not an EnumSetting, because:
+//  - A std::map of ~150 effect names would cost several KB of heap at boot.
+//  - The value is stored by NAME under a new NVS key, moved once from the old
+//    EnumSetting key (an int8 id).  Firmware up to v0.2.2 indexes its 7-entry
+//    palette table with that raw id, unchecked, so a new palette's id left in
+//    the old key would crash a table downgraded to it; and an int8 cannot hold
+//    an effect id past 127.  A downgrade then shows that firmware's defaults.
+class ListSetting : public Setting {
+public:
+    using NameFn = const char* (*)(int id);         // nullptr = no such id
+    using FindFn = int (*)(std::string_view name);  // -1 = unknown
+
+    // allowNone: "none" is also a value, read back as -1 (the state hooks).
+    ListSetting(const char* desc, const char* name, const char* key, int dflt, NameFn nameOf, FindFn find, bool allowNone = false) :
+        Setting(desc, EXTENDED, WG, NULL, name), _dflt(dflt), _value(dflt), _nameOf(nameOf), _find(find), _none(allowNone) {
+        int8_t old;
+        if (nvs_get_i8(_handle, _keyName, &old) == ESP_OK) {  // one-time move off the old key
+            size_t      len = 0;
+            const char* n   = idName(_none && old < 0 ? -1 : (uint8_t)old);
+            if (n && old != _dflt && nvs_get_str(_handle, key, nullptr, &len) != ESP_OK) {
+                nvs_set_str(_handle, key, n);
+            }
+            nvs_erase_key(_handle, _keyName);
+        }
+        _keyName = key;
+        load();
+    }
+
+    void load() override {
+        char   buf[40];
+        size_t len = sizeof(buf);
+        _stored    = nvs_get_str(_handle, _keyName, buf, &len) == ESP_OK;
+        int id     = _stored ? lookup(buf) : kBad;
+        _value     = id == kBad ? _dflt : id;
+    }
+
+    void setDefault() override {
+        _value = _dflt;
+        if (_stored) {
+            nvs_erase_key(_handle, _keyName);
+            _stored = false;
+        }
+    }
+
+    Error setStringValue(std::string_view s) override {
+        Error err = check_state();
+        if (err != Error::Ok) {
+            return err;
+        }
+        int id = lookup(string_util::trim(s));
+        if (id == kBad) {
+            return Error::BadNumberFormat;  // what EnumSetting answers for an unknown name
+        }
+        if (id == _dflt) {
+            setDefault();
+        } else if (!_stored || id != _value) {  // same-value writes skip NVS, like every Setting
+            if (nvs_set_str(_handle, _keyName, idName(id))) {
+                return Error::NvsSetFailed;
+            }
+            _stored = true;
+        }
+        _value = id;
+        return Error::Ok;
+    }
+
+    const char* getStringValue() override { return idName(_value); }
+    const char* getDefaultString() override { return idName(_dflt); }
+    int         get() const { return _value; }
+
+private:
+    static constexpr int kBad = -2;  // unknown name (-1 is "none")
+
+    int lookup(std::string_view n) const {
+        if (_none && n == "none") {
+            return -1;
+        }
+        int id = _find(n);
+        return id < 0 ? kBad : id;
+    }
+    const char* idName(int id) const {
+        if (id < 0) {
+            return _none ? "none" : "???";
+        }
+        const char* n = _nameOf(id);
+        return n ? n : "???";
+    }
+
+    int    _dflt;
+    int    _value;
+    bool   _stored = false;  // a value is in NVS
+    NameFn _nameOf;
+    FindFn _find;
+    bool   _none;
+};
 
 Leds* Leds::_instance = nullptr;
 
@@ -226,24 +315,25 @@ void Leds::init() {
     log_debug("leds: RMT " << clk_hz << " Hz, 0/1 high ticks " << ticks(400) << "/" << ticks(800));
 
     _rng ^= now_ms() * 2654435761U;  // seed the effect RNG
+    wled::seed(static_cast<uint16_t>(_rng));
 
     if (!_effect) {
         // holdOk: LEDs are decoration, never motion -- writable while paused
         // (and, via /sand_led + Leds::setLive, even mid-pattern).
-        _effect      = holdOk(new EnumSetting("LED effect", EXTENDED, WG, NULL, "LED/Effect", EFFECT_RAINBOW, &ledEffects));
-        _palette     = holdOk(new EnumSetting("LED palette", EXTENDED, WG, NULL, "LED/Palette", 0, &ledPalettes));
+        _effect      = holdOk(new ListSetting("LED effect", "LED/Effect", "LED/Effect2", EFFECT_RAINBOW, effectName, effectId));
+        _palette     = holdOk(new ListSetting("LED palette", "LED/Palette", "LED/Palette2", 0, paletteName, paletteFind));
         _color       = holdOk(new StringSetting("LED primary color RRGGBB", EXTENDED, WG, NULL, "LED/Color", "FFB060", 0, 7));
         _color2      = holdOk(new StringSetting("LED secondary color RRGGBB", EXTENDED, WG, NULL, "LED/Color2", "0040FF", 0, 7));
         _brightness  = holdOk(new IntSetting("LED brightness", EXTENDED, WG, NULL, "LED/Brightness", 40, 0, 255));
         _speed       = holdOk(new IntSetting("LED effect speed", EXTENDED, WG, NULL, "LED/Speed", 50, 1, 255));
         _intensity   = holdOk(new IntSetting("LED effect intensity", EXTENDED, WG, NULL, "LED/Intensity", 128, 0, 255));
         _white       = holdOk(new EnumSetting("LED RGBW auto-white mode", EXTENDED, WG, NULL, "LED/White", LedWhite::Accurate, &ledWhiteModes));
-        _run_effect  = holdOk(new EnumSetting("LED effect while running", EXTENDED, WG, NULL, "LED/RunEffect", EFFECT_NONE, &ledHookEffects));
-        _idle_effect = holdOk(new EnumSetting("LED effect while idle", EXTENDED, WG, NULL, "LED/IdleEffect", EFFECT_NONE, &ledHookEffects));
+        _run_effect  = holdOk(new ListSetting("LED effect while running", "LED/RunEffect", "LED/RunEffect2", -1, effectName, effectId, true));
+        _idle_effect = holdOk(new ListSetting("LED effect while idle", "LED/IdleEffect", "LED/IdleEffect2", -1, effectName, effectId, true));
         _direction   = holdOk(new EnumSetting("LED ball direction", EXTENDED, WG, NULL, "LED/Direction", DIR_CW, &ledDirections));
         _align       = holdOk(new IntSetting("LED ball alignment, degrees", EXTENDED, WG, NULL, "LED/Align", 0, 0, 359));
         _ballsize    = holdOk(new IntSetting("LED ball glow size, LEDs", EXTENDED, WG, NULL, "LED/BallSize", 3, 1, 200));
-        _ballbg      = holdOk(new EnumSetting("LED ball background effect", EXTENDED, WG, NULL, "LED/BallBg", EFFECT_STATIC, &ledEffects));
+        _ballbg      = holdOk(new ListSetting("LED ball background effect", "LED/BallBg", "LED/BallBg2", EFFECT_STATIC, effectName, effectId));
         _ballbright  = holdOk(new IntSetting("LED ball blob brightness", EXTENDED, WG, NULL, "LED/BallBright", 255, 0, 255));
         _ballbgbright = holdOk(new IntSetting("LED ball background brightness", EXTENDED, WG, NULL, "LED/BallBgBright", 255, 0, 255));
         // config.yaml's num_leds is the factory default; the app sets the real
@@ -386,7 +476,7 @@ Error Leds::setLive(const std::string& key, const std::string& value) {
     bool idle = state_is(State::Idle) || state_is(State::Alarm);
 
     if (key == "effect") {
-        if (enumId(ledEffects, value, -1) < 0) {
+        if (effectId(value) < 0) {
             return Error::InvalidStatement;
         }
         // Picking an effect (the app's power button included) outranks the state
@@ -404,7 +494,7 @@ Error Leds::setLive(const std::string& key, const std::string& value) {
         _hook.manualChoice();
         _live_effect = value;
     } else if (key == "palette") {
-        if (enumId(ledPalettes, value, -1) < 0) {
+        if (LedPalettes::find(value) < 0) {
             return Error::InvalidStatement;
         }
         if (idle) {
@@ -475,7 +565,7 @@ Error Leds::setLive(const std::string& key, const std::string& value) {
         }
         _live_ballsize = value;
     } else if (key == "bg") {  // ball background sub-effect
-        if (enumId(ledEffects, value, -1) < 0) {
+        if (effectId(value) < 0) {
             return Error::InvalidStatement;
         }
         if (idle) {
@@ -677,7 +767,16 @@ void Leds::palColor(uint8_t index, uint8_t& r, uint8_t& g, uint8_t& b) {
     if (p == 0) {          // rainbow palette is the classic wheel
         wheel(index, r, g, b);
     } else {
-        sampleTable(kPalettes[p - 1], index, r, g, b);
+        sampleTable(LedPalettes::kTables[p - 1], index, r, g, b);
+    }
+}
+
+// WLED's color_from_palette() for the color effects: under palette 0
+// ("default") r,g,b keep the effect's own color -- the caller's
+// primaryColor() -- and any other palette paints them from it at `index`.
+void Leds::fxColor(uint8_t index, uint8_t& r, uint8_t& g, uint8_t& b) {
+    if (_cur_palette != 0) {
+        palColor(index, r, g, b);
     }
 }
 
@@ -721,6 +820,11 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
         if (!nested) {
             _ball_track = -1.0f;  // 'ball' effect snaps to the current angle on (re)entry
         }
+        // Our own effect (and not the ball, whose background may be a WLED one):
+        // give the WLED runner's buffers back to the heap.
+        if (effect < kOwnEffects && effect != EFFECT_BALL) {
+            _wled.release();
+        }
     }
 
     uint8_t hi    = static_cast<uint8_t>(_phase >> 8);  // smooth 0..255 phase
@@ -747,6 +851,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             primaryColor(r, g, b);
             uint16_t lvl = 16 + ((sin8(hi) * 239) >> 8);  // 16..255, never fully off
             for (int i = 0; i < _num_leds; i++) {
+                fxColor((i * 256) / _num_leds, r, g, b);
                 setFb(i, (r * lvl) >> 8, (g * lvl) >> 8, (b * lvl) >> 8);
             }
             break;
@@ -776,6 +881,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             int off = _aux % w;
             for (int i = 0; i < _num_leds; i++) {
                 if (i % w == off) {
+                    fxColor((i * 256) / _num_leds, r, g, b);
                     setFb(i, r, g, b);
                 } else {
                     setFb(i, 0, 0, 0);
@@ -792,6 +898,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             int size  = 1 + ((_cur_ix * _cur_ix * _num_leds) >> 18);
             int start = sin8(hi) * (_num_leds - size) / 255;
             for (int j = 0; j < size; j++) {
+                fxColor(((start + j) * 256) / _num_leds, r, g, b);
                 setFb(start + j, r, g, b);
             }
             break;
@@ -805,6 +912,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             }
             for (int i = 0; i < _num_leds; i++) {
                 uint8_t s = sin8(static_cast<uint8_t>((i * 256 * k) / _num_leds - hi));
+                fxColor((i * 256) / _num_leds, r, g, b);
                 setFb(i, (r * s) >> 8, (g * s) >> 8, (b * s) >> 8);
             }
             break;
@@ -818,6 +926,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             }
             for (int i = 0; i < _num_leds; i++) {
                 uint8_t s = sin8(static_cast<uint8_t>((i * 256 * k) / _num_leds + hi));
+                fxColor((i * 256) / _num_leds, r, g, b);
                 setFb(i, (r * s) >> 8, (g * s) >> 8, (b * s) >> 8);
             }
             break;
@@ -830,6 +939,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             for (int i = 0; i < _num_leds; i++) {
                 uint8_t t   = static_cast<uint8_t>((i * 256) / _num_leds + hi);
                 uint8_t tri = ixFade(t < 128 ? t * 2 : (255 - t) * 2);  // triangle so the ring loops; x128/ix (clamped) = Spread
+                fxColor((i * 256) / _num_leds, r1, g1, b1);
                 setFb(i, lerp8(r1, r2, tri), lerp8(g1, g2, tri), lerp8(b1, b2, tri));
             }
             break;
@@ -862,6 +972,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
         case EFFECT_SPARKLE: {  // dim base color + one white spark; WLED: no intensity, speed = how often it jumps
             primaryColor(r, g, b);
             for (int i = 0; i < _num_leds; i++) {
+                fxColor((i * 256) / _num_leds, r, g, b);
                 setFb(i, (r * 40) >> 8, (g * 40) >> 8, (b * 40) >> 8);
             }
             if (_aux == 0) {  // _aux = frames until the spark jumps, _step = its LED
@@ -891,7 +1002,11 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
                 _heat[y] = qadd8(_heat[y], random8(95) + 160);
             }
             for (int i = 0; i < _num_leds; i++) {
-                heatColor(_heat[i], r, g, b);
+                if (_cur_palette == 0) {
+                    heatColor(_heat[i], r, g, b);
+                } else {
+                    palColor(_heat[i] < 240 ? _heat[i] : 240, r, g, b);  // WLED: min(heat, 240) into the palette
+                }
                 setFb(i, r, g, b);
             }
             break;
@@ -904,6 +1019,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             int     sh     = speed > 252 ? 1 : speed > 99 ? 2 : speed > 49 ? 3 : 4;  // WLED's speed steps; 3 at the default 50
             _candle        = (_candle * ((1 << sh) - 1) + target) >> sh;              // smooth toward target
             for (int i = 0; i < _num_leds; i++) {
+                fxColor((i * 256) / _num_leds, r, g, b);
                 setFb(i, (r * _candle) >> 8, (g * _candle) >> 8, (b * _candle) >> 8);
             }
             break;
@@ -914,6 +1030,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             uint8_t decay = ixFade(40);
             fadeBy(qadd8(decay, random8(decay)));
             int pos = (_phase >> 8) % _num_leds;
+            fxColor((pos * 256) / _num_leds, r, g, b);
             setFb(pos, r, g, b);
             break;
         }
@@ -935,6 +1052,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
                     }
                 }
                 int idx = static_cast<int>(_ball_pos[k] * (_num_leds - 1));
+                fxColor(k * 32, r, g, b);  // WLED: one palette color per ball
                 addFb(idx, r, g, b);
             }
             break;
@@ -954,6 +1072,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             const uint8_t* nw = c[pass];
             const uint8_t* od = c[pass ^ 1];
             for (int i = 0; i < _num_leds; i++) {
+                fxColor((i * 256) / _num_leds, c[0][0], c[0][1], c[0][2]);
                 int d = p - i * 128;  // how far the front is past LED i
                 int t = d <= 0 ? 0 : d >= w ? 256 : d * 256 / w;
                 setFb(i, od[0] + ((nw[0] - od[0]) * t >> 8), od[1] + ((nw[1] - od[1]) * t >> 8), od[2] + ((nw[2] - od[2]) * t >> 8));
@@ -969,6 +1088,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             int size  = 1 + ((_cur_ix * _cur_ix * _num_leds) >> 18);  // same curve as scan
             int start = sin8(hi) * (_num_leds - size) / 255;
             for (int j = start; j < start + size; j++) {
+                fxColor((j * 256) / _num_leds, r, g, b);
                 addFb(j, r, g, b);
                 addFb(_num_leds - 1 - j, r2, g2, b2);
             }
@@ -1020,6 +1140,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
                 if (_heat[i]) {
                     setFb(i, r2, g2, b2);
                 } else {
+                    fxColor((i * 256) / _num_leds, r, g, b);
                     setFb(i, r, g, b);
                 }
             }
@@ -1057,6 +1178,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             float accel = 0.02f * (speed / 50.0f);
             int   drips = 1 + (_cur_ix >> 6);  // 1..4 (needs kBalls >= 4), 3 at the default 128
             for (int k = 0; k < drips; k++) {
+                fxColor(k * 64, r, g, b);  // one palette color per drip
                 _ball_vel[k] += accel;
                 _ball_pos[k] -= _ball_vel[k];
                 if (_ball_pos[k] <= 0.0f) {
@@ -1086,7 +1208,10 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
                 int start = random16(_num_leds);
                 int len   = 2 + random16(_num_leds / 3);
                 for (int j = 0; j < len; j++) {
-                    setFb((start + j) % _num_leds, 255, 255, 255);
+                    int     i  = (start + j) % _num_leds;
+                    uint8_t lr = 255, lg = 255, lb = 255;  // white unless a palette is picked
+                    fxColor((i * 256) / _num_leds, lr, lg, lb);
+                    setFb(i, lr, lg, lb);
                 }
                 if (_aux == 0) {  // strike over: WLED waits random(255 - speed) x 100 ms
                     _step = random8(255 - speed) * 100 / _frame_ms;
@@ -1136,6 +1261,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
                 lvl = sin8((t - 96) * 128 / w);  // dub
             }
             for (int i = 0; i < _num_leds; i++) {
+                fxColor((i * 256) / _num_leds, r, g, b);
                 setFb(i, (r * lvl) >> 8, (g * lvl) >> 8, (b * lvl) >> 8);
             }
             break;
@@ -1146,6 +1272,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             bool on = (hi < 32);
             for (int i = 0; i < _num_leds; i++) {
                 if (on) {
+                    fxColor((i * 256) / _num_leds, r, g, b);
                     setFb(i, r, g, b);
                 } else {
                     setFb(i, 0, 0, 0);
@@ -1179,7 +1306,9 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             int w   = _cur_ix <= 128 ? 1 + _cur_ix / 64 : 3 + (_cur_ix - 128) * _num_leds / 256;
             int pos = (_phase >> 8) % _num_leds;
             for (int j = 0; j < w; j++) {
-                setFb((pos + j) % _num_leds, r, g, b);
+                int i = (pos + j) % _num_leds;
+                fxColor((i * 256) / _num_leds, r, g, b);
+                setFb(i, r, g, b);
             }
             break;
         }
@@ -1199,6 +1328,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
                 uint8_t  s     = sin8(static_cast<uint8_t>((i * 256) / _num_leds - hi));
                 uint16_t scale = 100 + ((s * 155) >> 8);
                 uint8_t  t     = (i & 1) ? pos : 255 - pos;
+                fxColor((i * 256) / _num_leds, r, g, b);
                 setFb(i, (lerp8(r2, r, t) * scale) >> 8, (lerp8(g2, g, t) * scale) >> 8, (lerp8(b2, b, t) * scale) >> 8);
             }
             break;
@@ -1211,7 +1341,11 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
                 uint8_t c   = sin8(static_cast<uint8_t>(x * 5 / 248 - (_phase >> 7)));
                 uint8_t d   = sin8(static_cast<uint8_t>(x * 3 / 248 + (_phase >> 9)));
                 uint8_t idx = (a + c + d) / 3;
-                sampleTable(palOcean, idx, r, g, b);
+                if (_cur_palette == 0) {
+                    sampleTable(palOcean, idx, r, g, b);
+                } else {
+                    palColor(idx, r, g, b);
+                }
                 setFb(i, r, g, b);
                 uint8_t cap = sin8(static_cast<uint8_t>(x * 9 / 248 - (_phase >> 5)));
                 if (cap > 236) {
@@ -1227,7 +1361,11 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
                 int     x    = i * (_cur_ix + 32);  // WLED Aurora wave count: 0.2x..1.8x, 160 per LED at 128
                 uint8_t a    = sin8(static_cast<uint8_t>(x * 3 / 160 + (_phase >> 8)));
                 uint8_t c    = sin8(static_cast<uint8_t>(x / 80 - (_phase >> 9)));
-                sampleTable(palAurora, (a + c) / 2, r, g, b);
+                if (_cur_palette == 0) {
+                    sampleTable(palAurora, (a + c) / 2, r, g, b);
+                } else {
+                    palColor((a + c) / 2, r, g, b);
+                }
                 uint8_t  w   = sin8(static_cast<uint8_t>(x / 32 + (_phase >> 7)));
                 uint16_t bri = 40 + ((w * 215) >> 8);
                 setFb(i, (r * bri) >> 8, (g * bri) >> 8, (b * bri) >> 8);
@@ -1273,7 +1411,7 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
                              // a background (solid colour or an animated sub-effect)
             // --- background ---
             int bg = _live_ballbg.empty() ? (_ballbg ? _ballbg->get() : EFFECT_STATIC)
-                                          : enumId(ledEffects, _live_ballbg, EFFECT_STATIC);
+                                          : (effectId(_live_ballbg) < 0 ? EFFECT_STATIC : effectId(_live_ballbg));
             if (bg == EFFECT_BALL) {
                 bg = EFFECT_STATIC;  // no recursion
             }
@@ -1350,8 +1488,25 @@ void Leds::renderEffect(int effect, uint8_t speed, bool nested) {
             break;
         }
 
-        default:  // EFFECT_OFF
-            memset(_fb, 0, _num_leds * 3);
+        default:
+            if (effect >= kOwnEffects && effect < kOwnEffects + wled::kFxCount) {  // a ported WLED effect
+                wled::FxFrame f;
+                f.speed     = speed;
+                f.intensity = _cur_ix;
+                uint8_t r2, g2, b2;
+                primaryColor(r, g, b);
+                secondaryColor(r2, g2, b2);
+                f.color1  = (uint32_t(r) << 16) | (uint32_t(g) << 8) | b;
+                f.color2  = (uint32_t(r2) << 16) | (uint32_t(g2) << 8) | b2;
+                f.palette = static_cast<uint8_t>(_cur_palette);
+                f.now     = now_ms();
+                f.ring    = Kinematics::ThetaRho::active();
+                if (!_wled.render(wled::kFx[effect - kOwnEffects], f, _fb, _num_leds)) {
+                    memset(_fb, 0, _num_leds * 3);  // no heap for it: dark, retried next frame
+                }
+                break;
+            }
+            memset(_fb, 0, _num_leds * 3);  // EFFECT_OFF
             break;
     }
 }
@@ -1378,14 +1533,16 @@ int Leds::effectiveEffect() {
         return EFFECT_OFF;
     }
     if (!_live_effect.empty()) {
-        return enumId(ledEffects, _live_effect, _effect->get());
+        int id = effectId(_live_effect);
+        return id < 0 ? _effect->get() : id;
     }
     int hook = hookEffect();
     return hook >= 0 ? hook : _effect->get();
 }
 
 const char* Leds::activeEffect() {
-    return enumName(ledEffects, effectiveEffect());
+    const char* n = effectName(effectiveEffect());
+    return n ? n : "off";
 }
 
 const char* Leds::overrideSource() {
@@ -1424,7 +1581,10 @@ void Leds::render() {
     }
 
     int effect   = effectiveEffect();
-    _cur_palette = _live_palette.empty() ? (_palette ? _palette->get() : 0) : enumId(ledPalettes, _live_palette, 0);
+    _cur_palette = _live_palette.empty() ? (_palette ? _palette->get() : 0) : LedPalettes::find(_live_palette);
+    if (_cur_palette < 0) {
+        _cur_palette = 0;  // setLive() validates; belt and braces for the table index
+    }
 
     uint8_t brightness = _live_bright.empty() ? static_cast<uint8_t>(_brightness->get()) : static_cast<uint8_t>(atoi(_live_bright.c_str()));
     uint8_t speed      = _live_speed.empty() ? static_cast<uint8_t>(_speed->get()) : static_cast<uint8_t>(atoi(_live_speed.c_str()));

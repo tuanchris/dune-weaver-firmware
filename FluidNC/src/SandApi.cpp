@@ -24,6 +24,7 @@
 #include "Playlist.h"
 #include "PlaylistParse.h"         // parse_run_args ($Sand/Run value split)
 #include "Leds.h"                  // live LED control during a run
+#include "LedPalettes.h"           // palette count for /sand_settings
 
 #include "Settings.h"
 #include "Report.h"               // state_name()
@@ -590,6 +591,12 @@ std::string SandApi::settingsJson() {
         if (const char* v = settingValue(k)) {
             kv.emplace_back(k, v);
         }
+    }
+    // Read-only, not a setting: how many $LED/Palette ids this firmware has
+    // (WLED's palettes, which also recolor the color effects). Absent before
+    // them, which is how the app knows to offer only the original eight.
+    if (Leds::instance()) {
+        kv.emplace_back("LED/Palettes", std::to_string(LedPalettes::kCount));
     }
     return SandStatus::encode_object(kv);
 }
