@@ -356,6 +356,14 @@ works). Config: `config_dlc32max_thetarho.yaml`.
   playlists would draw half a pattern. Write-to-temp-and-rename (keeps the old
   version) was tried: FAT's delete + rename in a big `/patterns` made every
   overwrite ~1.4 s slower, so no.
+- **No upload while a job runs** (v0.2.8, `setUploadGate` in the vendored WebServer, policy
+  `Web_Server::updateBlocked()`): a multipart `/upload` or `/files` gets 409 before its body is
+  read. The body is read whole inside one `handleClient` in `polling_loop`, the same task that
+  hands the running job its next line (`Job::channel()->pollLine`), so on v0.2.7 an app sync
+  mid-pattern stopped the ball for minutes, froze the LEDs and left the app reading "offline";
+  the `Web server stalled with pending connections` warning that followed is the after-effect.
+  Failing the upload in its callback is NOT enough: the parser still drains the whole body.
+  Uploading during play needs the job feed off the poller task first.
 - **Uploads keep `/patterns/index.json` in step** (`PatternManifest.h`, tested):
   a complete pattern upload appends its key in place (the final `]` becomes
   `,"<key>"]`) after a streamed search for it, never a parse/rewrite of the

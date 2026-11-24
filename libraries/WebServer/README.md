@@ -48,6 +48,14 @@ Local changes (all tagged `DW fork:` in the sources):
   pileups have already cratered the heap (measured 3.3 KB free behind a multi-MB
   `/sd/` transfer), shedding at the socket is the only affordable answer.
   Registration (6 KB) is in `Web_Server::init()`.
+- `Parsing.cpp`, `WebServer.{h,cpp}`: `setUploadGate(refuse)` — when `refuse(uri)`
+  is true, a multipart request is answered **409 "busy: the table is running"**
+  without reading its body (`_uploadRefused`). The body is read whole inside one
+  `handleClient()` on the FluidNC poller task, which also feeds the running job its
+  lines, so an upload mid-pattern stopped the ball until it ended. Refusing in the
+  upload callback instead still drains the body. The unread body makes the close an
+  RST, so a client still sending may see a reset rather than the 409. Registration
+  (`/upload`, `/files` while `Web_Server::updateBlocked()`) is in `Web_Server::init()`.
 
 When bumping the Arduino framework, re-vendor from the new version and re-apply the
 `DW fork:` blocks.

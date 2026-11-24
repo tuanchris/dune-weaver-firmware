@@ -513,6 +513,9 @@ curl -F "path=/patterns" -F "/patterns/index.jsonS=$(wc -c < /tmp/index.json)" \
 
 Upload/file-op failures return a real HTTP error (503 fs-inaccessible, 507 no space,
 500 other) with `error:{code,message}` in the JSON — see API.md "File-op errors".
+Uploads (`/upload`, `/files`) are refused with `409 busy: the table is running` while a
+pattern runs, is paused, homes or jogs (since v0.2.8), before the body is read: the client
+may see a connection reset instead. Stop the table first.
 `fopen` won't create directories: `createdir` first when uploading into a new subfolder
 (`curl "$B/upload?action=createdir&filename=sub&path=/patterns"`).
 

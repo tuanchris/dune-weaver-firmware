@@ -148,6 +148,13 @@ public:
   // no URI to exempt on); clients retry with backoff.  0 disables (default).
   void setHardHeapFloor(uint32_t floorBytes) { _heapHardFloor = floorBytes; }
 
+  // DW fork: upload gate. refuse(uri) returning true answers a multipart
+  // request 409 WITHOUT reading its body: a body is read whole inside one
+  // handleClient(), and the caller's task may have other work that cannot
+  // wait that long (minutes for a big batch).  The unread body makes the
+  // close an RST, so a client still sending may see a reset, not the 409.
+  void setUploadGate(bool (*refuse)(const String& uri)) { _uploadGate = refuse; }
+
   // DW fork: per-request trace hook, called at the top of _handleRequest()
   // (before the low-heap guard, so shed requests are traced too).  Diagnosis
   // aid for heap-drain hunts: the FluidNC side logs uri + heap per request.
@@ -272,6 +279,8 @@ protected:
   uint32_t    _lowHeapFloor = 0;                            // DW fork: see setLowHeapGuard()
   bool        (*_lowHeapExempt)(const String& uri) = nullptr; // DW fork
   uint32_t    _heapHardFloor = 0;                           // DW fork: see setHardHeapFloor()
+  bool        (*_uploadGate)(const String& uri) = nullptr;  // DW fork: see setUploadGate()
+  bool        _uploadRefused = false;                       // DW fork: this request was gated
   void        (*_onRequestTrace)(const char* uri) = nullptr;  // DW fork: see onRequestTrace()
   boolean     _nullDelay;
 

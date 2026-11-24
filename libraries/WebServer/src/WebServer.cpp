@@ -707,6 +707,14 @@ void WebServer::_handleRequest() {
   // of stalling mid-handler and wedging the accept queue.  Largest free BLOCK,
   // not total free: fragmentation (not exhaustion) is what fails allocations
   // and remounts here -- see the hard-floor note above.
+  // DW fork: upload gate -- see setUploadGate(). The body was never read.
+  if (_uploadRefused) {
+    send(409, "text/plain", "busy: the table is running");
+    _finalizeResponse();
+    _lastHandledMs = millis();
+    _currentUri = "";
+    return;
+  }
   if (_lowHeapFloor && ESP.getMaxAllocHeap() < _lowHeapFloor && !(_lowHeapExempt && _lowHeapExempt(_currentUri))) {
     send(503, "text/plain", "busy: low memory");
     _finalizeResponse();

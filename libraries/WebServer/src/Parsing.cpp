@@ -104,6 +104,7 @@ bool WebServer::_parseRequest(WiFiClient& client) {
     url = url.substring(0, hasSearch);
   }
   _currentUri = url;
+  _uploadRefused = false;  // DW fork: see setUploadGate()
   _chunked = false;
   _clientContentLength = 0;  // not known yet, or invalid
 
@@ -228,6 +229,12 @@ bool WebServer::_parseRequest(WiFiClient& client) {
     } else {
       // it IS a form
       _parseArguments(searchStr);
+      // DW fork: refused before a byte of the body is read; _handleRequest()
+      // answers 409. See setUploadGate().
+      if (_uploadGate && _uploadGate(_currentUri)) {
+        _uploadRefused = true;
+        return true;
+      }
       if (!_parseForm(client, boundaryStr, _clientContentLength)) {
         return false;
       }

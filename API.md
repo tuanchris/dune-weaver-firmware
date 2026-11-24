@@ -433,6 +433,13 @@ scans the directory several times); 1 MB ~7.5–8 s (was ~9 s; ~130 KB/s, the TC
 Wi-Fi, not the SD, are the limit). A file part's data may pause up to 30 s; longer, and the upload
 is dropped (`upload cancelled`); the next upload then works (before 2026-11-15 it failed once with
 500 `upload cancelled`).
+**Refused while the table runs** (since v0.2.8): a multipart `POST /upload` or `/files` while a
+job is active or the machine is in Cycle/Hold/Homing/Jog (the same rule as `/updatefw`) answers
+**`409 busy: the table is running`** without reading the body. The body is read inside the task
+that feeds the running pattern its next line, so on v0.2.7 and older an upload mid-pattern stopped
+the ball until the transfer ended, and the table answered nothing meanwhile (the app read it as
+offline). Because the body stays unread, the board's close is a TCP reset: a client still sending
+may see that reset instead of the 409. Upload at Idle (or Alarm); stop or finish the pattern first.
 
 ### File ops (`GET /upload?path=<dir>&action=delete|deletedir|createdir|rename&filename=<name>[&newname=]`)
 Same JSON shape as upload. **An `action=` request carries no `files` listing** unless it

@@ -162,6 +162,13 @@ namespace WebUI {
         // pileups behind a multi-MB /sd/ transfer took the heap floor to
         // 3.3 KB — shedding at the socket is all the board can still afford.
         _webserver->setHardHeapFloor(6000);
+        // No file upload while a job runs (DW fork, see setUploadGate()): the
+        // body is read whole in this (poller) task, which is also the one that
+        // hands the running job its next line, so the ball stopped until the
+        // transfer ended -- minutes for an app sync, the app reading "offline"
+        // (2026-11-24, v0.2.7 in the field). Same rule as OTA; /updatefw keeps
+        // its own JSON "busy" answer.
+        _webserver->setUploadGate([](const String& uri) { return (uri == "/upload" || uri == "/files") && updateBlocked(); });
         // Request trace: ALWAYS stash the URI + start time for heapContext()
         // (so a later "Low memory" warning can name the in-flight request),
         // and at debug level ($Message/Level=Debug) also log every request
