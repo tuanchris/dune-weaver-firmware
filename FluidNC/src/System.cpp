@@ -15,6 +15,9 @@
 #include <cstring>   // memset
 #include <cmath>     // roundf
 #include <esp_attr.h>  // IRAM_ATTR
+#include <esp_timer.h>  // esp_timer_get_time
+#include <mutex>
+#include "HoldClock.h"
 
 // Declare system global variable structure
 system_t sys;
@@ -117,8 +120,22 @@ const std::map<State, const char*> StateName = {
     { State::Critical, "Critical" },
 };
 
+// set_state runs on the protocol task, held_micros on the web poller: the lock
+// keeps the two 64-bit fields from being read half-updated.
+static HoldClock  hold_clock;
+static std::mutex hold_clock_mutex;
+
 void set_state(State s) {
+    {
+        std::lock_guard<std::mutex> lock(hold_clock_mutex);
+        hold_clock.set_held(s == State::Hold, esp_timer_get_time());
+    }
     sys.state = s;
+}
+
+int64_t held_micros() {
+    std::lock_guard<std::mutex> lock(hold_clock_mutex);
+    return hold_clock.held(esp_timer_get_time());
 }
 // IRAM: called from Stepper::pulse_func, whose ISR stays enabled while a
 // flash write has the cache disabled -- flash-resident code there panics.

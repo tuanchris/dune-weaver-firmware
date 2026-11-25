@@ -7,11 +7,17 @@
 #include "Planner.h"                 // plan_get_block_buffer_available()
 #include "Machine/MachineConfig.h"   // config->_planner_blocks
 #include "SandStatus.h"              // executed_percent()
+#include "System.h"                  // held_micros()
 
 #include <esp_timer.h>               // esp_timer_get_time() for the job start stamp
 
 InputFile::InputFile(const char* defaultFs, const char* path) :
-    FileStream(path, "r", defaultFs), _start_us(esp_timer_get_time()) {}
+    FileStream(path, "r", defaultFs), _start_us(esp_timer_get_time()), _held_at_start_us(held_micros()) {}
+
+// The start pushed later by every pause since, so now - start leaves them out.
+int64_t InputFile::jobStartMicros() const {
+    return _start_us + (held_micros() - _held_at_start_us);
+}
 /*
   Read a line from the file
   Returns Error::Ok if a line was read, even if the line was empty.

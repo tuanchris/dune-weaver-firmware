@@ -52,6 +52,11 @@ struct system_t {
 };
 extern system_t sys;
 
+// Microseconds spent in State::Hold since boot, counting the current hold up to
+// now (HoldClock, fed by set_state).  A job subtracts what accrued since it
+// started so its reported run time stands still while paused.
+int64_t held_micros();
+
 // NOTE: These position variables may need to be declared as volatiles, if problems arise.
 extern int32_t motor_steps[MAX_N_AXIS];  // Real-time machine (aka home) position vector in steps.
 extern int32_t probe_steps[MAX_N_AXIS];  // Last probe position in machine coordinates and steps.

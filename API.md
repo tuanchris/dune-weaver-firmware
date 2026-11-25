@@ -291,8 +291,9 @@ Single-line JSON (`SandStatus.cpp:encode`). Float precision: θ/ρ 4 dp, x/y 3 d
   "elapsed": 312,             // seconds since the current pattern started drawing, or -1 if nothing running.
   //  Pair with progress for a client-side ETA:  remaining_s = elapsed * (1 - progress) / progress;
   //  finish = <client's own now> + remaining_s. Monotonic clock (immune to the device's tz/RTC), so
-  //  DON'T treat it as a wall-clock timestamp. It is raw wall time and KEEPS COUNTING through a
-  //  mid-pattern hold (quiet hours, /sand_pause), so gate the ETA on state == "Run" and on
+  //  DON'T treat it as a wall-clock timestamp. It STANDS STILL through a mid-pattern hold (quiet
+  //  hours, /sand_pause) since v0.2.9; before that it kept counting, which inflated the ETA after
+  //  a resume. Progress stands still too, so gate the ETA on state == "Run" and on
   //  progress above a small floor (~0.03) — below that the divide blows the estimate up. A fresh
   //  count starts on every pattern (and excludes any pre-execution clear, which is timed separately).
   "playlist": { "active": true, "index": 2, "total": 10, "name": "evening",

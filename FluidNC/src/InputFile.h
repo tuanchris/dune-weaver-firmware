@@ -30,6 +30,8 @@ private:
     // A fresh InputFile per run (and per pre-execution clear) makes this reset
     // correctly on every pattern, including back-to-back repeats of the same file.
     int64_t _start_us = 0;
+    // held_micros() then: the pauses before this job, which its run time ignores.
+    int64_t _held_at_start_us = 0;
 
 public:
     // fsname is the default file system on which the file is located, in case the path does not specify
@@ -56,7 +58,7 @@ public:
     size_t  write(uint8_t c) override { return 0; }
     void    ack(Error status) override;
     Error   pollLine(char* line) override;
-    int64_t jobStartMicros() const override { return _start_us; }
+    int64_t jobStartMicros() const override;
 
     ~InputFile();
 };

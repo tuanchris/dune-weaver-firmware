@@ -33,7 +33,7 @@ curl "$B/sand_status"        # state, kinematics, theta, rho, feed, feed_overrid
                              #   playlist{active,index,total,name,next,last,clearing,quiet,pause_remaining,pause_total}, led{}
                              #   pause_remaining/pause_total = sec left / full length of between-patterns pause
                              #   (both -1 if not pausing); bar fill = (pause_total-pause_remaining)/pause_total
-                             #   elapsed = sec since pattern started (-1 if idle); ETA: remaining = elapsed*(1-progress)/progress,
+                             #   elapsed = sec the pattern has run, pauses left out (v0.2.9+; -1 if idle); ETA: remaining = elapsed*(1-progress)/progress,
                              #   finish = client_now + remaining. Monotonic (not a timestamp); gate on state=="Run" & progress>~0.03.
                              #   next = shuffle-aware "up next" (while clearing=true it's THIS item's own pattern,
                              #     the one the clear is preparing for; otherwise the following item);

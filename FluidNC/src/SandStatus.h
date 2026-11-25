@@ -60,8 +60,8 @@ namespace SandStatus {
         //   remaining = elapsed * (1 - progress) / progress
         //   finish    = <client's own clock>-now + remaining
         // Monotonic (esp_timer), so it is immune to the device's timezone/RTC.
-        // It is raw wall-clock and keeps counting through a mid-pattern hold, so
-        // the client must gate ETA on state == "Run" and progress above a small
+        // It stands still through a mid-pattern hold (HoldClock, v0.2.9+), as does
+        // progress, so the client must gate ETA on state == "Run" and progress above a small
         // floor (~0.03) to avoid the divide-by-near-zero blow-up early on.
         long elapsed = -1;
 
